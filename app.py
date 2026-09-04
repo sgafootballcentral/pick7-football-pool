@@ -143,7 +143,7 @@ with admin_tab:
         else:
             with st.spinner("Fetching live point spreads..."):
                 try:
-                    # Clear out the database table
+                    # Clear out old game records from your database table
                     supabase.table("games").delete().neq("id", 0).execute()
                     
                     # Request general consensus spreads via The Odds API
@@ -156,31 +156,39 @@ with admin_tab:
                     }
                     response = requests.get(url, params=params).json()
                     
+                    if not isinstance(response, list):
+                        st.error(f"API Error Response: {response}")
+                        st.stop()
+                        
                     count = 0
                     for match in response:
-                        game_id = match["id"]
-                        home_team = match["home_team"]
-                        away_team = match["away_team"]
-                        kickoff_time = match["commence_time"]
+                        game_id = match.get("id")
+                        home_team = match.get("home_team")
+                        away_team = match.get("away_team")
+                        kickoff_time = match.get("commence_time")
                         
-                        # Extract point spreads dynamically from available bookmakers
-                        try:
-                            bookmakers = match["bookmakers"]
-                            # Grab spreads from the first available bookmaker returned
-                            market = bookmakers[0]["markets"][0]
-                            outcomes = market["outcomes"]
-                            
-                            spread_home = next(o["point"] for o in outcomes if o["name"] == home_team)
-                            spread_away = next(o["point"] for o in outcomes if o["name"] == away_team)
-                            
-                            sign_h = "+" if spread_home > 0 else ""
-                            sign_a = "+" if spread_away > 0 else ""
-                            
-                            display_text = f"{away_team} ({sign_a}{spread_away}) @ {home_team} ({sign_h}{spread_home})"
-                        except:
-                            display_text = f"{away_team} @ {home_team} (Spread Offline)"
+                        display_text = f"{away_team} @ {home_team}"
+                        bookmakers = match.get("bookmakers", [])
                         
-                        # Save directly into Supabase
+                        # Dig into the data rows to harvest the point spreads safely
+                        if bookmakers and len(bookmakers) > 0:
+                            markets = bookmakers[0].get("markets", [])
+                            if markets and len(markets) > 0:
+                                outcomes = markets[0].get("outcomes", [])
+                                if len(outcomes) >= 2:
+                                    home_outcome = next((o for o in outcomes if o.get("name") == home_team), None)
+                                    away_outcome = next((o for o in outcomes if o.get("name") == away_team), None)
+                                    
+                                    if home_outcome and away_outcome:
+                                        spread_h = home_outcome.get("point", 0)
+                                        spread_a = away_outcome.get("point", 0)
+                                        
+                                        sign_h = "+" if spread_h > 0 else ""
+                                        sign_a = "+" if spread_a > 0 else ""
+                                        
+                                        display_text = f"{away_team} ({sign_a}{spread_a}) at {home_team} ({sign_h}{spread_h})"
+                        
+                        # Save directly into your Supabase games grid row by row
                         supabase.table("games").insert({
                             "game_id": game_id,
                             "league": "CFB",
