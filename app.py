@@ -146,13 +146,12 @@ with admin_tab:
                     # Clear out the database table
                     supabase.table("games").delete().neq("id", 0).execute()
                     
-                    # Request spreads from DraftKings via The Odds API
+                    # Request general consensus spreads via The Odds API
                     url = "https://the-odds-api.com"
                     params = {
                         "apiKey": ODDS_API_KEY,
                         "regions": "us",
                         "markets": "spreads",
-                        "bookmakers": "draftkings",
                         "oddsFormat": "american"
                     }
                     response = requests.get(url, params=params).json()
@@ -164,9 +163,13 @@ with admin_tab:
                         away_team = match["away_team"]
                         kickoff_time = match["commence_time"]
                         
-                        # Extract point spreads
+                        # Extract point spreads dynamically from available bookmakers
                         try:
-                            outcomes = match["bookmakers"][0]["markets"][0]["outcomes"]
+                            bookmakers = match["bookmakers"]
+                            # Grab spreads from the first available bookmaker returned
+                            market = bookmakers[0]["markets"][0]
+                            outcomes = market["outcomes"]
+                            
                             spread_home = next(o["point"] for o in outcomes if o["name"] == home_team)
                             spread_away = next(o["point"] for o in outcomes if o["name"] == away_team)
                             
