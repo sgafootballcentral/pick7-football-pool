@@ -1,75 +1,67 @@
 import streamlit as st
-import requests
+import pandas as pd
+from io import StringIO
 from supabase import create_client, Client
 
 SUPABASE_URL = st.secrets.get("SUPABASE_URL")
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY")
-ODDS_API_KEY = st.secrets.get("ODDS_API_KEY")
+ADMIN_EMAIL = st.secrets.get("ADMIN_EMAIL")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 st.title("⚙️ League Admin Panel")
-st.write("Automatically clean the current database tables and load this weekend's entire college football slate.")
 
-if st.button("🔄 Auto-Fetch 72+ Game Slate", type="primary"):
-    if not ODDS_API_KEY:
-        st.error("Odds API Key missing from settings Secrets.")
+if "user" not in st.session_state or not st.session_state.user or st.session_state.user.email != ADMIN_EMAIL:
+    st.error("🚫 Access Denied.")
+    st.stop()
+
+# 1. SET THE TARGET WEEK DYNAMICALLY
+st.subheader("🗓️ Slate Management Settings")
+active_week = st.number_input("Target Input Week Number:", min_value=1, max_value=18, value=1, step=1)
+st.write("---")
+
+st.subheader("📋 Bulk-Upload Slate from Excel")
+pasted_data = st.text_area("Paste Excel Rows Here:", height=150)
+
+if st.button("🚀 Upload New Slate for Selected Week", type="primary"):
+    if pasted_data.strip():
+        try:
+            df = pd.read_csv(StringIO(pasted_data), sep="\t")
+            # Clear only the games belonging to the specific week you are replacing
+            supabase.table("games").delete().eq("week_number", active_week).execute()
+            
+            count = 0
+            for _, row in df.iterrows():
+                supabase.table("games").insert({
+                    "game_id": str(row['game_id']).strip(),
+                    "league": str(row['league']).strip(),
+                    "display_text": str(row['display_text']).strip(),
+                    "kickoff_time": str(row['kickoff_time']).strip(),
+                    "week_number": int(active_week)
+                }).execute()
+                count += 1
+            st.success(f"Successfully loaded {count} games for Week {active_week}!")
+        except Exception as e: st.error(f"Error: {e}")
+
+st.write("---")
+# 2. EASY ADMINISTRATIVE GAME GRADING SYSTEM
+st.subheader("🏈 Grade Completed Game Results")
+try:
+    ungraded = supabase.table("games").select("game_id", "display_text").eq("week_number", active_week).eq("status", "scheduled").execute().data
+    if not ungraded:
+        st.info(f"All loaded games for Week {active_week} have been completely graded.")
     else:
-        with st.spinner("Downloading live spreads from sportsbooks..."):
-            try:
-                # 1. Clear out old schedule data
-                supabase.table("games").delete().neq("id", 0).execute()
-                
-                # 2. Corrected up-to-date API url endpoint for NCAA Football
-                url = "https://the-odds-api.com"
-                params = {
-                    "apiKey": ODDS_API_KEY, 
-                    "regions": "us", 
-                    "markets": "spreads", 
-                    "oddsFormat": "american"
-                }
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                }
-                
-                api_call = requests.get(url, params=params, headers=headers)
-                
-                # If there's an API problem, this prints the exact helpful error text on screen
-                if api_call.status_code != 200:
-                    st.error(f"API Connection Error (Code {api_call.status_code}): {api_call.text}")
-                    st.stop()
-                    
-                response = api_call.json()
-                
-                # 3. Parse matches safely
-                count = 0
-                for match in response:
-                    game_id = match.get("id")
-                    home_team = match.get("home_team")
-                    away_team = match.get("away_team")
-                    kickoff_time = match.get("commence_time")
-                    display_text = f"{away_team} at {home_team}"
-                    
-                    bookmakers = match.get("bookmakers", [])
-                    if bookmakers and len(bookmakers) > 0:
-                        markets = bookmakers[0].get("markets", [])
-                        if markets and len(markets) > 0:
-                            outcomes = markets[0].get("outcomes", [])
-                            if len(outcomes) >= 2:
-                                home_o = next((o for o in outcomes if o.get("name") == home_team), None)
-                                away_o = next((o for o in outcomes if o.get("name") == away_team), None)
-                                if home_o and away_o:
-                                    s_h, s_a = home_o.get("point", 0), away_o.get("point", 0)
-                                    display_text = f"{away_team} ({'+' if s_a > 0 else ''}{s_a}) at {home_team} ({'+' if s_h > 0 else ''}{s_h})"
-                    
-                    # Save rows directly into your database 
-                    supabase.table("games").insert({
-                        "game_id": game_id, 
-                        "league": "CFB", 
-                        "display_text": display_text, 
-                        "kickoff_time": kickoff_time
-                    }).execute()
-                    count += 1
-                    
-                st.success(f"Success! Loaded {count} college football games cleanly into your pool dashboard!")
-            except Exception as e:
-                st.error(f"Execution structure failure running import task: {e}")
+        target_game = st.selectbox("Select Game to Grade:", options=[g['display_text'] for g in ungraded])
+        game_record = next(g for g in ungraded if g['display_text'] == target_game)
+        
+        # Parse the team choices out of the display text layout string
+        teams = target_game.split(" at ") if " at " in target_game else target_game.split(" vs ")
+        team_a = teams[0].split(" (")[0].strip()
+        team_b = teams[1].split(" (")[0].strip() if len(teams) > 1 else "Home"
+        
+        covering_team = st.radio("Which team covered the spread?", options=[team_a, team_b])
+        
+        if st.button("💾 Submit Final Score & Grade Picks"):
+            supabase.table("games").update({"status": "final", "winning_team": covering_team}).eq("game_id", game_record['game_id']).execute()
+            st.success(f"Graded! {covering_team} marked as the winner against the spread. Standings updated!")
+            st.rerun()
+except Exception as e: st.error(f"Grading Panel Error: {e}")
