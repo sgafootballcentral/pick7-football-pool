@@ -132,15 +132,22 @@ else:
             und_team = game.get("underdog_team") or game.get("underdog") or "Underdog"
             spread_val = game.get("spread_value") or game.get("spread") or "0.0"
 
+            # 🏠 DYNAMIC STRING DETECTOR 
+            # In your "Away at Home" paste framework, the team on the RIGHT side of the word "at" is always hosting.
+            # We break apart the text string directly to find exactly who is on the right side.
             d_text = game.get("display_text", "")
             is_fav_home = False
             is_und_home = False
             
             if " at " in d_text:
                 parts = d_text.split(" at ")
-                home_side_text = parts[1] if len(parts) > 1 else ""
-                if fav_team in home_side_text: is_fav_home = True
-                if und_team in home_side_text: is_und_home = True
+                right_side_team = parts[1].strip() if len(parts) > 1 else ""
+                
+                # Check if the right side string matches the favorite or underdog text values
+                if fav_team in right_side_team or right_side_team in fav_team:
+                    is_fav_home = True
+                if und_team in right_side_team or right_side_team in und_team:
+                    is_und_home = True
 
             fav_label = f"{fav_team} 🏠" if is_fav_home else fav_team
             und_label = f"{und_team} 🏠" if is_und_home else und_team
