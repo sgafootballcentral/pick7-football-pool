@@ -3,6 +3,8 @@ import pandas as pd
 import requests
 from io import StringIO
 from supabase import create_client, Client
+# Add this line right here to define datetime and fix the crash:
+from datetime import datetime, timezone
 
 # 1. Connection and Secrets Verification
 SUPABASE_URL = st.secrets.get("SUPABASE_URL")
