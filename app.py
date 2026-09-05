@@ -61,7 +61,6 @@ EASTERN_TZ = ZoneInfo("America/New_York")
 # 4. 🌐 FREE ESPN LIVE SCOREBOARD PIPELINE
 espn_scores = {}
 try:
-    # Pull directly from ESPN's public live feed (Completely free, no limits)
     espn_url = "https://espn.com"
     espn_data = requests.get(espn_url, headers={"User-Agent": "Mozilla/5.0"}).json()
     
@@ -70,8 +69,7 @@ try:
         state = status_info.get("type", {}).get("state", "scheduled")
         detail_clock = status_info.get("type", {}).get("detail", "")
         
-        competitors = event.get("competitions", [{}])[0].get("competitors", [])
-        
+        competitors = event.get("competitions", [{}]).get("competitors", [])
         match_info = {}
         for team in competitors:
             t_name = team.get("team", {}).get("displayName", "")
@@ -85,12 +83,16 @@ try:
 except Exception:
     pass
 
-# Smart matcher to pair long spreadsheet names to ESPN live rows
+# Deep word-by-word text cross-referencing tool to solve naming differences
 def find_espn_data(t1, t2):
+    t1_clean = t1.lower().split()[0] if t1.split() else t1.lower()
+    t2_clean = t2.lower().split()[0] if t2.split() else t2.lower()
+    
     for key_name, data in espn_scores.items():
-        if key_name in t1 or t1 in key_name or key_name in t2 or t2 in key_name:
-            return data
-    return None
+        key_lower = key_name.lower()
+        if t1_clean in key_lower or key_lower in t1.lower() or t2_clean in key_lower or key_lower in t2.lower():
+            return data, key_name
+    return None, None
 
 # 5. Pull active week slate from database rows
 try:
@@ -141,18 +143,16 @@ else:
             fav_score_text, und_score_text = "", ""
             status_ticker = f"`🕒 {time_str}`"
 
-            # 🌐 LOOKUP ESPN LIVE DATA STREAM FOR HOME TEAMS & SCOREBOARDS
-            game_data = find_espn_data(fav_team, und_team)
+            # 🌐 LOOKUP ESPN LIVE DATA STREAM WITH WORD EXTRACTORS
+            game_data, matched_key = find_espn_data(fav_team, und_team)
             
             if game_data:
-                # Find which team is hosting dynamically from ESPN
-                fav_espn = next((k for k in game_data.keys() if k in fav_team or fav_team in k), None)
-                und_espn = next((k for k in game_data.keys() if k in und_team or und_team in k), None)
+                fav_espn = next((k for k in game_data.keys() if fav_team.lower().split()[0] in k.lower() or k.lower() in fav_team.lower()), None)
+                und_espn = next((k for k in game_data.keys() if und_team.lower().split()[0] in k.lower() or k.lower() in und_team.lower()), None)
                 
                 if fav_espn and game_data[fav_espn]["is_home"]: fav_label = f"{fav_team} 🏠"
                 if und_espn and game_data[und_espn]["is_home"]: und_label = f"{und_team} 🏠"
                 
-                # Fetch scores and match clock states
                 if fav_espn and und_espn:
                     f_state = game_data[fav_espn]["state"]
                     if f_state != "scheduled":
