@@ -85,10 +85,17 @@ else:
             kickoff = datetime.fromisoformat(game['kickoff_time'].replace('Z', '+00:00'))
             is_time_locked = now >= kickoff
             
-            # Extract team names out of display text layout safely
-            teams = game['display_text'].split(" at ") if " at " in game['display_text'] else game['display_text'].split(" vs ")
-            t_a = teams[0].split(" (")[0].strip() if len(teams) > 0 else "Away"
-            t_b = teams[1].split(" (")[0].strip() if len(teams) > 1 else "Home"
+            # Bulletproof extraction wrapper fix
+            text = game['display_text']
+            if " at " in text:
+                teams = text.split(" at ")
+            elif " vs " in text:
+                teams = text.split(" vs ")
+            else:
+                teams = [text, "Home Team"]
+                
+            t_a = teams[0].split(" (")[0].strip()
+            t_b = teams[1].split(" (")[0].strip() if len(teams) > 1 else "Home Team"
             
             col1, col2 = st.columns()
             with col1:
@@ -97,7 +104,6 @@ else:
                 if is_time_locked:
                     st.button("🔒 Locked", key=f"lock_{game['game_id']}", disabled=True)
                 else:
-                    # Smart evaluation check: Is this specific selector empty while the overall limit is reached?
                     is_current_empty = st.session_state.get(f"sel_{game['game_id']}", "-- Select --") == "-- Select --"
                     should_disable = ui_max_reached and is_current_empty
                     
@@ -106,7 +112,7 @@ else:
                         options=["-- Select --", t_a, t_b], 
                         key=f"sel_{game['game_id']}",
                         label_visibility="collapsed",
-                        disabled=should_disable # Freeze box instantly when limit is reached
+                        disabled=should_disable
                     )
                     if pick != "-- Select --":
                         chosen_picks.append({"game_id": game['game_id'], "selected_team": pick})
