@@ -1,7 +1,6 @@
 import streamlit as st
 from supabase import create_client, Client
 from datetime import datetime, timezone
-# Import timezone package to handle Eastern Time conversion layers cleanly
 from zoneinfo import ZoneInfo
 
 # 1. Connection and Secrets Verification
@@ -87,12 +86,9 @@ else:
     # 5. DYNAMIC DATE SEPARATION & EASTERN TIME CONVERSION
     grouped_by_date = {}
     for game in all_games:
-        # Convert the raw database string into a UTC datetime object
         kickoff_utc = datetime.fromisoformat(game['kickoff_time'].replace('Z', '+00:00'))
-        # Transform the object cleanly into Eastern Time zone values
         kickoff_est = kickoff_utc.astimezone(EASTERN_TZ)
         
-        # Format the daily heading text based on local Eastern calendar dates
         date_str = kickoff_est.strftime("%A, %b %d")
         if date_str not in grouped_by_date:
             grouped_by_date[date_str] = []
@@ -105,13 +101,9 @@ else:
         st.divider()
         
         for game, kickoff_est, kickoff_utc in games_in_day:
-            # Enforce lockouts using accurate background UTC comparison checks
             is_time_locked = now >= kickoff_utc
+            time_str = kickoff_est.strftime("%i:%M %p ET").lstrip("0")
             
-            # Format time explicitly in clean Eastern Time string (e.g., "03:30 PM ET")
-            time_str = kickoff_est.strftime("%I:%M %p ET")
-            
-            # Parse out host designation
             text = game['display_text']
             if " at " in text:
                 teams = text.split(" at ")
@@ -126,9 +118,10 @@ else:
             t_a = teams[0].split(" (")[0].strip()
             t_b = teams[1].split(" (")[0].strip() if len(teams) > 1 else "Home Team"
             
-            home_label = f"📍 Neutral Site" if is_neutral else f"🏠 Home: {t_b}"
+            home_label = "📍 Neutral Site" if is_neutral else f"🏠 Home: {t_b}"
             
-            col1, col2 = st.columns()
+            # Explicitly added 2 columns here to fix the empty st.columns() crash
+            col1, col2 = st.columns(2)
             with col1:
                 st.markdown(f"**{text}**  \n`🕒 Kickoff: {time_str} | {home_label}`")
             with col2:
