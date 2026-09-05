@@ -89,16 +89,26 @@ try:
         target_game = st.selectbox("Select Game to Grade:", options=[g['display_text'] for g in ungraded])
         game_record = next(g for g in ungraded if g['display_text'] == target_game)
         
-        teams = target_game.split(" at ") if " at " in target_game else target_game.split(" vs ")
-        team_a = teams.split(" (").strip()
-        team_b = teams.split(" (").strip() if len(teams) > 1 else "Home Team"
+        # Safe team name parser alignment matching
+        if " at " in target_game:
+            teams = target_game.split(" at ")
+        elif " vs " in target_game:
+            teams = target_game.split(" vs ")
+        else:
+            teams = [target_game, "Home Team"]
+
+        team_a = teams[0].split(" (")[0].strip()
+        team_b = teams[1].split(" (")[0].strip() if len(teams) > 1 else "Home Team"
+        
+        # User voting selector attribute form
         covering_team = st.radio("Which team covered the spread?", options=[team_a, team_b])
         
         if st.button("💾 Submit Final Score & Grade Picks"):
             supabase.table("games").update({"status": "final", "winning_team": covering_team}).eq("game_id", game_record['game_id']).execute()
             st.success(f"Graded! {covering_team} marked as the winner against the spread.")
             st.rerun()
-except Exception as e: st.error(f"Grading Panel Error: {e}")
+except Exception as e: 
+    st.error(f"Grading Panel Error: {e}")
 
 st.write("---")
 
