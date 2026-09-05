@@ -1,13 +1,11 @@
 import streamlit as st
 import pandas as pd
-import requests
 from io import StringIO
 from supabase import create_client, Client
 
 # 1. Connection and Secrets Verification
 SUPABASE_URL = st.secrets.get("SUPABASE_URL")
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY")
-ODDS_API_KEY = st.secrets.get("ODDS_API_KEY")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     st.error("Missing critical Supabase connection variables in Streamlit Secrets.")
@@ -23,172 +21,79 @@ if "user" not in st.session_state or not st.session_state.user:
     st.stop()
 
 user_id = st.session_state.user.id
-
 try:
     current_user_record = supabase.table("league_users").select("role").eq("id", user_id).execute().data
-    if current_user_record and current_user_record[0].get("role") == "admin":
-        is_admin = True
-    else:
-        is_admin = False
-except Exception:
-    is_admin = False
+    is_admin = current_user_record and current_user_record.get("role") == "admin"
+except Exception: is_admin = False
 
 if not is_admin:
-    st.error("🚫 Access Denied: Only the league commissioner can access this page.")
+    st.error("🚫 Access Denied.")
     st.stop()
 
-st.success("🔓 Commissioner Dashboard Unlocked! (Live Database Admin Token Verified)")
+st.success("🔓 Commissioner Dashboard Unlocked!")
 st.write("---")
 
-# 3. SET THE TARGET WEEK DYNAMICALLY
-st.subheader("🗓️ Slate Management Settings")
 active_week = st.number_input("Target Input Week Number:", min_value=1, max_value=18, value=1, step=1)
 st.write("---")
 
-# 4. AUTOMATED DRAFTKINGS SPORTSBOOK SYNCER
-st.subheader("🦊 Live DraftKings / ESPN Odds Sync")
-st.write("Clicking below will clear the board for the selected week and instantly pull down the live college football spreads directly from DraftKings:")
+# 3. ADVANCED NUMBERED CLIPBOARD IMPORTER
+st.subheader("📋 Bulk-Upload Slate Layout from Spreadsheet")
+st.write("In Excel or Google Sheets, structure columns exactly as: **`game_number`**, **`league`**, **`favorite`**, **`underdog`**, **`spread`**, **`kickoff_time`**")
 
-if st.button("🔄 Auto-Fetch Live DraftKings Slate", type="primary"):
-    if not ODDS_API_KEY:
-        st.error("Odds API Key missing from settings Secrets.")
+pasted_data = st.text_area("Paste Layout Rows Here:", height=200, placeholder="game_number\tleague\tfavorite\tunderdog\tspread\tkickoff_time\n1\tCFB\tWest Virginia\tCoastal Carolina\t-20.5\t2026-09-05T16:00:00Z")
+
+if st.button("🚀 Wipe Old Slate & Upload New Grid Layout", type="primary"):
+    if not pasted_data.strip():
+        st.error("Box is empty.")
     else:
-        with st.spinner("Downloading live spreads from DraftKings Sportsbook..."):
+        with st.spinner("Processing lines..."):
             try:
-                # Wipe previous schedules for the active target week
+                df = pd.read_csv(StringIO(pasted_data), sep="\t")
+                required = ['game_number', 'league', 'favorite', 'underdog', 'spread', 'kickoff_time']
+                if not all(col in df.columns for col in required):
+                    st.error("Data error! Headers must be labeled exactly: game_number, league, favorite, underdog, spread, kickoff_time")
+                    st.stop()
+                
                 supabase.table("games").delete().eq("week_number", active_week).execute()
                 
-                # Official endpoint path using the correct NCAA football sport key identifier
-                url = "https://the-odds-api.com"
-                params = {
-                    "apiKey": ODDS_API_KEY, 
-                    "regions": "us", 
-                    "markets": "spreads", 
-                    "bookmakers": "draftkings",
-                    "oddsFormat": "american"
-                }
-                
-                # Crucial header mask that prevents char 0 firewall rejections
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                }
-                
-                api_call = requests.get(url, params=params, headers=headers)
-                
-                if api_call.status_code != 200:
-                    st.error(f"API Error {api_call.status_code}: {api_call.text}")
-                    st.stop()
-                    
-                response = api_call.json()
                 count = 0
-                for match in response:
-                    game_id = match.get("id")
-                    home_team = match.get("home_team")
-                    away_team = match.get("away_team")
-                    kickoff_time = match.get("commence_time")
-                    display_text = f"{away_team} at {home_team}"
+                for _, row in df.iterrows():
+                    fav = str(row['favorite']).strip()
+                    und = str(row['underdog']).strip()
+                    spr = str(row['spread']).strip()
                     
-                    bookmakers = match.get("bookmakers", [])
-                    if bookmakers and len(bookmakers) > 0:
-                        markets = bookmakers[0].get("markets", [])
-                        if markets and len(markets) > 0:
-                            outcomes = markets[0].get("outcomes", [])
-                            if len(outcomes) >= 2:
-                                home_o = next((o for o in outcomes if o.get("name") == home_team), None)
-                                away_o = next((o for o in outcomes if o.get("name") == away_team), None)
-                                if home_o and away_o:
-                                    s_h, s_a = home_o.get("point", 0), away_o.get("point", 0)
-                                    display_text = f"{away_team} ({'+' if s_a > 0 else ''}{s_a}) at {home_team} ({'+' if s_h > 0 else ''}{s_h})"
+                    # Generate visible text fallback block
+                    display_text = f"{fav} at {und} ({spr})"
                     
                     supabase.table("games").insert({
-                        "game_id": game_id, 
-                        "league": "CFB", 
-                        "display_text": display_text, 
-                        "kickoff_time": kickoff_time,
+                        "game_id": f"g_w{active_week}_{str(row['game_number']).strip()}",
+                        "game_number": int(row['game_number']),
+                        "league": str(row['league']).strip(),
+                        "favorite_team": fav,
+                        "underdog_team": und,
+                        "spread_value": spr,
+                        "display_text": display_text,
+                        "kickoff_time": str(row['kickoff_time']).strip(),
                         "week_number": int(active_week)
                     }).execute()
                     count += 1
-                    
-                st.success(f"Success! Loaded {count} college football games cleanly from DraftKings into Week {active_week}!")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Failed to load slate: {e}")
+                st.success(f"Loaded {count} layout grid rows successfully!")
+            except Exception as e: st.error(f"Failed to read paste format layout: {e}")
 
 st.write("---")
 
-# 5. EXCEL / SHEET CLIPBOARD BACKUP BOX
-st.subheader("📋 Manual Bulk-Upload Spreadsheet Fallback")
-st.write("If you ever want to write your own custom games or force custom point lines, paste them manually below:")
-pasted_data = st.text_area("Paste Rows Here:", height=100)
-
-if st.button("🚀 Upload Manual Paste Sheet"):
-    if pasted_data.strip():
-        try:
-            df = pd.read_csv(StringIO(pasted_data), sep="\t")
-            supabase.table("games").delete().eq("week_number", active_week).execute()
-            count = 0
-            for _, row in df.iterrows():
-                supabase.table("games").insert({
-                    "game_id": str(row['game_id']).strip(),
-                    "league": str(row['league']).strip(),
-                    "display_text": str(row['display_text']).strip(),
-                    "kickoff_time": str(row['kickoff_time']).strip(),
-                    "week_number": int(active_week)
-                }).execute()
-                count += 1
-            st.success(f"Manually loaded {count} games for Week {active_week}!")
-            st.rerun()
-        except Exception as e: st.error(f"Error: {e}")
-
-st.write("---")
-
-# 6. ADMINISTRATIVE GAME GRADING SYSTEM
+# 4. GRADING MODULE
 st.subheader("🏈 Grade Completed Game Results")
 try:
-    ungraded = supabase.table("games").select("game_id", "display_text").eq("week_number", active_week).eq("status", "scheduled").execute().data
-    if not ungraded:
-        st.info(f"All loaded games for Week {active_week} have been completely graded.")
+    ungraded = supabase.table("games").select("*").eq("week_number", active_week).eq("status", "scheduled").order("game_number").execute().data
+    if not ungraded: st.info("All games graded.")
     else:
-        target_game = st.selectbox("Select Game to Grade:", options=[g['display_text'] for g in ungraded])
-        game_record = next(g for g in ungraded if g['display_text'] == target_game)
-        
-        if " at " in target_game: 
-            teams = target_game.split(" at ")
-        elif " vs " in target_game: 
-            teams = target_game.split(" vs ")
-        else: 
-            teams = [target_game, "Home Team"]
-
-        team_a = teams[0].split(" (")[0].strip()
-        team_b = teams[1].split(" (")[0].strip() if len(teams) > 1 else "Home Team"
-        covering_team = st.radio("Which team covered the spread?", options=[team_a, team_b])
-        
-        if st.button("💾 Submit Final Score & Grade Picks"):
-            supabase.table("games").update({"status": "final", "winning_team": covering_team}).eq("game_id", game_record['game_id']).execute()
-            st.success(f"Graded! {covering_team} marked as winner.")
+        opts = {f"#{g.get('game_number')} - {g.get('favorite_team')} vs {g.get('underdog_team')}": g for g in ungraded}
+        t_label = st.selectbox("Select Match to Grade:", options=list(opts.keys()))
+        g_rec = opts[t_label]
+        covering_t = st.radio("Which covered spread?", options=[g_rec['favorite_team'], g_rec['underdog_team']])
+        if st.button("💾 Submit Winner"):
+            supabase.table("games").update({"status": "final", "winning_team": covering_t}).eq("game_id", g_rec['game_id']).execute()
+            st.success("Graded!")
             st.rerun()
-except Exception as e: st.error(f"Grading Panel Error: {e}")
-
-st.write("---")
-
-# 7. USER PERMISSIONS MANAGEMENT PANEL
-st.subheader("👥 User Management & Roster Permissions")
-try:
-    members = supabase.table("league_users").select("*").execute().data
-    if members:
-        df_roster = pd.DataFrame(members)
-        df_roster.columns = ['Unique ID', 'Email Address', 'Display Nickname', 'System Access Role']
-        st.dataframe(df_roster[['Display Nickname', 'Email Address', 'System Access Role']], use_container_width=True)
-        
-        st.write("---")
-        member_options = {f"{m.get('username')} ({m.get('email')}) - [Role: {m.get('role')}]": m for m in members}
-        selected_label = st.selectbox("Select a Member to Alter permissions:", options=list(member_options.keys()))
-        selected_user = member_options[selected_label]
-        is_currently_admin = selected_user.get("role") == "admin"
-        toggle_admin = st.checkbox("Grant Commissioner / Admin Privileges", value=is_currently_admin, key=f"check_{selected_user['id']}")
-
-        if st.button("💾 Save Member Status"):
-            supabase.rpc("set_user_admin_status", {"target_user_id": selected_user["id"], "make_admin": toggle_admin}).execute()
-            st.success("Permissions updated!")
-            st.rerun()
-except Exception as e: st.error(f"Could not load member panel: {e}")
+except Exception as e: st.error(f"Grading Error: {e}")
