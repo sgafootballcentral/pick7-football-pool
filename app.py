@@ -102,7 +102,7 @@ else:
         
         for game, kickoff_est, kickoff_utc in games_in_day:
             is_time_locked = now >= kickoff_utc
-            time_str = kickoff_est.strftime("%i:%M %p ET").lstrip("0")
+            time_str = kickoff_est.strftime("%I:%M %p ET").lstrip("0")
             
             text = game['display_text']
             if " at " in text:
