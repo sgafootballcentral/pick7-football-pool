@@ -7,7 +7,6 @@ from zoneinfo import ZoneInfo
 # 1. Connection and Secrets Verification
 SUPABASE_URL = st.secrets.get("SUPABASE_URL")
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY")
-ODDS_API_KEY = st.secrets.get("ODDS_API_KEY")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     st.error("Missing critical Supabase connection variables in Streamlit Secrets.")
@@ -59,43 +58,37 @@ st.header(f"Week {CURRENT_WEEK} Master Slate")
 now = datetime.now(timezone.utc)
 EASTERN_TZ = ZoneInfo("America/New_York")
 
-# 4. FETCH LIVE SCORES & HOME TEAMS DIRECTLY FROM THE INTERNET API
-live_scoreboard = {}
-if ODDS_API_KEY:
-    try:
-        # Pull live score data which includes the official internet home/away designations
-        score_url = "https://the-odds-api.com"
-        score_params = {"apiKey": ODDS_API_KEY, "daysFrom": 3}
-        score_headers = {"User-Agent": "Mozilla/5.0"}
-        score_call = requests.get(score_url, params=score_params, headers=score_headers)
-        if score_call.status_code == 200:
-            api_response = score_call.json()
-            for match in api_response:
-                h_team = match.get("home_team", "")
-                a_team = match.get("away_team", "")
-                scores = match.get("scores")
-                completed = match.get("completed", False)
-                
-                # Parse scores array safely into a fast lookup map
-                score_dict = {s["name"]: int(s["score"]) for s in scores} if scores else {}
-                
-                match_info = {
-                    "official_home": h_team,
-                    "official_away": a_team,
-                    "scores": score_dict,
-                    "completed": completed
-                }
-                # Map both teams to this match info for partial match lookup below
-                live_scoreboard[h_team] = match_info
-                live_scoreboard[a_team] = match_info
-    except Exception:
-        pass
+# 4. 🌐 FREE ESPN LIVE SCOREBOARD PIPELINE
+espn_scores = {}
+try:
+    # Pull directly from ESPN's public live feed (Completely free, no limits)
+    espn_url = "https://espn.com"
+    espn_data = requests.get(espn_url, headers={"User-Agent": "Mozilla/5.0"}).json()
+    
+    for event in espn_data.get("events", []):
+        status_info = event.get("status", {})
+        state = status_info.get("type", {}).get("state", "scheduled")
+        detail_clock = status_info.get("type", {}).get("detail", "")
+        
+        competitors = event.get("competitions", [{}])[0].get("competitors", [])
+        
+        match_info = {}
+        for team in competitors:
+            t_name = team.get("team", {}).get("displayName", "")
+            t_score = team.get("score", "0")
+            is_home = team.get("homeAway") == "home"
+            match_info[t_name] = {"score": t_score, "is_home": is_home, "state": state, "clock": detail_clock}
+            
+        for team in competitors:
+            t_name = team.get("team", {}).get("displayName", "")
+            espn_scores[t_name] = match_info
+except Exception:
+    pass
 
-# Helper to cross-reference our database teams with the live internet feed
-def lookup_internet_match_data(t1, t2):
-    for team_key, data in live_scoreboard.items():
-        # Smart partial string checks to match long names with API names
-        if (team_key in t1 or t1 in team_key) or (team_key in t2 or t2 in team_key):
+# Smart matcher to pair long spreadsheet names to ESPN live rows
+def find_espn_data(t1, t2):
+    for key_name, data in espn_scores.items():
+        if key_name in t1 or t1 in key_name or key_name in t2 or t2 in key_name:
             return data
     return None
 
@@ -144,35 +137,28 @@ else:
             und_team = game.get("underdog_team") or game.get("underdog") or "Underdog"
             spread_val = game.get("spread_value") or game.get("spread") or "0.0"
 
-            # Base Labels
-            fav_label = fav_team
-            und_label = und_team
-            fav_score_text = ""
-            und_score_text = ""
+            fav_label, und_label = fav_team, und_team
+            fav_score_text, und_score_text = "", ""
             status_ticker = f"`🕒 {time_str}`"
 
-            # 🌐 QUERY THE INTERNET SCORES & HOME TEAM DESIGNATIONS LIVE
-            internet_match = lookup_internet_match_data(fav_team, und_team)
+            # 🌐 LOOKUP ESPN LIVE DATA STREAM FOR HOME TEAMS & SCOREBOARDS
+            game_data = find_espn_data(fav_team, und_team)
             
-            if internet_match:
-                home_api = internet_match["official_home"]
-                away_api = internet_match["official_away"]
-                scores = internet_match["scores"]
+            if game_data:
+                # Find which team is hosting dynamically from ESPN
+                fav_espn = next((k for k in game_data.keys() if k in fav_team or fav_team in k), None)
+                und_espn = next((k for k in game_data.keys() if k in und_team or und_team in k), None)
                 
-                # Identify the True Home Team via internet lookup bypassing spreadsheet layouts
-                if home_api in fav_team or fav_team in home_api:
-                    fav_label = f"{fav_team} 🏠"
-                elif home_api in und_team or und_team in home_api:
-                    und_label = f"{und_team} 🏠"
+                if fav_espn and game_data[fav_espn]["is_home"]: fav_label = f"{fav_team} 🏠"
+                if und_espn and game_data[und_espn]["is_home"]: und_label = f"{und_team} 🏠"
                 
-                # Fetch live game score lines if available
-                if scores:
-                    f_pts = next((val for name, val in scores.items() if name in fav_team or fav_team in name), 0)
-                    u_pts = next((val for name, val in scores.items() if name in und_team or und_team in name), 0)
-                    fav_score_text = f"  \n**Score: {f_pts}**"
-                    und_score_text = f"  \n**Score: {u_pts}**"
-                    
-                status_ticker = "`🔴 LIVE`" if not internet_match["completed"] else "`🏁 FINAL`"
+                # Fetch scores and match clock states
+                if fav_espn and und_espn:
+                    f_state = game_data[fav_espn]["state"]
+                    if f_state != "scheduled":
+                        fav_score_text = f"  \n**Score: {game_data[fav_espn]['score']}**"
+                        und_score_text = f"  \n**Score: {game_data[und_espn]['score']}**"
+                        status_ticker = f"`🔴 LIVE - {game_data[fav_espn]['clock']}`" if f_state == "in" else "`🏁 FINAL`"
 
             c_num, c_fav, c_und, c_spr, c_pck = st.columns(5)
             with c_num: st.write(f"**{g_num}**")
@@ -199,7 +185,7 @@ else:
 
     if st.button("Lock In Weekly Picks", type="primary"):
         if len(chosen_picks) != 7:
-            st.error(f"Validation Error: You must pick exactly 7 games. You currently have {len(chosen_picks)} selected.")
+            st.error(f"Validation Error: You must pick exactly 7 games to submit. You currently have {len(chosen_picks)} selected.")
         else:
             try:
                 supabase.table("picks").delete().eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute()
