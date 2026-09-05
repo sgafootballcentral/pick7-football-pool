@@ -43,9 +43,9 @@ st.write("---")
 active_week = st.number_input("Target Input Week Number:", min_value=1, max_value=18, value=1, step=1)
 st.write("---")
 
-# 3. AUTOMATED DRAFTKINGS SPORTSBOOK SYNCER
+# 3. AUTOMATED DRAFTKINGS SPORTSBOOK SYNCER (SMART DATE FILTER)
 st.subheader("🦊 Live DraftKings / ESPN Odds Sync")
-st.write("Wipe the board for the selected week and instantly pull live college football spreads directly from DraftKings:")
+st.write("Wipe the board for the selected week and instantly pull live college football spreads directly from DraftKings for this weekend:")
 
 if st.button("🔄 Auto-Fetch Live DraftKings Slate", type="primary"):
     if not ODDS_API_KEY:
@@ -53,7 +53,13 @@ if st.button("🔄 Auto-Fetch Live DraftKings Slate", type="primary"):
     else:
         with st.spinner("Downloading live spreads from DraftKings Sportsbook..."):
             try:
+                # Wipe previous schedules for the active target week
                 supabase.table("games").delete().eq("week_number", active_week).execute()
+                
+                # 📅 AUTOMATED WEEKEND DATE FILTER
+                # We calculate right now in UTC and set a strict 3-day window ahead
+                now_utc = datetime.now(timezone.utc)
+                commence_time_from = now_utc.strftime("%Y-%m-%dT00:00:00Z")
                 
                 url = "https://the-odds-api.com"
                 params = {
@@ -61,13 +67,18 @@ if st.button("🔄 Auto-Fetch Live DraftKings Slate", type="primary"):
                     "regions": "us", 
                     "markets": "spreads", 
                     "bookmakers": "draftkings",
-                    "oddsFormat": "american"
+                    "oddsFormat": "american",
+                    "commenceTimeFrom": commence_time_from # Restricts the fetch to current/upcoming games only
                 }
                 headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
                 
                 api_call = requests.get(url, params=params, headers=headers)
                 if api_call.status_code == 200:
                     response = api_call.json()
+                    
+                    # Sort the incoming games by kickoff time before numbering them
+                    response = sorted(response, key=lambda x: x.get("commence_time", ""))
+                    
                     count = 0
                     for idx, match in enumerate(response):
                         game_number = idx + 1
@@ -75,7 +86,9 @@ if st.button("🔄 Auto-Fetch Live DraftKings Slate", type="primary"):
                         away_team = match.get("away_team")
                         kickoff_time = match.get("commence_time")
                         
+                        # Default fallback values
                         fav_team, und_team, spread_val = away_team, home_team, "0.0"
+                        
                         bookmakers = match.get("bookmakers", [])
                         if bookmakers and len(bookmakers) > 0:
                             markets = bookmakers[0].get("markets", [])
@@ -86,11 +99,13 @@ if st.button("🔄 Auto-Fetch Live DraftKings Slate", type="primary"):
                                     away_o = next((o for o in outcomes if o.get("name") == away_team), None)
                                     if home_o and away_o:
                                         s_h, s_a = home_o.get("point", 0), away_o.get("point", 0)
+                                        # Determine the favorite (negative spread) vs underdog
                                         if s_h < s_a:
                                             fav_team, und_team, spread_val = home_team, away_team, str(s_h)
                                         else:
                                             fav_team, und_team, spread_val = away_team, home_team, str(s_a)
                         
+                        # Save rows dynamically formatted into Supabase
                         supabase.table("games").insert({
                             "game_id": f"g_w{active_week}_{game_number}",
                             "game_number": game_number,
@@ -103,13 +118,13 @@ if st.button("🔄 Auto-Fetch Live DraftKings Slate", type="primary"):
                             "week_number": int(active_week)
                         }).execute()
                         count += 1
-                    st.success(f"Success! Loaded {count} games from DraftKings into Week {active_week}!")
+                        
+                    st.success(f"Success! Loaded {count} upcoming weekend games cleanly from DraftKings into Week {active_week}!")
                     st.rerun()
                 else:
                     st.error(f"API Error: {api_call.text}")
-            except Exception as e: st.error(f"Scraper error: {e}")
-
-st.write("---")
+            except Exception as e: 
+                st.error(f"Scraper error: {e}")
 
 # 4. NUMBERED SPREADSHEET MANUAL CLIPBOARD IMPORTER
 st.subheader("📋 Bulk-Upload Slate Layout from Spreadsheet")
