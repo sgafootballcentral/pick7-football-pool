@@ -26,7 +26,6 @@ user_id = st.session_state.user.id
 
 try:
     current_user_record = supabase.table("league_users").select("role").eq("id", user_id).execute().data
-    # Check if any matching rows were returned and verify the role string value safely
     if current_user_record and current_user_record[0].get("role") == "admin":
         is_admin = True
     else:
@@ -59,18 +58,23 @@ if st.button("🔄 Auto-Fetch Live DraftKings Slate", type="primary"):
                 # Wipe previous schedules for the active target week
                 supabase.table("games").delete().eq("week_number", active_week).execute()
                 
-                # Official endpoint path using the updated NCAA FBS league code identifier
+                # Official endpoint path using the correct NCAA football sport key identifier
                 url = "https://the-odds-api.com"
                 params = {
                     "apiKey": ODDS_API_KEY, 
                     "regions": "us", 
                     "markets": "spreads", 
-                    "bookmakers": "draftkings", # Hard-locked to extract DraftKings Sportsbook data directly
+                    "bookmakers": "draftkings",
                     "oddsFormat": "american"
                 }
-                headers = {"User-Agent": "Mozilla/5.0"}
+                
+                # Crucial header mask that prevents char 0 firewall rejections
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                }
                 
                 api_call = requests.get(url, params=params, headers=headers)
+                
                 if api_call.status_code != 200:
                     st.error(f"API Error {api_call.status_code}: {api_call.text}")
                     st.stop()
@@ -84,7 +88,6 @@ if st.button("🔄 Auto-Fetch Live DraftKings Slate", type="primary"):
                     kickoff_time = match.get("commence_time")
                     display_text = f"{away_team} at {home_team}"
                     
-                    # Target and unpack the specific DraftKings outcome arrays safely
                     bookmakers = match.get("bookmakers", [])
                     if bookmakers and len(bookmakers) > 0:
                         markets = bookmakers[0].get("markets", [])
@@ -113,7 +116,7 @@ if st.button("🔄 Auto-Fetch Live DraftKings Slate", type="primary"):
 
 st.write("---")
 
-# 5. EXCEL / SHEET CLIPBOARD BACKUP FALLBACK BOX
+# 5. EXCEL / SHEET CLIPBOARD BACKUP BOX
 st.subheader("📋 Manual Bulk-Upload Spreadsheet Fallback")
 st.write("If you ever want to write your own custom games or force custom point lines, paste them manually below:")
 pasted_data = st.text_area("Paste Rows Here:", height=100)
