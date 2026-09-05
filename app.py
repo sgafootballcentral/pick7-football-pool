@@ -59,32 +59,44 @@ st.header(f"Week {CURRENT_WEEK} Master Slate")
 now = datetime.now(timezone.utc)
 EASTERN_TZ = ZoneInfo("America/New_York")
 
-# 4. LIVE SPORTS SCOREBOARD PIPELINE WITH SMART PARTIAL-NAME MATCHING
-live_scores_list = []
+# 4. FETCH LIVE SCORES & HOME TEAMS DIRECTLY FROM THE INTERNET API
+live_scoreboard = {}
 if ODDS_API_KEY:
     try:
+        # Pull live score data which includes the official internet home/away designations
         score_url = "https://the-odds-api.com"
         score_params = {"apiKey": ODDS_API_KEY, "daysFrom": 3}
         score_headers = {"User-Agent": "Mozilla/5.0"}
         score_call = requests.get(score_url, params=score_params, headers=score_headers)
         if score_call.status_code == 200:
-            live_scores_list = score_call.json()
+            api_response = score_call.json()
+            for match in api_response:
+                h_team = match.get("home_team", "")
+                a_team = match.get("away_team", "")
+                scores = match.get("scores")
+                completed = match.get("completed", False)
+                
+                # Parse scores array safely into a fast lookup map
+                score_dict = {s["name"]: int(s["score"]) for s in scores} if scores else {}
+                
+                match_info = {
+                    "official_home": h_team,
+                    "official_away": a_team,
+                    "scores": score_dict,
+                    "completed": completed
+                }
+                # Map both teams to this match info for partial match lookup below
+                live_scoreboard[h_team] = match_info
+                live_scoreboard[a_team] = match_info
     except Exception:
         pass
 
-def find_live_score(team_name):
-    for match in live_scores_list:
-        home_api = match.get("home_team", "")
-        away_api = match.get("away_team", "")
-        if home_api in team_name or team_name in home_api or away_api in team_name or team_name in away_api:
-            scores = match.get("scores")
-            score_dict = {s["name"]: int(s["score"]) for s in scores} if scores else {}
-            h_pts = next((val for name, val in score_dict.items() if name in home_api or home_api in name), 0)
-            a_pts = next((val for name, val in score_dict.items() if name in away_api or away_api in name), 0)
-            return {
-                "home_api_name": home_api, "away_api_name": away_api,
-                "home_score": h_pts, "away_score": a_pts, "completed": match.get("completed", False)
-            }
+# Helper to cross-reference our database teams with the live internet feed
+def lookup_internet_match_data(t1, t2):
+    for team_key, data in live_scoreboard.items():
+        # Smart partial string checks to match long names with API names
+        if (team_key in t1 or t1 in team_key) or (team_key in t2 or t2 in team_key):
+            return data
     return None
 
 # 5. Pull active week slate from database rows
@@ -132,40 +144,35 @@ else:
             und_team = game.get("underdog_team") or game.get("underdog") or "Underdog"
             spread_val = game.get("spread_value") or game.get("spread") or "0.0"
 
-            # 🏠 DYNAMIC STRING DETECTOR 
-            # In your "Away at Home" paste framework, the team on the RIGHT side of the word "at" is always hosting.
-            # We break apart the text string directly to find exactly who is on the right side.
-            d_text = game.get("display_text", "")
-            is_fav_home = False
-            is_und_home = False
-            
-            if " at " in d_text:
-                parts = d_text.split(" at ")
-                right_side_team = parts[1].strip() if len(parts) > 1 else ""
-                
-                # Check if the right side string matches the favorite or underdog text values
-                if fav_team in right_side_team or right_side_team in fav_team:
-                    is_fav_home = True
-                if und_team in right_side_team or right_side_team in und_team:
-                    is_und_home = True
-
-            fav_label = f"{fav_team} 🏠" if is_fav_home else fav_team
-            und_label = f"{und_team} 🏠" if is_und_home else und_team
-
+            # Base Labels
+            fav_label = fav_team
+            und_label = und_team
             fav_score_text = ""
             und_score_text = ""
             status_ticker = f"`🕒 {time_str}`"
+
+            # 🌐 QUERY THE INTERNET SCORES & HOME TEAM DESIGNATIONS LIVE
+            internet_match = lookup_internet_match_data(fav_team, und_team)
             
-            score_record = find_live_score(fav_team) or find_live_score(und_team)
-            if score_record:
-                if score_record["home_api_name"] in fav_team or fav_team in score_record["home_api_name"]:
-                    f_pts, u_pts = score_record["home_score"], score_record["away_score"]
-                else:
-                    u_pts, f_pts = score_record["home_score"], score_record["away_score"]
+            if internet_match:
+                home_api = internet_match["official_home"]
+                away_api = internet_match["official_away"]
+                scores = internet_match["scores"]
+                
+                # Identify the True Home Team via internet lookup bypassing spreadsheet layouts
+                if home_api in fav_team or fav_team in home_api:
+                    fav_label = f"{fav_team} 🏠"
+                elif home_api in und_team or und_team in home_api:
+                    und_label = f"{und_team} 🏠"
+                
+                # Fetch live game score lines if available
+                if scores:
+                    f_pts = next((val for name, val in scores.items() if name in fav_team or fav_team in name), 0)
+                    u_pts = next((val for name, val in scores.items() if name in und_team or und_team in name), 0)
+                    fav_score_text = f"  \n**Score: {f_pts}**"
+                    und_score_text = f"  \n**Score: {u_pts}**"
                     
-                fav_score_text = f"  \n**Score: {f_pts}**"
-                und_score_text = f"  \n**Score: {u_pts}**"
-                status_ticker = "`🔴 LIVE`" if not score_record["completed"] else "`🏁 FINAL`"
+                status_ticker = "`🔴 LIVE`" if not internet_match["completed"] else "`🏁 FINAL`"
 
             c_num, c_fav, c_und, c_spr, c_pck = st.columns(5)
             with c_num: st.write(f"**{g_num}**")
