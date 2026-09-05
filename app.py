@@ -33,15 +33,6 @@ if not st.session_state.user:
                 st.session_state.user = res.user
                 st.rerun()
             except Exception: st.error("Login failed. Check entries.")
-    with tab2:
-        signup_email = st.text_input("Email", key="s_email")
-        signup_pass = st.text_input("Password", type="password", key="s_pass")
-        signup_user = st.text_input("League Display Name / Nickname", key="s_user")
-        if st.button("Create Account", use_container_width=True):
-            try:
-                supabase.auth.sign_up({"email": signup_email, "password": signup_pass, "options": {"data": {"username": signup_user}}})
-                st.success("Account created! Switch to Log In.")
-            except Exception: st.error("Sign up failed. Use a 6+ character password.")
     st.stop()
 
 # --- Authenticated User Area Hub ---
@@ -58,51 +49,38 @@ st.header(f"Week {CURRENT_WEEK} Master Slate")
 now = datetime.now(timezone.utc)
 EASTERN_TZ = ZoneInfo("America/New_York")
 
-# 4. 🌐 FREE ESPN LIVE SCOREBOARD PIPELINE
+# 4. FETCH LIVE SCORES DIRECTLY VIA ESPN WIRE
 espn_scores = {}
 try:
-    espn_url = "https://espn.com"
-    espn_data = requests.get(espn_url, headers={"User-Agent": "Mozilla/5.0"}).json()
-    
-    for event in espn_data.get("events", []):
+    url = "https://espn.com"
+    response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}).json()
+    for event in response.get("events", []):
+        g_id = f"espn_{event.get('id')}"
         status_info = event.get("status", {})
         state = status_info.get("type", {}).get("state", "scheduled")
         detail_clock = status_info.get("type", {}).get("detail", "")
         
-        competitors = event.get("competitions", [{}]).get("competitors", [])
-        match_info = {}
-        for team in competitors:
-            t_name = team.get("team", {}).get("displayName", "")
-            t_score = team.get("score", "0")
-            is_home = team.get("homeAway") == "home"
-            match_info[t_name] = {"score": t_score, "is_home": is_home, "state": state, "clock": detail_clock}
-            
-        for team in competitors:
-            t_name = team.get("team", {}).get("displayName", "")
-            espn_scores[t_name] = match_info
+        competitors = event.get("competitions", [{}])[0].get("competitors", [])
+        home_node = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
+        away_node = next((c for c in competitors if c.get("homeAway") == "away"), competitors[1])
+        
+        espn_scores[g_id] = {
+            "home_score": home_node.get("score", "0"),
+            "away_score": away_node.get("score", "0"),
+            "state": state,
+            "clock": detail_clock
+        }
 except Exception:
     pass
 
-# Deep word-by-word text cross-referencing tool to solve naming differences
-def find_espn_data(t1, t2):
-    t1_clean = t1.lower().split()[0] if t1.split() else t1.lower()
-    t2_clean = t2.lower().split()[0] if t2.split() else t2.lower()
-    
-    for key_name, data in espn_scores.items():
-        key_lower = key_name.lower()
-        if t1_clean in key_lower or key_lower in t1.lower() or t2_clean in key_lower or key_lower in t2.lower():
-            return data, key_name
-    return None, None
-
 # 5. Pull active week slate from database rows
 try:
-    games_response = supabase.table("games").select("*").eq("week_number", CURRENT_WEEK).execute()
-    all_games = games_response.data
+    all_games = supabase.table("games").select("*").eq("week_number", CURRENT_WEEK).execute().data
 except Exception:
     all_games = []
 
 if not all_games:
-    st.info(f"No games have been loaded yet for Week {CURRENT_WEEK}.")
+    st.info(f"No games loaded yet for Week {CURRENT_WEEK}.")
 else:
     all_games = sorted(all_games, key=lambda x: x.get("game_number") or 999)
     current_picks_count = sum(1 for g in all_games if st.session_state.get(f"sel_{g['game_id']}", "-- Select --") != "-- Select --")
@@ -135,36 +113,31 @@ else:
             time_str = kickoff_est.strftime("%I:%M %p ET").lstrip("0")
             g_num = game.get("game_number") or ""
             
-            fav_team = game.get("favorite_team") or game.get("favorite") or "Favorite"
-            und_team = game.get("underdog_team") or game.get("underdog") or "Underdog"
-            spread_val = game.get("spread_value") or game.get("spread") or "0.0"
+            fav_team = game.get("favorite_team", "Away Team")
+            und_team = game.get("underdog_team", "Home Team")
+            
+            # Explicitly layout home team labels directly based on database stamps
+            fav_label = f"{fav_team} 🏠" if game.get("favorite_team_home") else fav_team
+            und_label = f"{und_team} 🏠" if game.get("underdog_team_home") else und_team
 
-            fav_label, und_label = fav_team, und_team
-            fav_score_text, und_score_text = "", ""
+            fav_score_text = ""
+            und_score_text = ""
             status_ticker = f"`🕒 {time_str}`"
 
-            # 🌐 LOOKUP ESPN LIVE DATA STREAM WITH WORD EXTRACTORS
-            game_data, matched_key = find_espn_data(fav_team, und_team)
-            
-            if game_data:
-                fav_espn = next((k for k in game_data.keys() if fav_team.lower().split()[0] in k.lower() or k.lower() in fav_team.lower()), None)
-                und_espn = next((k for k in game_data.keys() if und_team.lower().split()[0] in k.lower() or k.lower() in und_team.lower()), None)
-                
-                if fav_espn and game_data[fav_espn]["is_home"]: fav_label = f"{fav_team} 🏠"
-                if und_espn and game_data[und_espn]["is_home"]: und_label = f"{und_team} 🏠"
-                
-                if fav_espn and und_espn:
-                    f_state = game_data[fav_espn]["state"]
-                    if f_state != "scheduled":
-                        fav_score_text = f"  \n**Score: {game_data[fav_espn]['score']}**"
-                        und_score_text = f"  \n**Score: {game_data[und_espn]['score']}**"
-                        status_ticker = f"`🔴 LIVE - {game_data[fav_espn]['clock']}`" if f_state == "in" else "`🏁 FINAL`"
+            # Connect database items to live scores instantly using explicit ESPN game IDs
+            live_data = espn_scores.get(game["game_id"])
+            if live_data:
+                state = live_data["state"]
+                if state != "scheduled":
+                    fav_score_text = f"  \n**Score: {live_data['away_score']}**"
+                    und_score_text = f"  \n**Score: {live_data['home_score']}**"
+                    status_ticker = f"`🔴 LIVE - {live_data['clock']}`" if state == "in" else "`🏁 FINAL`"
 
             c_num, c_fav, c_und, c_spr, c_pck = st.columns(5)
             with c_num: st.write(f"**{g_num}**")
             with c_fav: st.markdown(f"**{fav_label}**{fav_score_text}  \n{status_ticker}")
             with c_und: st.markdown(f"**{und_label}**{und_score_text}")
-            with c_spr: st.markdown(f"`{spread_val}`")
+            with c_spr: st.markdown("`DK Line`")
             with c_pck:
                 if is_time_locked:
                     st.button("🔒 Locked", key=f"lock_{game['game_id']}", disabled=True, use_container_width=True)
@@ -185,7 +158,7 @@ else:
 
     if st.button("Lock In Weekly Picks", type="primary"):
         if len(chosen_picks) != 7:
-            st.error(f"Validation Error: You must pick exactly 7 games to submit. You currently have {len(chosen_picks)} selected.")
+            st.error(f"Validation Error: You must pick exactly 7 games.")
         else:
             try:
                 supabase.table("picks").delete().eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute()
