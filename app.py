@@ -22,7 +22,6 @@ if "user" not in st.session_state:
 # 3. Secure Authentication Interface
 if not st.session_state.user:
     tab1, tab2 = st.tabs(["Log In", "Sign Up"])
-    
     with tab1:
         login_email = st.text_input("Email", key="l_email")
         login_pass = st.text_input("Password", type="password", key="l_pass")
@@ -31,23 +30,16 @@ if not st.session_state.user:
                 res = supabase.auth.sign_in_with_password({"email": login_email, "password": login_pass})
                 st.session_state.user = res.user
                 st.rerun()
-            except Exception as e:
-                st.error("Login failed. Check your email or password entries.")
-                
+            except: st.error("Login failed. Check your email or password entries.")
     with tab2:
         signup_email = st.text_input("Email", key="s_email")
         signup_pass = st.text_input("Password", type="password", key="s_pass")
         signup_user = st.text_input("League Display Name / Nickname", key="s_user")
         if st.button("Create Account", use_container_width=True):
             try:
-                res = supabase.auth.sign_up({
-                    "email": signup_email, 
-                    "password": signup_pass,
-                    "options": {"data": {"username": signup_user}}
-                })
-                st.success("Account created successfully! You can now switch to the Log In tab.")
-            except Exception as e:
-                st.error("Sign up failed. Ensure your password is at least 6 characters.")
+                supabase.auth.sign_up({"email": signup_email, "password": signup_pass, "options": {"data": {"username": signup_user}}})
+                st.success("Account created! Switch to the Log In tab.")
+            except: st.error("Sign up failed. Password must be 6+ characters.")
     st.stop()
 
 # --- Authenticated User Area Hub ---
@@ -60,22 +52,29 @@ if st.sidebar.button("Log Out", use_container_width=True):
     st.session_state.user = None
     st.rerun()
 
-# Change this single number week-to-week to update the visible board for players
 CURRENT_WEEK = 1 
-
 st.header(f"Week {CURRENT_WEEK} Master Slate")
 now = datetime.now(timezone.utc)
 
-# 4. Pull ONLY the games that match the active week number
+# 4. Pull active week slate
 try:
-    games_response = supabase.table("games").select("*").eq("week_number", CURRENT_WEEK).order("kickoff_time").execute()
-    all_games = games_response.data
-except Exception as e:
+    all_games = supabase.table("games").select("*").eq("week_number", CURRENT_WEEK).order("kickoff_time").execute().data
+except:
     all_games = []
 
 if not all_games:
     st.info(f"No games have been loaded yet for Week {CURRENT_WEEK} by the league administrator.")
 else:
+    # PRE-SCAN LOOP: Calculate exactly how many selections are currently active
+    current_picks_count = 0
+    for game in all_games:
+        saved_val = st.session_state.get(f"sel_{game['game_id']}", "-- Select --")
+        if saved_val != "-- Select --":
+            current_picks_count += 1
+
+    # If the user has selected 7 teams, trigger the global UI lock rule
+    ui_max_reached = current_picks_count >= 7
+
     chosen_picks = []
     cfb_games = [g for g in all_games if g['league'] == 'CFB']
     nfl_games = [g for g in all_games if g['league'] == 'NFL']
@@ -84,31 +83,30 @@ else:
         st.subheader(category)
         for game in game_list:
             kickoff = datetime.fromisoformat(game['kickoff_time'].replace('Z', '+00:00'))
-            is_locked = now >= kickoff
+            is_time_locked = now >= kickoff
             
-            col1, col2 = st.columns([3, 1])
+            # Extract team names out of display text layout safely
+            teams = game['display_text'].split(" at ") if " at " in game['display_text'] else game['display_text'].split(" vs ")
+            t_a = teams[0].split(" (")[0].strip() if len(teams) > 0 else "Away"
+            t_b = teams[1].split(" (")[0].strip() if len(teams) > 1 else "Home"
+            
+            col1, col2 = st.columns()
             with col1:
                 st.write(f"🏈 {game['display_text']}")
             with col2:
-                if is_locked:
+                if is_time_locked:
                     st.button("🔒 Locked", key=f"lock_{game['game_id']}", disabled=True)
                 else:
-                    text = game['display_text']
-                    if " at " in text:
-                        teams = text.split(" at ")
-                    elif " vs " in text:
-                        teams = text.split(" vs ")
-                    else:
-                        teams = [text, "Home Team"]
-                        
-                    team_a = teams[0].split(" (")[0].strip()
-                    team_b = teams[1].split(" (")[0].strip() if len(teams) > 1 else "Home"
+                    # Smart evaluation check: Is this specific selector empty while the overall limit is reached?
+                    is_current_empty = st.session_state.get(f"sel_{game['game_id']}", "-- Select --") == "-- Select --"
+                    should_disable = ui_max_reached and is_current_empty
                     
                     pick = st.selectbox(
                         "Choose", 
-                        options=["-- Select --", team_a, team_b], 
+                        options=["-- Select --", t_a, t_b], 
                         key=f"sel_{game['game_id']}",
-                        label_visibility="collapsed"
+                        label_visibility="collapsed",
+                        disabled=should_disable # Freeze box instantly when limit is reached
                     )
                     if pick != "-- Select --":
                         chosen_picks.append({"game_id": game['game_id'], "selected_team": pick})
@@ -118,24 +116,15 @@ else:
 
     st.divider()
     st.subheader("Your Submission Status")
-    st.write(f"Total Games Picked: **{len(chosen_picks)} / 7**")
+    st.write(f"Total Games Selected: **{len(chosen_picks)} / 7**")
 
     if st.button("Lock In Weekly Picks", type="primary"):
         if len(chosen_picks) != 7:
             st.error(f"Validation Error: You must pick exactly 7 games to submit. You currently have {len(chosen_picks)} selected.")
         else:
             try:
-                # Wipe any older picks for THIS specific week so players can update choices before kickoff
                 supabase.table("picks").delete().eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute()
-                
                 for p in chosen_picks:
-                    supabase.table("picks").insert({
-                        "user_id": user.id,
-                        "username": username,
-                        "week_number": CURRENT_WEEK,
-                        "game_id": p["game_id"],
-                        "selected_team": p["selected_team"]
-                    }).execute()
+                    supabase.table("picks").insert({"user_id": user.id, "username": username, "week_number": CURRENT_WEEK, "game_id": p["game_id"], "selected_team": p["selected_team"]}).execute()
                 st.success(f"Boom! Your 7 picks are saved securely for Week {CURRENT_WEEK}!")
-            except Exception as e:
-                st.error(f"Database error saving picks: {e}")
+            except Exception as e: st.error(f"Database error saving picks: {e}")
