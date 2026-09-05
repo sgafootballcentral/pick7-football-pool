@@ -19,7 +19,7 @@ st.title("🏈 Pick 7 Against The Spread")
 if "user" not in st.session_state:
     st.session_state.user = None
 
-# 3. Secure Authentication Interface (COMPLETELY ISOLATED)
+# 3. Secure Authentication Interface
 if not st.session_state.user:
     tab1, tab2 = st.tabs(["Log In", "Sign Up"])
     with tab1:
@@ -39,15 +39,10 @@ if not st.session_state.user:
         signup_user = st.text_input("League Display Name / Nickname", key="s_user")
         if st.button("Create Account", use_container_width=True):
             try:
-                supabase.auth.sign_up({
-                    "email": signup_email, 
-                    "password": signup_pass,
-                    "options": {"data": {"username": signup_user}}
-                })
+                supabase.auth.sign_up({"email": signup_email, "password": signup_pass, "options": {"data": {"username": signup_user}}})
                 st.success("Account created successfully! You can now switch to the Log In tab.")
             except Exception as e:
                 st.error("Sign up failed. Ensure your password is at least 6 characters.")
-    # Stop execution right here so the game engine cannot run until logged in
     st.stop()
 
 # --- Authenticated User Area Hub ---
@@ -74,7 +69,7 @@ except Exception as e:
 if not all_games:
     st.info(f"No games have been loaded yet for Week {CURRENT_WEEK} by the league administrator.")
 else:
-    # Calculate how many selections are currently active
+    # Calculate exactly how many selections are currently active
     current_picks_count = 0
     for game in all_games:
         saved_val = st.session_state.get(f"sel_{game['game_id']}", "-- Select --")
@@ -93,22 +88,15 @@ else:
             kickoff = datetime.fromisoformat(game['kickoff_time'].replace('Z', '+00:00'))
             is_time_locked = now >= kickoff
             
-            # Bulletproof extraction wrapper fix using a safe try/except fallback
-            try:
-                text = game['display_text']
-                if " at " in text:
-                    teams = text.split(" at ")
-                elif " vs " in text:
-                    teams = text.split(" vs ")
-                else:
-                    teams = [text, "Home Team"]
-                    
-                t_a = teams[0].split(" (")[0].strip()
-                t_b = teams[1].split(" (")[0].strip() if len(teams) > 1 else "Home Team"
-            except Exception:
-                t_a, t_b = "Away Team", "Home Team"
+            # Perfect, bulletproof string splitter for spreads
+            text = game['display_text']
+            teams = text.split(" at ") if " at " in text else text.split(" vs ")
             
-            col1, col2 = st.columns()
+            t_a = teams[0].split(" (")[0].strip() if len(teams) > 0 else "Away Team"
+            t_b = teams[1].split(" (")[0].strip() if len(teams) > 1 else "Home Team"
+            
+            # Explicitly passed 2 columns to fix the line 111 crash
+            col1, col2 = st.columns([3, 1])
             with col1:
                 st.write(f"🏈 {game['display_text']}")
             with col2:
