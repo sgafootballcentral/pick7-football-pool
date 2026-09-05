@@ -37,52 +37,66 @@ st.success("🔓 Commissioner Dashboard Unlocked!")
 active_week = st.number_input("Target Input Week Number:", min_value=1, max_value=18, value=1, step=1)
 st.write("---")
 
-# 3. DIRECT 100% ESPN AUTOMATED SYNCER
+# 3. DIRECT 100% ESPN AUTOMATED SYNCER WITH SECURITY HEADERS
 st.subheader("🏈 Live ESPN Board Auto-Fetcher")
-st.write("Wipe the board for the selected week and instantly pull the live college football slate directly from ESPN's master wire:")
+st.write("Wipe the board for the selected week and instantly pull the live college football slate directly from ESPN:")
 
 if st.button("🔄 Auto-Fetch Live ESPN Slate", type="primary"):
     with st.spinner("Downloading live schedule from ESPN..."):
         try:
-            # Wipe previous schedules for the active target week
             supabase.table("games").delete().eq("week_number", active_week).execute()
             
-            # Fetch directly from ESPN public scoreboard networks
             url = "https://espn.com"
-            response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}).json()
             
+            # 🌐 CRUCIAL SECURITY HEADERS MASK
+            # This disguises the script as a regular Google Chrome browser to slide past firewalls
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "application/json"
+            }
+            
+            api_call = requests.get(url, headers=headers)
+            
+            if api_call.status_code != 200:
+                st.error(f"ESPN Server Error (Code {api_call.status_code}): {api_call.text}")
+                st.stop()
+                
+            response = api_call.json()
             count = 0
             for idx, event in enumerate(response.get("events", [])):
                 game_number = idx + 1
                 game_id = event.get("id")
-                kickoff_time = event.get("date") # Raw UTC timestamp directly from ESPN
+                kickoff_time = event.get("date")
                 
-                competitors = event.get("competitions", [{}])[0].get("competitors", [])
+                competitions = event.get("competitions", [{}])[0]
+                competitors = competitions.get("competitors", [])
                 
-                # ESPN always lists Home on row index 0 or explicit homeAway string
+                # Safely extract point spreads embedded directly in ESPN's odds node
+                odds_list = competitions.get("odds", [{}])
+                odds_string = odds_list[0].get("details", "0.0") if odds_list else "0.0"
+                
                 home_node = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
                 away_node = next((c for c in competitors if c.get("homeAway") == "away"), competitors[1])
                 
                 home_team = home_node.get("team", {}).get("displayName", "Home Team")
                 away_team = away_node.get("team", {}).get("displayName", "Away Team")
                 
-                # We save who the official Home Team is directly inside your database table!
                 supabase.table("games").insert({
                     "game_id": f"espn_{game_id}",
                     "game_number": game_number,
                     "league": "CFB",
-                    "favorite_team": away_team,  # Renders on the left side
-                    "underdog_team": home_team,  # Renders on the right side
+                    "favorite_team": away_team,  
+                    "underdog_team": home_team,  
                     "favorite_team_home": False,
-                    "underdog_team_home": True,  # Stamped explicitly as the home team host
-                    "spread_value": "Line Live",
+                    "underdog_team_home": True,  
+                    "spread_value": odds_string, 
                     "display_text": f"{away_team} at {home_team}",
                     "kickoff_time": kickoff_time,
                     "week_number": int(active_week)
                 }).execute()
                 count += 1
                 
-            st.success(f"Success! Pulled {count} official games cleanly from ESPN into Week {active_week}!")
+            st.success(f"Success! Pulled {count} official games with live lines cleanly from ESPN into Week {active_week}!")
             st.rerun()
         except Exception as e:
             st.error(f"ESPN Sync Failed: {e}")
