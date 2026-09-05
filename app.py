@@ -31,9 +31,7 @@ if not st.session_state.user:
                 res = supabase.auth.sign_in_with_password({"email": login_email, "password": login_pass})
                 st.session_state.user = res.user
                 st.rerun()
-            except Exception as e:
-                st.error("Login failed. Check your email or password entries.")
-                
+            except Exception: st.error("Login failed. Check entries.")
     with tab2:
         signup_email = st.text_input("Email", key="s_email")
         signup_pass = st.text_input("Password", type="password", key="s_pass")
@@ -41,16 +39,14 @@ if not st.session_state.user:
         if st.button("Create Account", use_container_width=True):
             try:
                 supabase.auth.sign_up({"email": signup_email, "password": signup_pass, "options": {"data": {"username": signup_user}}})
-                st.success("Account created successfully! You can now switch to the Log In tab.")
-            except Exception as e:
-                st.error("Sign up failed. Ensure your password is at least 6 characters.")
+                st.success("Account created! Switch to Log In.")
+            except Exception: st.error("Sign up failed. Use 6+ character password.")
     st.stop()
 
 # --- Authenticated User Area Hub ---
 user = st.session_state.user
 username = user.user_metadata.get("username", user.email)
 st.sidebar.write(f"Logged in as: **{username}**")
-
 if st.sidebar.button("Log Out", use_container_width=True):
     supabase.auth.sign_out()
     st.session_state.user = None
@@ -59,72 +55,62 @@ if st.sidebar.button("Log Out", use_container_width=True):
 CURRENT_WEEK = 1 
 st.header(f"Week {CURRENT_WEEK} Master Slate")
 now = datetime.now(timezone.utc)
-
-# Establish Eastern Time Zone target framework
 EASTERN_TZ = ZoneInfo("America/New_York")
 
 # 4. Pull active week slate
 try:
-    games_response = supabase.table("games").select("*").eq("week_number", CURRENT_WEEK).order("kickoff_time").execute()
-    all_games = games_response.data
-except Exception as e:
+    all_games = supabase.table("games").select("*").eq("week_number", CURRENT_WEEK).order("game_number", nulls_first=False).execute().data
+except Exception:
     all_games = []
 
 if not all_games:
-    st.info(f"No games have been loaded yet for Week {CURRENT_WEEK} by the league administrator.")
+    st.info(f"No games loaded yet for Week {CURRENT_WEEK}.")
 else:
-    # Pre-scan total count
-    current_picks_count = 0
-    for game in all_games:
-        saved_val = st.session_state.get(f"sel_{game['game_id']}", "-- Select --")
-        if saved_val != "-- Select --":
-            current_picks_count += 1
-
+    # Pre-scan pick limit check
+    current_picks_count = sum(1 for g in all_games if st.session_state.get(f"sel_{g['game_id']}", "-- Select --") != "-- Select --")
     ui_max_reached = current_picks_count >= 7
     chosen_picks = []
 
-    # 5. DYNAMIC DATE SEPARATION & EASTERN TIME CONVERSION
+    # Group matches by Eastern Time calendar dates
     grouped_by_date = {}
     for game in all_games:
         kickoff_utc = datetime.fromisoformat(game['kickoff_time'].replace('Z', '+00:00'))
         kickoff_est = kickoff_utc.astimezone(EASTERN_TZ)
-        
         date_str = kickoff_est.strftime("%A, %b %d")
         if date_str not in grouped_by_date:
             grouped_by_date[date_str] = []
         grouped_by_date[date_str].append((game, kickoff_est, kickoff_utc))
 
-    # Loop through each distinct date group day-by-day
+    # Render Grid Output Layout matching spreadsheet style
     for date_header, games_in_day in grouped_by_date.items():
         st.write("")
         st.markdown(f"### 📅 {date_header}")
-        st.divider()
         
+        # Grid Title Column Labels
+        hdr_num, hdr_fav, hdr_und, hdr_spr, hdr_pck = st.columns([1, 4, 4, 2, 3])
+        with hdr_num: st.markdown("**#**")
+        with hdr_fav: st.markdown("**FAVORITE**")
+        with hdr_und: st.markdown("**UNDERDOG**")
+        with hdr_spr: st.markdown("**SPREAD**")
+        with hdr_pck: st.markdown("**YOUR SELECTION**")
+        st.divider()
+
         for game, kickoff_est, kickoff_utc in games_in_day:
             is_time_locked = now >= kickoff_utc
             time_str = kickoff_est.strftime("%I:%M %p ET").lstrip("0")
+            g_num = game.get("game_number") or ""
             
-            text = game['display_text']
-            if " at " in text:
-                teams = text.split(" at ")
-                is_neutral = False
-            elif " vs " in text:
-                teams = text.split(" vs ")
-                is_neutral = True
-            else:
-                teams = [text, "Home Team"]
-                is_neutral = False
-                
-            t_a = teams[0].split(" (")[0].strip()
-            t_b = teams[1].split(" (")[0].strip() if len(teams) > 1 else "Home Team"
-            
-            home_label = "📍 Neutral Site" if is_neutral else f"🏠 Home: {t_b}"
-            
-            # Explicitly added 2 columns here to fix the empty st.columns() crash
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown(f"**{text}**  \n`🕒 Kickoff: {time_str} | {home_label}`")
-            with col2:
+            # Reconstruct string parse tokens
+            fav_team = game.get("favorite_team", "Favorite")
+            und_team = game.get("underdog_team", "Underdog")
+            spread_val = game.get("spread_value", "0.0")
+
+            c_num, c_fav, c_und, c_spr, c_pck = st.columns([1, 4, 4, 2, 3])
+            with c_num: st.write(f"**{g_num}**")
+            with c_fav: st.markdown(f"**{fav_team}**  \n`🕒 {time_str}`")
+            with c_und: st.markdown(f"**{und_team}**")
+            with c_spr: st.markdown(f"`{spread_val}`")
+            with c_pck:
                 if is_time_locked:
                     st.button("🔒 Locked", key=f"lock_{game['game_id']}", disabled=True, use_container_width=True)
                 else:
@@ -133,7 +119,7 @@ else:
                     
                     pick = st.selectbox(
                         "Choose", 
-                        options=["-- Select --", t_a, t_b], 
+                        options=["-- Select --", fav_team, und_team], 
                         key=f"sel_{game['game_id']}",
                         label_visibility="collapsed",
                         disabled=should_disable
@@ -147,18 +133,11 @@ else:
 
     if st.button("Lock In Weekly Picks", type="primary"):
         if len(chosen_picks) != 7:
-            st.error(f"Validation Error: You must pick exactly 7 games to submit. You currently have {len(chosen_picks)} selected.")
+            st.error(f"You must select exactly 7 games. Currently selected: {len(chosen_picks)}")
         else:
             try:
                 supabase.table("picks").delete().eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute()
                 for p in chosen_picks:
-                    supabase.table("picks").insert({
-                        "user_id": user.id, 
-                        "username": username, 
-                        "week_number": CURRENT_WEEK, 
-                        "game_id": p["game_id"], 
-                        "selected_team": p["selected_team"]
-                    }).execute()
-                st.success(f"Boom! Your 7 picks are saved securely for Week {CURRENT_WEEK}!")
-            except Exception as e: 
-                st.error(f"Database error saving picks: {e}")
+                    supabase.table("picks").insert({"user_id": user.id, "username": username, "week_number": CURRENT_WEEK, "game_id": p["game_id"], "selected_team": p["selected_team"]}).execute()
+                st.success("Boom! Your 7 picks are saved securely.")
+            except Exception as e: st.error(f"Database error saving picks: {e}")
