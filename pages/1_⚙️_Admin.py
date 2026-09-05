@@ -15,19 +15,27 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 st.title("⚙️ League Admin Panel")
 
-# 2. DYNAMIC LIVE ROLE DATABASE CHECK
+# 2. DYNAMIC LIVE ROLE DATABASE CHECK (FIXED LIST READER)
 if "user" not in st.session_state or not st.session_state.user:
     st.warning("Please log in on the home page first.")
     st.stop()
 
 user_id = st.session_state.user.id
+is_admin = False
+
 try:
+    # Query your live database view to find your true role bypassing cookie lag
     current_user_record = supabase.table("league_users").select("role").eq("id", user_id).execute().data
-    is_admin = current_user_record and current_user_record.get("role") == "admin"
-except Exception: is_admin = False
+    
+    # Corrected row array indexing check
+    if current_user_record and len(current_user_record) > 0:
+        if current_user_record[0].get("role") == "admin":
+            is_admin = True
+except Exception as e:
+    is_admin = False
 
 if not is_admin:
-    st.error("🚫 Access Denied.")
+    st.error("🚫 Access Denied: Only the league commissioner can access this page.")
     st.stop()
 
 st.success("🔓 Commissioner Dashboard Unlocked!")
@@ -62,7 +70,6 @@ if st.button("🚀 Wipe Old Slate & Upload New Grid Layout", type="primary"):
                     und = str(row['underdog']).strip()
                     spr = str(row['spread']).strip()
                     
-                    # Generate visible text fallback block
                     display_text = f"{fav} at {und} ({spr})"
                     
                     supabase.table("games").insert({
