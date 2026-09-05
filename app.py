@@ -1,4 +1,5 @@
 import streamlit as st
+import requests
 from supabase import create_client, Client
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -6,6 +7,7 @@ from zoneinfo import ZoneInfo
 # 1. Connection and Secrets Verification
 SUPABASE_URL = st.secrets.get("SUPABASE_URL")
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY")
+ODDS_API_KEY = st.secrets.get("ODDS_API_KEY")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     st.error("Missing critical Supabase connection variables in Streamlit Secrets.")
@@ -57,7 +59,31 @@ st.header(f"Week {CURRENT_WEEK} Master Slate")
 now = datetime.now(timezone.utc)
 EASTERN_TZ = ZoneInfo("America/New_York")
 
-# 4. Pull active week slate (Bypassing folder filters to force-load row data)
+# 4. LIVE IN-GAME SCOREBOARD INTEGRATION PIPELINE
+# Fetch live live-scores dynamically from the api endpoint to overlay onto the card grid
+live_scores = {}
+if ODDS_API_KEY:
+    try:
+        score_url = "https://the-odds-api.com"
+        score_params = {"apiKey": ODDS_API_KEY, "daysFrom": 2}
+        score_headers = {"User-Agent": "Mozilla/5.0"}
+        score_call = requests.get(score_url, params=score_params, headers=score_headers)
+        if score_call.status_code == 200:
+            score_data = score_call.json()
+            for live_match in score_data:
+                # Store by team names to easily cross-reference rows on screen
+                h_team = live_match.get("home_team")
+                a_team = live_match.get("away_team")
+                scores = live_match.get("scores")
+                is_completed = live_match.get("completed", False)
+                
+                score_dict = {s["name"]: s["score"] for s in scores} if scores else {}
+                live_scores[h_team] = {"opponent": a_team, "scores": score_dict, "completed": is_completed}
+                live_scores[a_team] = {"opponent": h_team, "scores": score_dict, "completed": is_completed}
+    except Exception:
+        pass # If live scores feed is down, fallback smoothly to base spreadsheet lines
+
+# 5. Pull active week slate from database rows
 try:
     games_response = supabase.table("games").select("*").eq("week_number", CURRENT_WEEK).execute()
     all_games = games_response.data
@@ -67,10 +93,7 @@ except Exception:
 if not all_games:
     st.info(f"No games have been loaded yet for Week {CURRENT_WEEK} by the league administrator.")
 else:
-    # Sort chronologically by game number safely
     all_games = sorted(all_games, key=lambda x: x.get("game_number") or 999)
-
-    # Pre-scan pick limit check
     current_picks_count = sum(1 for g in all_games if st.session_state.get(f"sel_{g['game_id']}", "-- Select --") != "-- Select --")
     ui_max_reached = current_picks_count >= 7
     chosen_picks = []
@@ -108,10 +131,40 @@ else:
             und_team = game.get("underdog_team") or game.get("underdog") or "Underdog"
             spread_val = game.get("spread_value") or game.get("spread") or "0.0"
 
+            # 🏠 LIVE HOME TEAM DETECTOR LOGIC
+            # Scan your display_text for " at " to determine who is hosting
+            d_text = game.get("display_text", "")
+            is_fav_home = False
+            is_und_home = False
+            
+            if " at " in d_text:
+                parts = d_text.split(" at ")
+                home_string = parts[1] if len(parts) > 1 else ""
+                if fav_team in home_string: is_fav_home = True
+                if und_team in home_string: is_und_home = True
+
+            fav_label = f"{fav_team} 🏠" if is_fav_home else fav_team
+            und_label = f"{und_team} 🏠" if is_und_home else und_team
+
+            # 🕒 LIVE REAL-TIME IN-GAME SCORE OVERLAY PIPELINE
+            fav_score_text = ""
+            und_score_text = ""
+            status_ticker = f"`🕒 {time_str}`"
+            
+            # Cross-reference if this team has a live entry running right now in the API feed
+            if fav_team in live_scores:
+                match_scores = live_scores[fav_team]["scores"]
+                if match_scores:
+                    f_pts = match_scores.get(fav_team, 0)
+                    u_pts = match_scores.get(und_team, 0)
+                    fav_score_text = f"  \n**Score: {f_pts}**"
+                    und_score_text = f"  \n**Score: {u_pts}**"
+                    status_ticker = "`🔴 LIVE IN-PROGRESS`" if not live_scores[fav_team]["completed"] else "`🏁 FINAL`"
+
             c_num, c_fav, c_und, c_spr, c_pck = st.columns(5)
             with c_num: st.write(f"**{g_num}**")
-            with c_fav: st.markdown(f"**{fav_team}**  \n`🕒 {time_str}`")
-            with c_und: st.markdown(f"**{und_team}**")
+            with c_fav: st.markdown(f"**{fav_label}**{fav_score_text}  \n{status_ticker}")
+            with c_und: st.markdown(f"**{und_label}**{und_score_text}")
             with c_spr: st.markdown(f"`{spread_val}`")
             with c_pck:
                 if is_time_locked:
@@ -136,7 +189,7 @@ else:
 
     if st.button("Lock In Weekly Picks", type="primary"):
         if len(chosen_picks) != 7:
-            st.error(f"You must select exactly 7 games. Currently selected: {len(chosen_picks)}")
+            st.error(f"Validation Error: You must pick exactly 7 games to submit. You currently have {len(chosen_picks)} selected.")
         else:
             try:
                 supabase.table("picks").delete().eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute()
