@@ -59,29 +59,41 @@ st.header(f"Week {CURRENT_WEEK} Master Slate")
 now = datetime.now(timezone.utc)
 EASTERN_TZ = ZoneInfo("America/New_York")
 
-# 4. LIVE IN-GAME SCOREBOARD INTEGRATION PIPELINE
-# Fetch live live-scores dynamically from the api endpoint to overlay onto the card grid
-live_scores = {}
+# 4. LIVE SPORTS SCOREBOARD PIPELINE WITH SMART PARTIAL-NAME MATCHING
+live_scores_list = []
 if ODDS_API_KEY:
     try:
         score_url = "https://the-odds-api.com"
-        score_params = {"apiKey": ODDS_API_KEY, "daysFrom": 2}
+        score_params = {"apiKey": ODDS_API_KEY, "daysFrom": 3}
         score_headers = {"User-Agent": "Mozilla/5.0"}
         score_call = requests.get(score_url, params=score_params, headers=score_headers)
         if score_call.status_code == 200:
-            score_data = score_call.json()
-            for live_match in score_data:
-                # Store by team names to easily cross-reference rows on screen
-                h_team = live_match.get("home_team")
-                a_team = live_match.get("away_team")
-                scores = live_match.get("scores")
-                is_completed = live_match.get("completed", False)
-                
-                score_dict = {s["name"]: s["score"] for s in scores} if scores else {}
-                live_scores[h_team] = {"opponent": a_team, "scores": score_dict, "completed": is_completed}
-                live_scores[a_team] = {"opponent": h_team, "scores": score_dict, "completed": is_completed}
+            live_scores_list = score_call.json()
     except Exception:
-        pass # If live scores feed is down, fallback smoothly to base spreadsheet lines
+        pass
+
+# Helper tool to scan the API scores list using partial string comparisons
+def find_live_score(team_name):
+    for match in live_scores_list:
+        home_api = match.get("home_team", "")
+        away_api = match.get("away_team", "")
+        # If the database team name contains or matches the API team name
+        if home_api in team_name or team_name in home_api or away_api in team_name or team_name in away_api:
+            scores = match.get("scores")
+            score_dict = {s["name"]: int(s["score"]) for s in scores} if scores else {}
+            
+            # Extract scores safely using partial matching loops
+            h_pts = next((val for name, val in score_dict.items() if name in home_api or home_api in name), 0)
+            a_pts = next((val for name, val in score_dict.items() if name in away_api or away_api in name), 0)
+            
+            return {
+                "home_api_name": home_api,
+                "away_api_name": away_api,
+                "home_score": h_pts,
+                "away_score": a_pts,
+                "completed": match.get("completed", False)
+            }
+    return None
 
 # 5. Pull active week slate from database rows
 try:
@@ -91,7 +103,7 @@ except Exception:
     all_games = []
 
 if not all_games:
-    st.info(f"No games have been loaded yet for Week {CURRENT_WEEK} by the league administrator.")
+    st.info(f"No games have been loaded yet for Week {CURRENT_WEEK}.")
 else:
     all_games = sorted(all_games, key=lambda x: x.get("game_number") or 999)
     current_picks_count = sum(1 for g in all_games if st.session_state.get(f"sel_{g['game_id']}", "-- Select --") != "-- Select --")
@@ -131,35 +143,40 @@ else:
             und_team = game.get("underdog_team") or game.get("underdog") or "Underdog"
             spread_val = game.get("spread_value") or game.get("spread") or "0.0"
 
-            # 🏠 LIVE HOME TEAM DETECTOR LOGIC
-            # Scan your display_text for " at " to determine who is hosting
+            # 🏠 CORRECTED HOME TEAM LOOKUP LOGIC
+            # In your "Away at Home" sheet layout, the team on the RIGHT side is ALWAYS the home team
+            # We match the underdog vs favorite string to see which one was listed on the right side of the sheet row
             d_text = game.get("display_text", "")
             is_fav_home = False
             is_und_home = False
             
             if " at " in d_text:
                 parts = d_text.split(" at ")
-                home_string = parts[1] if len(parts) > 1 else ""
-                if fav_team in home_string: is_fav_home = True
-                if und_team in home_string: is_und_home = True
+                home_side_text = parts[1] if len(parts) > 1 else ""
+                if fav_team in home_side_text: is_fav_home = True
+                if und_team in home_side_text: is_und_home = True
 
             fav_label = f"{fav_team} 🏠" if is_fav_home else fav_team
             und_label = f"{und_team} 🏠" if is_und_home else und_team
 
-            # 🕒 LIVE REAL-TIME IN-GAME SCORE OVERLAY PIPELINE
+            # 🕒 REAL-TIME IN-GAME SCORE MATCHING LOGIC
             fav_score_text = ""
             und_score_text = ""
             status_ticker = f"`🕒 {time_str}`"
             
-            # Cross-reference if this team has a live entry running right now in the API feed
-            if fav_team in live_scores:
-                match_scores = live_scores[fav_team]["scores"]
-                if match_scores:
-                    f_pts = match_scores.get(fav_team, 0)
-                    u_pts = match_scores.get(und_team, 0)
-                    fav_score_text = f"  \n**Score: {f_pts}**"
-                    und_score_text = f"  \n**Score: {u_pts}**"
-                    status_ticker = "`🔴 LIVE IN-PROGRESS`" if not live_scores[fav_team]["completed"] else "`🏁 FINAL`"
+            # Query our smart parser tool using the raw team values
+            score_record = find_live_score(fav_team) or find_live_score(und_team)
+            
+            if score_record:
+                # Dynamically assign matching score numbers to the right rows
+                if score_record["home_api_name"] in fav_team or fav_team in score_record["home_api_name"]:
+                    f_pts, u_pts = score_record["home_score"], score_record["away_score"]
+                else:
+                    u_pts, f_pts = score_record["home_score"], score_record["away_score"]
+                    
+                fav_score_text = f"  \n**Score: {f_pts}**"
+                und_score_text = f"  \n**Score: {u_pts}**"
+                status_ticker = "`🔴 LIVE IN-PROGRESS`" if not score_record["completed"] else "`🏁 FINAL`"
 
             c_num, c_fav, c_und, c_spr, c_pck = st.columns(5)
             with c_num: st.write(f"**{g_num}**")
@@ -194,6 +211,3 @@ else:
             try:
                 supabase.table("picks").delete().eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute()
                 for p in chosen_picks:
-                    supabase.table("picks").insert({"user_id": user.id, "username": username, "week_number": CURRENT_WEEK, "game_id": p["game_id"], "selected_team": p["selected_team"]}).execute()
-                st.success("Boom! Your 7 picks are saved securely.")
-            except Exception as e: st.error(f"Database error saving picks: {e}")
