@@ -69,7 +69,7 @@ except Exception as e:
 if not all_games:
     st.info(f"No games have been loaded yet for Week {CURRENT_WEEK} by the league administrator.")
 else:
-    # Calculate exactly how many selections are currently active
+    # Pre-scan total count
     current_picks_count = 0
     for game in all_games:
         saved_val = st.session_state.get(f"sel_{game['game_id']}", "-- Select --")
@@ -77,31 +77,56 @@ else:
             current_picks_count += 1
 
     ui_max_reached = current_picks_count >= 7
-
     chosen_picks = []
-    cfb_games = [g for g in all_games if g['league'] == 'CFB']
-    nfl_games = [g for g in all_games if g['league'] == 'NFL']
 
-    def display_slate(game_list, category):
-        st.subheader(category)
-        for game in game_list:
+    # 5. DYNAMIC DATE SEPARATION & RENDERING LOGIC
+    # Group the games by their formatted calendar date string
+    grouped_by_date = {}
+    for game in all_games:
+        kickoff = datetime.fromisoformat(game['kickoff_time'].replace('Z', '+00:00'))
+        # Format date as readable text (e.g., "Saturday, Sep 05")
+        date_str = kickoff.strftime("%A, %b %d")
+        if date_str not in grouped_by_date:
+            grouped_by_date[date_str] = []
+        grouped_by_date[date_str].append(game)
+
+    # Loop through each distinct date group day-by-day
+    for date_header, games_in_day in grouped_by_date.items():
+        st.write("")
+        st.markdown(f"### 📅 {date_header}")
+        st.divider() # Injects a clean bold horizontal break line under the day header
+        
+        for game in games_in_day:
             kickoff = datetime.fromisoformat(game['kickoff_time'].replace('Z', '+00:00'))
             is_time_locked = now >= kickoff
             
-            # Perfect, bulletproof string splitter for spreads
-            text = game['display_text']
-            teams = text.split(" at ") if " at " in text else text.split(" vs ")
+            # Format time text explicitly (e.g., "3:30 PM UTC")
+            time_str = kickoff.strftime("%I:%M %p UTC")
             
-            t_a = teams[0].split(" (")[0].strip() if len(teams) > 0 else "Away Team"
+            # Parse out host designation
+            text = game['display_text']
+            if " at " in text:
+                teams = text.split(" at ")
+                is_neutral = False
+            elif " vs " in text:
+                teams = text.split(" vs ")
+                is_neutral = True
+            else:
+                teams = [text, "Home Team"]
+                is_neutral = False
+                
+            t_a = teams[0].split(" (")[0].strip()
             t_b = teams[1].split(" (")[0].strip() if len(teams) > 1 else "Home Team"
             
-            # Explicitly passed 2 columns to fix the line 111 crash
+            # Label home field identity explicitly
+            home_label = f"📍 Neutral Site" if is_neutral else f"🏠 Home: {t_b}"
+            
             col1, col2 = st.columns([3, 1])
             with col1:
-                st.write(f"🏈 {game['display_text']}")
+                st.markdown(f"**{text}**  \n`🕒 Kickoff: {time_str} | {home_label}`")
             with col2:
                 if is_time_locked:
-                    st.button("🔒 Locked", key=f"lock_{game['game_id']}", disabled=True)
+                    st.button("🔒 Locked", key=f"lock_{game['game_id']}", disabled=True, use_container_width=True)
                 else:
                     is_current_empty = st.session_state.get(f"sel_{game['game_id']}", "-- Select --") == "-- Select --"
                     should_disable = ui_max_reached and is_current_empty
@@ -115,9 +140,6 @@ else:
                     )
                     if pick != "-- Select --":
                         chosen_picks.append({"game_id": game['game_id'], "selected_team": pick})
-
-    if cfb_games: display_slate(cfb_games, "College Football Matchups")
-    if nfl_games: display_slate(nfl_games, "NFL Matchups")
 
     st.divider()
     st.subheader("Your Submission Status")
