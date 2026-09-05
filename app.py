@@ -19,7 +19,7 @@ st.title("🏈 Pick 7 Against The Spread")
 if "user" not in st.session_state:
     st.session_state.user = None
 
-# 3. Secure Authentication Interface
+# 3. Secure Authentication Interface (COMPLETELY ISOLATED)
 if not st.session_state.user:
     tab1, tab2 = st.tabs(["Log In", "Sign Up"])
     with tab1:
@@ -30,16 +30,24 @@ if not st.session_state.user:
                 res = supabase.auth.sign_in_with_password({"email": login_email, "password": login_pass})
                 st.session_state.user = res.user
                 st.rerun()
-            except: st.error("Login failed. Check your email or password entries.")
+            except Exception as e:
+                st.error("Login failed. Check your email or password entries.")
+                
     with tab2:
         signup_email = st.text_input("Email", key="s_email")
         signup_pass = st.text_input("Password", type="password", key="s_pass")
         signup_user = st.text_input("League Display Name / Nickname", key="s_user")
         if st.button("Create Account", use_container_width=True):
             try:
-                supabase.auth.sign_up({"email": signup_email, "password": signup_pass, "options": {"data": {"username": signup_user}}})
-                st.success("Account created! Switch to the Log In tab.")
-            except: st.error("Sign up failed. Password must be 6+ characters.")
+                supabase.auth.sign_up({
+                    "email": signup_email, 
+                    "password": signup_pass,
+                    "options": {"data": {"username": signup_user}}
+                })
+                st.success("Account created successfully! You can now switch to the Log In tab.")
+            except Exception as e:
+                st.error("Sign up failed. Ensure your password is at least 6 characters.")
+    # Stop execution right here so the game engine cannot run until logged in
     st.stop()
 
 # --- Authenticated User Area Hub ---
@@ -58,21 +66,21 @@ now = datetime.now(timezone.utc)
 
 # 4. Pull active week slate
 try:
-    all_games = supabase.table("games").select("*").eq("week_number", CURRENT_WEEK).order("kickoff_time").execute().data
-except:
+    games_response = supabase.table("games").select("*").eq("week_number", CURRENT_WEEK).order("kickoff_time").execute()
+    all_games = games_response.data
+except Exception as e:
     all_games = []
 
 if not all_games:
     st.info(f"No games have been loaded yet for Week {CURRENT_WEEK} by the league administrator.")
 else:
-    # PRE-SCAN LOOP: Calculate exactly how many selections are currently active
+    # Calculate how many selections are currently active
     current_picks_count = 0
     for game in all_games:
         saved_val = st.session_state.get(f"sel_{game['game_id']}", "-- Select --")
         if saved_val != "-- Select --":
             current_picks_count += 1
 
-    # If the user has selected 7 teams, trigger the global UI lock rule
     ui_max_reached = current_picks_count >= 7
 
     chosen_picks = []
@@ -85,17 +93,20 @@ else:
             kickoff = datetime.fromisoformat(game['kickoff_time'].replace('Z', '+00:00'))
             is_time_locked = now >= kickoff
             
-            # Bulletproof extraction wrapper fix
-            text = game['display_text']
-            if " at " in text:
-                teams = text.split(" at ")
-            elif " vs " in text:
-                teams = text.split(" vs ")
-            else:
-                teams = [text, "Home Team"]
-                
-            t_a = teams[0].split(" (")[0].strip()
-            t_b = teams[1].split(" (")[0].strip() if len(teams) > 1 else "Home Team"
+            # Bulletproof extraction wrapper fix using a safe try/except fallback
+            try:
+                text = game['display_text']
+                if " at " in text:
+                    teams = text.split(" at ")
+                elif " vs " in text:
+                    teams = text.split(" vs ")
+                else:
+                    teams = [text, "Home Team"]
+                    
+                t_a = teams[0].split(" (")[0].strip()
+                t_b = teams[1].split(" (")[0].strip() if len(teams) > 1 else "Home Team"
+            except Exception:
+                t_a, t_b = "Away Team", "Home Team"
             
             col1, col2 = st.columns()
             with col1:
@@ -131,6 +142,13 @@ else:
             try:
                 supabase.table("picks").delete().eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute()
                 for p in chosen_picks:
-                    supabase.table("picks").insert({"user_id": user.id, "username": username, "week_number": CURRENT_WEEK, "game_id": p["game_id"], "selected_team": p["selected_team"]}).execute()
+                    supabase.table("picks").insert({
+                        "user_id": user.id, 
+                        "username": username, 
+                        "week_number": CURRENT_WEEK, 
+                        "game_id": p["game_id"], 
+                        "selected_team": p["selected_team"]
+                    }).execute()
                 st.success(f"Boom! Your 7 picks are saved securely for Week {CURRENT_WEEK}!")
-            except Exception as e: st.error(f"Database error saving picks: {e}")
+            except Exception as e: 
+                st.error(f"Database error saving picks: {e}")
