@@ -1,6 +1,8 @@
 import streamlit as st
 from supabase import create_client, Client
 from datetime import datetime, timezone
+# Import timezone package to handle Eastern Time conversion layers cleanly
+from zoneinfo import ZoneInfo
 
 # 1. Connection and Secrets Verification
 SUPABASE_URL = st.secrets.get("SUPABASE_URL")
@@ -59,6 +61,9 @@ CURRENT_WEEK = 1
 st.header(f"Week {CURRENT_WEEK} Master Slate")
 now = datetime.now(timezone.utc)
 
+# Establish Eastern Time Zone target framework
+EASTERN_TZ = ZoneInfo("America/New_York")
+
 # 4. Pull active week slate
 try:
     games_response = supabase.table("games").select("*").eq("week_number", CURRENT_WEEK).order("kickoff_time").execute()
@@ -79,29 +84,32 @@ else:
     ui_max_reached = current_picks_count >= 7
     chosen_picks = []
 
-    # 5. DYNAMIC DATE SEPARATION & RENDERING LOGIC
-    # Group the games by their formatted calendar date string
+    # 5. DYNAMIC DATE SEPARATION & EASTERN TIME CONVERSION
     grouped_by_date = {}
     for game in all_games:
-        kickoff = datetime.fromisoformat(game['kickoff_time'].replace('Z', '+00:00'))
-        # Format date as readable text (e.g., "Saturday, Sep 05")
-        date_str = kickoff.strftime("%A, %b %d")
+        # Convert the raw database string into a UTC datetime object
+        kickoff_utc = datetime.fromisoformat(game['kickoff_time'].replace('Z', '+00:00'))
+        # Transform the object cleanly into Eastern Time zone values
+        kickoff_est = kickoff_utc.astimezone(EASTERN_TZ)
+        
+        # Format the daily heading text based on local Eastern calendar dates
+        date_str = kickoff_est.strftime("%A, %b %d")
         if date_str not in grouped_by_date:
             grouped_by_date[date_str] = []
-        grouped_by_date[date_str].append(game)
+        grouped_by_date[date_str].append((game, kickoff_est, kickoff_utc))
 
     # Loop through each distinct date group day-by-day
     for date_header, games_in_day in grouped_by_date.items():
         st.write("")
         st.markdown(f"### 📅 {date_header}")
-        st.divider() # Injects a clean bold horizontal break line under the day header
+        st.divider()
         
-        for game in games_in_day:
-            kickoff = datetime.fromisoformat(game['kickoff_time'].replace('Z', '+00:00'))
-            is_time_locked = now >= kickoff
+        for game, kickoff_est, kickoff_utc in games_in_day:
+            # Enforce lockouts using accurate background UTC comparison checks
+            is_time_locked = now >= kickoff_utc
             
-            # Format time text explicitly (e.g., "3:30 PM UTC")
-            time_str = kickoff.strftime("%I:%M %p UTC")
+            # Format time explicitly in clean Eastern Time string (e.g., "03:30 PM ET")
+            time_str = kickoff_est.strftime("%I:%M %p ET")
             
             # Parse out host designation
             text = game['display_text']
@@ -118,10 +126,9 @@ else:
             t_a = teams[0].split(" (")[0].strip()
             t_b = teams[1].split(" (")[0].strip() if len(teams) > 1 else "Home Team"
             
-            # Label home field identity explicitly
             home_label = f"📍 Neutral Site" if is_neutral else f"🏠 Home: {t_b}"
             
-            col1, col2 = st.columns([3, 1])
+            col1, col2 = st.columns()
             with col1:
                 st.markdown(f"**{text}**  \n`🕒 Kickoff: {time_str} | {home_label}`")
             with col2:
