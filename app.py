@@ -72,26 +72,18 @@ if ODDS_API_KEY:
     except Exception:
         pass
 
-# Helper tool to scan the API scores list using partial string comparisons
 def find_live_score(team_name):
     for match in live_scores_list:
         home_api = match.get("home_team", "")
         away_api = match.get("away_team", "")
-        # If the database team name contains or matches the API team name
         if home_api in team_name or team_name in home_api or away_api in team_name or team_name in away_api:
             scores = match.get("scores")
             score_dict = {s["name"]: int(s["score"]) for s in scores} if scores else {}
-            
-            # Extract scores safely using partial matching loops
             h_pts = next((val for name, val in score_dict.items() if name in home_api or home_api in name), 0)
             a_pts = next((val for name, val in score_dict.items() if name in away_api or away_api in name), 0)
-            
             return {
-                "home_api_name": home_api,
-                "away_api_name": away_api,
-                "home_score": h_pts,
-                "away_score": a_pts,
-                "completed": match.get("completed", False)
+                "home_api_name": home_api, "away_api_name": away_api,
+                "home_score": h_pts, "away_score": a_pts, "completed": match.get("completed", False)
             }
     return None
 
@@ -110,7 +102,6 @@ else:
     ui_max_reached = current_picks_count >= 7
     chosen_picks = []
 
-    # Group matches by Eastern Time calendar dates
     grouped_by_date = {}
     for game in all_games:
         kickoff_utc = datetime.fromisoformat(game['kickoff_time'].replace('Z', '+00:00'))
@@ -120,12 +111,10 @@ else:
             grouped_by_date[date_str] = []
         grouped_by_date[date_str].append((game, kickoff_est, kickoff_utc))
 
-    # Render Grid Output Layout matching spreadsheet style
     for date_header, games_in_day in grouped_by_date.items():
         st.write("")
         st.markdown(f"### 📅 {date_header}")
         
-        # Grid Title Column Labels
         hdr_num, hdr_fav, hdr_und, hdr_spr, hdr_pck = st.columns(5)
         with hdr_num: st.markdown("**#**")
         with hdr_fav: st.markdown("**FAVORITE**")
@@ -143,9 +132,6 @@ else:
             und_team = game.get("underdog_team") or game.get("underdog") or "Underdog"
             spread_val = game.get("spread_value") or game.get("spread") or "0.0"
 
-            # 🏠 CORRECTED HOME TEAM LOOKUP LOGIC
-            # In your "Away at Home" sheet layout, the team on the RIGHT side is ALWAYS the home team
-            # We match the underdog vs favorite string to see which one was listed on the right side of the sheet row
             d_text = game.get("display_text", "")
             is_fav_home = False
             is_und_home = False
@@ -159,16 +145,12 @@ else:
             fav_label = f"{fav_team} 🏠" if is_fav_home else fav_team
             und_label = f"{und_team} 🏠" if is_und_home else und_team
 
-            # 🕒 REAL-TIME IN-GAME SCORE MATCHING LOGIC
             fav_score_text = ""
             und_score_text = ""
             status_ticker = f"`🕒 {time_str}`"
             
-            # Query our smart parser tool using the raw team values
             score_record = find_live_score(fav_team) or find_live_score(und_team)
-            
             if score_record:
-                # Dynamically assign matching score numbers to the right rows
                 if score_record["home_api_name"] in fav_team or fav_team in score_record["home_api_name"]:
                     f_pts, u_pts = score_record["home_score"], score_record["away_score"]
                 else:
@@ -176,7 +158,7 @@ else:
                     
                 fav_score_text = f"  \n**Score: {f_pts}**"
                 und_score_text = f"  \n**Score: {u_pts}**"
-                status_ticker = "`🔴 LIVE IN-PROGRESS`" if not score_record["completed"] else "`🏁 FINAL`"
+                status_ticker = "`🔴 LIVE`" if not score_record["completed"] else "`🏁 FINAL`"
 
             c_num, c_fav, c_und, c_spr, c_pck = st.columns(5)
             with c_num: st.write(f"**{g_num}**")
@@ -191,11 +173,8 @@ else:
                     should_disable = ui_max_reached and is_current_empty
                     
                     pick = st.selectbox(
-                        "Choose", 
-                        options=["-- Select --", fav_team, und_team], 
-                        key=f"sel_{game['game_id']}",
-                        label_visibility="collapsed",
-                        disabled=should_disable
+                        "Choose", options=["-- Select --", fav_team, und_team], 
+                        key=f"sel_{game['game_id']}", label_visibility="collapsed", disabled=should_disable
                     )
                     if pick != "-- Select --":
                         chosen_picks.append({"game_id": game['game_id'], "selected_team": pick})
@@ -206,8 +185,11 @@ else:
 
     if st.button("Lock In Weekly Picks", type="primary"):
         if len(chosen_picks) != 7:
-            st.error(f"Validation Error: You must pick exactly 7 games to submit. You currently have {len(chosen_picks)} selected.")
+            st.error(f"Validation Error: You must pick exactly 7 games. You currently have {len(chosen_picks)} selected.")
         else:
             try:
                 supabase.table("picks").delete().eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute()
                 for p in chosen_picks:
+                    supabase.table("picks").insert({"user_id": user.id, "username": username, "week_number": CURRENT_WEEK, "game_id": p["game_id"], "selected_team": p["selected_team"]}).execute()
+                st.success("Boom! Your 7 picks are saved securely.")
+            except Exception as e: st.error(f"Database error: {e}")
