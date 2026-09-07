@@ -118,8 +118,7 @@ else:
         st.write("")
         st.markdown(f"### 📅 {date_header}")
         
-        hdr_num, hdr_fav, hdr_und, hdr_spr, hdr_pck = st.columns(5)
-        with hdr_num: st.markdown("**#**")
+        hdr_fav, hdr_und, hdr_spr, hdr_pck = st.columns(4)
         with hdr_fav: st.markdown("**FAVORITE**")
         with hdr_und: st.markdown("**UNDERDOG**")
         with hdr_spr: st.markdown("**SPREAD**")
@@ -129,7 +128,6 @@ else:
         for game, kickoff_est, kickoff_utc in games_in_day:
             is_time_locked = now >= kickoff_utc
             time_str = kickoff_est.strftime("%I:%M %p ET").lstrip("0")
-            g_num = game.get("game_number") or ""
             
             fav_team = game.get("favorite_team", "Away Team")
             und_team = game.get("underdog_team", "Home Team")
@@ -154,8 +152,7 @@ else:
                     und_score_text = f"  \n**Score: {live_data['home_score']}**"
                     status_ticker = f"`🔴 LIVE - {live_data['clock']}`" if state == "in" else "`🏁 FINAL`"
 
-            c_num, c_fav, c_und, c_spr, c_pck = st.columns(5)
-            with c_num: st.write(f"**{g_num}**")
+            c_fav, c_und, c_spr, c_pck = st.columns(4)
             with c_fav: st.markdown(f"**{fav_label}**{fav_score_text}  \n{status_ticker}")
             with c_und: st.markdown(f"**{und_label}**{und_score_text}")
             with c_spr: st.markdown(f"`{live_line}`")
