@@ -65,17 +65,27 @@ if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
             # Wipe previous entries for the selected grouping week to avoid duplication
             supabase.table("games").delete().eq("week_number", active_week).execute()
             
+            date_range = f"{start_utc_str}-{end_utc_str}"
             leagues_to_fetch = [
-                {"name": "NFL", "url": f"https://espn.com{start_utc_str}-{end_utc_str}"},
-                {"name": "CFB", "url": f"https://espn.com{start_utc_str}-{end_utc_str}"}
+                {
+                    "name": "NFL",
+                    "url": "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
+                    "params": {"limit": 1000, "dates": date_range},
+                },
+                {
+                    "name": "CFB",
+                    "url": "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard",
+                    "params": {"limit": 1000, "groups": 80, "dates": date_range},
+                },
             ]
             
             total_games_inserted = 0
             headers = {"User-Agent": "Mozilla/5.0"}
             
             for target_league in leagues_to_fetch:
-                api_call = requests.get(target_league["url"], headers=headers)
+                api_call = requests.get(target_league["url"], params=target_league["params"], headers=headers, timeout=15)
                 if api_call.status_code != 200:
+                    st.warning(f"{target_league['name']} request failed: HTTP {api_call.status_code}")
                     continue
                     
                 response_data = api_call.json()
