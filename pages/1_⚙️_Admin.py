@@ -17,6 +17,21 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 st.title("⚙️ League Admin Panel")
 
+
+def nudge_off_whole_number(odds_string: str) -> str:
+    """'PHI -6' -> 'PHI -5.5' -- shifts a whole-number spread half a point toward
+    zero so a final margin can never land exactly on the spread (no pushes)."""
+    if not odds_string or odds_string == "0.0" or " " not in odds_string:
+        return odds_string
+    team_abbr, number_str = odds_string.rsplit(" ", 1)
+    try:
+        value = float(number_str)
+    except ValueError:
+        return odds_string
+    if value != 0 and value == int(value):
+        value += 0.5 if value < 0 else -0.5
+    return f"{team_abbr} {value:.1f}"
+
 # 2. USER ACCESSIBILITY ROLE DATABASE CHECK
 if "user" not in st.session_state or not st.session_state.user:
     st.warning("Please log in on the home page first.")
