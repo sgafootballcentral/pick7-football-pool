@@ -67,7 +67,7 @@ if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
             # Wipe previous entries for the selected grouping week to avoid duplication
             supabase.table("games").delete().eq("week_number", active_week).execute()
             
-            # 🌐 FIXED: Correctly isolated URL string layout strings using proper API parameters (?dates=)
+            # 🌐 CORRECT PARSED ENDPOINTS
             leagues_to_fetch = [
                 {"name": "NFL", "url": f"https://espn.com{start_utc_str}-{end_utc_str}"},
                 {"name": "CFB", "url": f"https://espn.com{start_utc_str}-{end_utc_str}"}
@@ -88,11 +88,11 @@ if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
                     game_id = event.get("id")
                     kickoff_time = event.get("date")
                     
-                    competitions = event.get("competitions", [{}])[0]
-                    competitors = competitions.get("competitors", [])
+                    competitions = event.get("competitions", [{}])
+                    competitors = competitions[0].get("competitors", [])
                     
                     # Pull betting spreads safely
-                    odds_array = competitions.get("odds", [])
+                    odds_array = competitions[0].get("odds", [])
                     odds_string = odds_array[0].get("details", "0.0") if odds_array else "0.0"
                     
                     home_node = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
@@ -107,7 +107,7 @@ if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
                     fav_home = False
                     und_home = True
                     
-                    # FIXED: Accurate text mapping checks if the Home abbreviation matches the Vegas favorite indicator
+                    # Accurate text mapping checks if the Home abbreviation matches the Vegas favorite indicator
                     if odds_string != "0.0" and " " in odds_string:
                         line_parts = odds_string.split(" ")
                         fav_abbr_extracted = line_parts[0].strip().upper()
