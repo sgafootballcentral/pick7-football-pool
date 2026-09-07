@@ -42,12 +42,10 @@ active_week = st.number_input("Target Grouping Week Number (For Player Submissio
 
 # 📅 3. CALENDAR DATE SELECTOR
 st.subheader("📆 Select Custom Game Extraction Windows")
-st.write("Choose the exact start and end dates on the calendar to scrape matches from the internet:")
-
 selected_range = st.date_input(
     "Select Date Boundaries:",
     value=(datetime.today().date(), datetime.today().date()),
-    help="Click and choose two specific calendar dates to set your pool window."
+    help="Choose two specific calendar dates to set your pool window."
 )
 
 st.write("---")
@@ -67,13 +65,9 @@ if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
             # Wipe previous entries for the selected grouping week to avoid duplication
             supabase.table("games").delete().eq("week_number", active_week).execute()
             
-            # 🌐 EXPLICIT API QUERY PARSING
-            nfl_endpoint = f"https://espn.com{start_utc_str}-{end_utc_str}"
-            cfb_endpoint = f"https://espn.com{start_utc_str}-{end_utc_str}"
-            
             leagues_to_fetch = [
-                {"name": "NFL", "url": nfl_endpoint},
-                {"name": "CFB", "url": cfb_endpoint}
+                {"name": "NFL", "url": f"https://espn.com{start_utc_str}-{end_utc_str}"},
+                {"name": "CFB", "url": f"https://espn.com{start_utc_str}-{end_utc_str}"}
             ]
             
             total_games_inserted = 0
@@ -91,12 +85,13 @@ if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
                     game_id = event.get("id")
                     kickoff_time = event.get("date")
                     
-                    competitions = event.get("competitions", [{}])
-                    competitors = competitions[0].get("competitors", [])
+                    # Target index array zero nodes safely
+                    competitions = event.get("competitions", [{}])[0]
+                    competitors = competitions.get("competitors", [])
                     
-                    # Pull betting spreads safely
-                    odds_array = competitions[0].get("odds", [])
-                    odds_string = odds_array[0].get("details", "0.0") if odds_array else "0.0"
+                    # FIX: Safely read list array nodes for opening Vegas spreads
+                    odds_array = competitions.get("odds", [])
+                    odds_string = odds_array[0].get("details", "0.0") if odds_array and isinstance(odds_array, list) else "0.0"
                     
                     home_node = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
                     away_node = next((c for c in competitors if c.get("homeAway") == "away"), competitors[1])
@@ -104,26 +99,19 @@ if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
                     home_team = home_node.get("team", {}).get("displayName", "Home Team")
                     away_team = away_node.get("team", {}).get("displayName", "Away Team")
                     
-                    # Default values (Away team favorite, Home team underdog)
-                    fav_team = away_team
-                    und_team = home_team
-                    fav_home = False
-                    und_home = True
+                    fav_team, und_team = away_team, home_team
+                    fav_home, und_home = False, True
                     
-                    # Fixed verification targets the zero-index element of split text lists
                     if odds_string != "0.0" and " " in odds_string:
                         line_parts = odds_string.split(" ")
-                        if len(line_parts) > 0:
-                            fav_abbr_extracted = line_parts[0].strip().upper()
-                            home_abbr = home_node.get("team", {}).get("abbreviation", "").strip().upper()
-                            
-                            if fav_abbr_extracted == home_abbr:
-                                fav_team = home_team
-                                und_team = away_team
-                                fav_home = True
-                                und_home = False
+                        fav_abbr_extracted = line_parts[0].strip().upper()
+                        home_abbr = home_node.get("team", {}).get("abbreviation", "").strip().upper()
+                        
+                        if fav_abbr_extracted == home_abbr:
+                            fav_team, und_team = home_team, away_team
+                            fav_home, und_home = True, False
                     
-                    # Save rows to database columns mapping
+                    # Save clean rows straight to your Supabase tables
                     supabase.table("games").insert({
                         "game_id": f"espn_{game_id}",
                         "game_number": total_games_inserted, 
@@ -138,8 +126,7 @@ if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
                         "week_number": int(active_week)
                     }).execute()
                     
-            st.success(f"Success! Imported {total_games_inserted} total games cleanly from {start_date} to {end_date} into Week {active_week}!")
+            st.success(f"Success! Pulled {total_games_inserted} total games cleanly from {start_date} to {end_date} into Week {active_week}!")
             st.rerun()
-            
         except Exception as e:
             st.error(f"ESPN Date Sync Failed: {e}")
