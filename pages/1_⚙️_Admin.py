@@ -186,8 +186,7 @@ else:
     counts["Status"] = counts["Picks Submitted"].apply(lambda n: "✅ Complete" if n == 7 else f"⏳ {n}/7")
     st.dataframe(counts, use_container_width=True, hide_index=True)
 
-    with st.expander("See every pick"):
-        st.dataframe(
-            df_picks_view.sort_values(["Player", "Matchup"]),
-            use_container_width=True, hide_index=True,
-        )
+    players = sorted(df_picks_view["Player"].unique())
+    selected_player = st.selectbox("View picks for:", players, key="selected_picks_player")
+    player_df = df_picks_view[df_picks_view["Player"] == selected_player].sort_values("Matchup")
+    st.dataframe(player_df.drop(columns=["Player"]), use_container_width=True, hide_index=True)
