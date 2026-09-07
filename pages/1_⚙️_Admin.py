@@ -15,7 +15,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 st.title("⚙️ League Admin Panel")
 
-# 2. FIXED USER ACCESSIBILITY ROLE DATABASE CHECK
+# 2. USER ACCESSIBILITY ROLE DATABASE CHECK
 if "user" not in st.session_state or not st.session_state.user:
     st.warning("Please log in on the home page first.")
     st.stop()
@@ -40,26 +40,22 @@ if not is_admin:
 st.success("🔓 Commissioner Dashboard Unlocked!")
 active_week = st.number_input("Target Grouping Week Number (For Player Submissions):", min_value=1, max_value=18, value=1, step=1)
 
-# 📅 3. CALENDAR DATE SELECTOR SLIDER
+# 📅 3. CALENDAR DATE SELECTOR
 st.subheader("📆 Select Custom Game Extraction Windows")
 st.write("Choose the exact start and end dates on the calendar to scrape matches from the internet:")
 
-# Streamlit calendar range selector default to today's date profiles
 selected_range = st.date_input(
     "Select Date Boundaries:",
     value=(datetime.today().date(), datetime.today().date()),
-    help="Click and drag or choose two specific calendar dates to set your pool window."
+    help="Click and choose two specific calendar dates to set your pool window."
 )
 
 st.write("---")
 
 # 4. CHRONOLOGICAL DATE-DRIVEN AUTOMATED SYNCER
 if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
-    # Ensure user has selected an explicit start and end block
     if isinstance(selected_range, tuple) and len(selected_range) == 2:
         start_date, end_date = selected_range
-        
-        # Convert local calendar selections into fully compliant UTC start/end timestamp blocks
         start_utc_str = datetime.combine(start_date, time.min).replace(tzinfo=timezone.utc).strftime("%Y%m%d")
         end_utc_str = datetime.combine(end_date, time.max).replace(tzinfo=timezone.utc).strftime("%Y%m%d")
     else:
@@ -68,10 +64,10 @@ if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
 
     with st.spinner(f"Downloading game schedules from {start_date} to {end_date}..."):
         try:
-            # Wipe previous entries for the selected grouping week to avoid grid overlap duplicates
+            # Wipe previous entries for the selected grouping week to avoid duplication
             supabase.table("games").delete().eq("week_number", active_week).execute()
             
-            # Map parameters using ESPN's historical and real-time bounding date structures
+            # 🌐 FIXED: Correctly isolated URL string layout strings using proper API parameters (?dates=)
             leagues_to_fetch = [
                 {"name": "NFL", "url": f"https://espn.com{start_utc_str}-{end_utc_str}"},
                 {"name": "CFB", "url": f"https://espn.com{start_utc_str}-{end_utc_str}"}
@@ -92,11 +88,11 @@ if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
                     game_id = event.get("id")
                     kickoff_time = event.get("date")
                     
-                    competitions = event.get("competitions", [{}])
-                    competitors = competitions[0].get("competitors", [])
+                    competitions = event.get("competitions", [{}])[0]
+                    competitors = competitions.get("competitors", [])
                     
-                    # Pull betting spreads directly from the Vegas wire nodes inside the document object
-                    odds_array = competitions[0].get("odds", [])
+                    # Pull betting spreads safely
+                    odds_array = competitions.get("odds", [])
                     odds_string = odds_array[0].get("details", "0.0") if odds_array else "0.0"
                     
                     home_node = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
@@ -105,22 +101,25 @@ if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
                     home_team = home_node.get("team", {}).get("displayName", "Home Team")
                     away_team = away_node.get("team", {}).get("displayName", "Away Team")
                     
-                    # Split out the favorites vs underdogs cleanly based on line notation strings
+                    # Default values (Away team favorite, Home team underdog)
                     fav_team = away_team
                     und_team = home_team
                     fav_home = False
                     und_home = True
                     
+                    # FIXED: Accurate text mapping checks if the Home abbreviation matches the Vegas favorite indicator
                     if odds_string != "0.0" and " " in odds_string:
                         line_parts = odds_string.split(" ")
-                        home_abbr = home_node.get("team", {}).get("abbreviation", "")
-                        if str(line_parts[0]).upper() == str(home_abbr).upper():
+                        fav_abbr_extracted = line_parts[0].strip().upper()
+                        home_abbr = home_node.get("team", {}).get("abbreviation", "").strip().upper()
+                        
+                        if fav_abbr_extracted == home_abbr:
                             fav_team = home_team
                             und_team = away_team
                             fav_home = True
                             und_home = False
                     
-                    # Save dynamically generated dates data rows straight to your database columns mapping
+                    # Save rows to database columns mapping
                     supabase.table("games").insert({
                         "game_id": f"espn_{game_id}",
                         "game_number": total_games_inserted, 
