@@ -161,7 +161,7 @@ if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
                         "underdog_team": und_team,  
                         "favorite_team_home": fav_home,
                         "underdog_team_home": und_home,  
-                        "spread_value": odds_string, 
+                        "spread_value": nudge_off_whole_number(odds_string),
                         "display_text": f"{away_team} at {home_team}",
                         "kickoff_time": kickoff_time,
                         "week_number": int(active_week)
