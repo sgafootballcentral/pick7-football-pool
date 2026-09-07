@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+import time as time_module
 from datetime import datetime, time, timezone
 from supabase import create_client, Client
 
@@ -69,24 +70,29 @@ if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
             leagues_to_fetch = [
                 {
                     "name": "NFL",
-                    "url": "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
+                    "url": "https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
                     "params": {"limit": 1000, "dates": date_range},
                 },
                 {
                     "name": "CFB",
-                    "url": "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard",
+                    "url": "https://site.web.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard",
                     "params": {"limit": 1000, "groups": 80, "dates": date_range},
                 },
             ]
             
             total_games_inserted = 0
-            headers = {"User-Agent": "Mozilla/5.0"}
-            
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer": "https://www.espn.com/",
+                "Accept": "application/json",
+            }
+
             for target_league in leagues_to_fetch:
                 api_call = requests.get(target_league["url"], params=target_league["params"], headers=headers, timeout=15)
                 if api_call.status_code != 200:
                     st.warning(f"{target_league['name']} request failed: HTTP {api_call.status_code}")
                     continue
+                time_module.sleep(2)  # ESPN's hidden API has been rate-limiting back-to-back requests
                     
                 response_data = api_call.json()
                 
