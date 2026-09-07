@@ -139,6 +139,7 @@ if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
                     
                     home_team = home_node.get("team", {}).get("displayName", "Home Team")
                     away_team = away_node.get("team", {}).get("displayName", "Away Team")
+                    home_abbr = home_node.get("team", {}).get("abbreviation", "").strip().upper()
                     
                     fav_team, und_team = away_team, home_team
                     fav_home, und_home = False, True
@@ -146,11 +147,23 @@ if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
                     if odds_string != "0.0" and " " in odds_string:
                         line_parts = odds_string.split(" ")
                         fav_abbr_extracted = line_parts[0].strip().upper()
-                        home_abbr = home_node.get("team", {}).get("abbreviation", "").strip().upper()
                         
                         if fav_abbr_extracted == home_abbr:
                             fav_team, und_team = home_team, away_team
                             fav_home, und_home = True, False
+
+                    # No usable line from ESPN (missing market, or a genuine pick'em) --
+                    # default the home team to a -0.5 favorite so the game can't push.
+                    spread_is_zero = True
+                    if odds_string != "0.0" and " " in odds_string:
+                        try:
+                            spread_is_zero = float(odds_string.rsplit(" ", 1)[1]) == 0
+                        except ValueError:
+                            spread_is_zero = True
+                    if spread_is_zero:
+                        fav_team, und_team = home_team, away_team
+                        fav_home, und_home = True, False
+                        odds_string = f"{home_abbr} -0.5"
                     
                     # Save clean rows straight to your Supabase tables
                     supabase.table("games").insert({
