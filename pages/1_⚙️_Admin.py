@@ -25,7 +25,7 @@ if "user" not in st.session_state or not st.session_state.user:
 user_id = st.session_state.user.id
 try:
     current_user_record = supabase.table("league_users").select("role").eq("id", user_id).execute().data
-    is_admin = current_user_record and current_user_record[0].get("role") == "admin"
+    is_admin = current_user_record and current_user_record.get("role") == "admin"
 except Exception:
     is_admin = False
 
@@ -37,7 +37,7 @@ st.success("🔓 Commissioner Dashboard Unlocked!")
 active_week = st.number_input("Target Input Week Number:", min_value=1, max_value=18, value=1, step=1)
 st.write("---")
 
-# 3. DIRECT 100% ESPN AUTOMATED SYNCER WITH SECURITY HEADERS
+# 3. DIRECT 100% ESPN AUTOMATED SYNCER WITH SECURITY OVERRIDES
 st.subheader("🏈 Live ESPN Board Auto-Fetcher")
 st.write("Wipe the board for the selected week and instantly pull the live college football slate directly from ESPN:")
 
@@ -46,34 +46,23 @@ if st.button("🔄 Auto-Fetch Live ESPN Slate", type="primary"):
         try:
             supabase.table("games").delete().eq("week_number", active_week).execute()
             
+            # Using raw data wire stream to pull data cleanly
             url = "https://espn.com"
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            response = requests.get(url, headers=headers).json()
             
-            # 🌐 CRUCIAL SECURITY HEADERS MASK
-            # This disguises the script as a regular Google Chrome browser to slide past firewalls
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "application/json"
-            }
-            
-            api_call = requests.get(url, headers=headers)
-            
-            if api_call.status_code != 200:
-                st.error(f"ESPN Server Error (Code {api_call.status_code}): {api_call.text}")
-                st.stop()
-                
-            response = api_call.json()
             count = 0
             for idx, event in enumerate(response.get("events", [])):
                 game_number = idx + 1
                 game_id = event.get("id")
                 kickoff_time = event.get("date")
                 
-                competitions = event.get("competitions", [{}])[0]
-                competitors = competitions.get("competitors", [])
+                competitions = event.get("competitions", [{}])
+                competitors = competitions[0].get("competitors", [])
                 
-                # Safely extract point spreads embedded directly in ESPN's odds node
-                odds_list = competitions.get("odds", [{}])
-                odds_string = odds_list[0].get("details", "0.0") if odds_list else "0.0"
+                # Safely unpack opening spread values directly from the betting array node
+                odds_array = competitions[0].get("odds", [])
+                odds_string = odds_array[0].get("details", "0.0") if odds_array else "0.0"
                 
                 home_node = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
                 away_node = next((c for c in competitors if c.get("homeAway") == "away"), competitors[1])
@@ -96,7 +85,7 @@ if st.button("🔄 Auto-Fetch Live ESPN Slate", type="primary"):
                 }).execute()
                 count += 1
                 
-            st.success(f"Success! Pulled {count} official games with live lines cleanly from ESPN into Week {active_week}!")
+            st.success(f"Success! Pulled {count} official games cleanly from ESPN into Week {active_week}!")
             st.rerun()
         except Exception as e:
             st.error(f"ESPN Sync Failed: {e}")
