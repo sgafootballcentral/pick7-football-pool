@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+import pandas as pd
 import time as time_module
 from datetime import datetime, time, timezone
 from supabase import create_client, Client
@@ -155,3 +156,38 @@ if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
             st.rerun()
         except Exception as e:
             st.error(f"ESPN Date Sync Failed: {e}")
+
+st.write("---")
+
+# 5. VIEW SUBMITTED PICKS
+st.subheader("📋 Submitted Picks")
+view_week = st.number_input("Week to view picks for:", min_value=1, max_value=18, value=int(active_week), step=1, key="view_week_picks")
+
+picks_rows = supabase.table("picks").select("*").eq("week_number", view_week).execute().data
+games_rows = supabase.table("games").select("game_id, display_text, favorite_team, underdog_team, spread_value") \
+    .eq("week_number", view_week).execute().data
+game_lookup = {g["game_id"]: g for g in games_rows}
+
+if not picks_rows:
+    st.info(f"No picks submitted yet for Week {view_week}.")
+else:
+    display_rows = []
+    for p in picks_rows:
+        g = game_lookup.get(p["game_id"], {})
+        display_rows.append({
+            "Player": p.get("username", "Unknown"),
+            "Matchup": g.get("display_text", p["game_id"]),
+            "Pick": p.get("selected_team"),
+            "Spread": g.get("spread_value", ""),
+        })
+    df_picks_view = pd.DataFrame(display_rows)
+
+    counts = df_picks_view.groupby("Player").size().reset_index(name="Picks Submitted")
+    counts["Status"] = counts["Picks Submitted"].apply(lambda n: "✅ Complete" if n == 7 else f"⏳ {n}/7")
+    st.dataframe(counts, use_container_width=True, hide_index=True)
+
+    with st.expander("See every pick"):
+        st.dataframe(
+            df_picks_view.sort_values(["Player", "Matchup"]),
+            use_container_width=True, hide_index=True,
+        )
