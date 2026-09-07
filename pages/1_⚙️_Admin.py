@@ -21,6 +21,15 @@ if "user" not in st.session_state or not st.session_state.user:
     st.warning("Please log in on the home page first.")
     st.stop()
 
+if st.session_state.get("access_token"):
+    try:
+        supabase.auth.set_session(st.session_state.access_token, st.session_state.refresh_token)
+    except Exception:
+        st.session_state.user = None
+        st.session_state.access_token = None
+        st.warning("Your session expired -- please log in again on the home page.")
+        st.stop()
+
 user_id = st.session_state.user.id
 is_admin = False
 
