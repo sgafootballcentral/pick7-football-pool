@@ -77,20 +77,15 @@ selected_range = st.date_input(
 st.write("---")
 
 # 4. CHRONOLOGICAL DATE-DRIVEN AUTOMATED SYNCER
-if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
-    if isinstance(selected_range, tuple) and len(selected_range) == 2:
-        start_date, end_date = selected_range
-        start_utc_str = datetime.combine(start_date, time.min).replace(tzinfo=timezone.utc).strftime("%Y%m%d")
-        end_utc_str = datetime.combine(end_date, time.max).replace(tzinfo=timezone.utc).strftime("%Y%m%d")
-    else:
-        st.error("Validation Error: Please select both a start date and an end date on the calendar.")
-        st.stop()
+def run_espn_sync(target_week: int, start_date, end_date):
+    start_utc_str = datetime.combine(start_date, time.min).replace(tzinfo=timezone.utc).strftime("%Y%m%d")
+    end_utc_str = datetime.combine(end_date, time.max).replace(tzinfo=timezone.utc).strftime("%Y%m%d")
 
     with st.spinner(f"Downloading game schedules from {start_date} to {end_date}..."):
         try:
             # Wipe previous entries for the selected grouping week to avoid duplication
-            supabase.table("games").delete().eq("week_number", active_week).execute()
-            
+            supabase.table("games").delete().eq("week_number", target_week).execute()
+
             date_range = f"{start_utc_str}-{end_utc_str}"
             leagues_to_fetch = [
                 {
@@ -104,7 +99,7 @@ if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
                     "params": {"limit": 1000, "groups": 80, "dates": date_range},
                 },
             ]
-            
+
             total_games_inserted = 0
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -118,36 +113,36 @@ if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
                     st.warning(f"{target_league['name']} request failed: HTTP {api_call.status_code}")
                     continue
                 time_module.sleep(2)  # ESPN's hidden API has been rate-limiting back-to-back requests
-                    
+
                 response_data = api_call.json()
-                
+
                 for event in response_data.get("events", []):
                     total_games_inserted += 1
                     game_id = event.get("id")
                     kickoff_time = event.get("date")
-                    
+
                     # Target index array zero nodes safely
                     competitions = event.get("competitions", [{}])[0]
                     competitors = competitions.get("competitors", [])
-                    
+
                     # FIX: Safely read list array nodes for opening Vegas spreads
                     odds_array = competitions.get("odds", [])
                     odds_string = odds_array[0].get("details", "0.0") if odds_array and isinstance(odds_array, list) else "0.0"
-                    
+
                     home_node = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
                     away_node = next((c for c in competitors if c.get("homeAway") == "away"), competitors[1])
-                    
+
                     home_team = home_node.get("team", {}).get("displayName", "Home Team")
                     away_team = away_node.get("team", {}).get("displayName", "Away Team")
                     home_abbr = home_node.get("team", {}).get("abbreviation", "").strip().upper()
-                    
+
                     fav_team, und_team = away_team, home_team
                     fav_home, und_home = False, True
-                    
+
                     if odds_string != "0.0" and " " in odds_string:
                         line_parts = odds_string.split(" ")
                         fav_abbr_extracted = line_parts[0].strip().upper()
-                        
+
                         if fav_abbr_extracted == home_abbr:
                             fav_team, und_team = home_team, away_team
                             fav_home, und_home = True, False
@@ -164,26 +159,61 @@ if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
                         fav_team, und_team = home_team, away_team
                         fav_home, und_home = True, False
                         odds_string = f"{home_abbr} -0.5"
-                    
+
                     # Save clean rows straight to your Supabase tables
                     supabase.table("games").insert({
                         "game_id": f"espn_{game_id}",
-                        "game_number": total_games_inserted, 
+                        "game_number": total_games_inserted,
                         "league": target_league["name"],
-                        "favorite_team": fav_team,  
-                        "underdog_team": und_team,  
+                        "favorite_team": fav_team,
+                        "underdog_team": und_team,
                         "favorite_team_home": fav_home,
-                        "underdog_team_home": und_home,  
+                        "underdog_team_home": und_home,
                         "spread_value": nudge_off_whole_number(odds_string),
                         "display_text": f"{away_team} at {home_team}",
                         "kickoff_time": kickoff_time,
-                        "week_number": int(active_week)
+                        "week_number": target_week
                     }).execute()
-                    
-            st.success(f"Success! Pulled {total_games_inserted} total games cleanly from {start_date} to {end_date} into Week {active_week}!")
+
+            st.success(f"Success! Pulled {total_games_inserted} total games cleanly from {start_date} to {end_date} into Week {target_week}!")
+            st.session_state.pending_refetch = None
             st.rerun()
         except Exception as e:
             st.error(f"ESPN Date Sync Failed: {e}")
+
+
+if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
+    if not (isinstance(selected_range, tuple) and len(selected_range) == 2):
+        st.error("Validation Error: Please select both a start date and an end date on the calendar.")
+    else:
+        start_date, end_date = selected_range
+        existing_picks = supabase.table("picks").select("user_id").eq("week_number", int(active_week)).execute().data
+        if existing_picks:
+            st.session_state.pending_refetch = {
+                "week": int(active_week),
+                "start": start_date,
+                "end": end_date,
+                "player_count": len(set(p["user_id"] for p in existing_picks)),
+            }
+            st.rerun()
+        else:
+            run_espn_sync(int(active_week), start_date, end_date)
+
+pending = st.session_state.get("pending_refetch")
+if pending and pending["week"] == int(active_week):
+    st.warning(
+        f"⚠️ {pending['player_count']} player(s) have already submitted picks for Week {pending['week']}. "
+        "Re-pulling will refresh the spreads for this week. If a line moved, an already-submitted pick "
+        "could end up graded against a different number than what that person actually saw."
+    )
+    col_go, col_cancel = st.columns(2)
+    with col_go:
+        if st.button("Yes, re-pull anyway", type="primary", key="confirm_refetch"):
+            run_espn_sync(pending["week"], pending["start"], pending["end"])
+    with col_cancel:
+        if st.button("Cancel", key="cancel_refetch"):
+            st.session_state.pending_refetch = None
+            st.rerun()
 
 st.write("---")
 
