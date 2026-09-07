@@ -14,6 +14,21 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+
+def nudge_off_whole_number(odds_string: str) -> str:
+    """Same rule as the Admin page -- keeps a live-refreshed line from reintroducing
+    a whole-number spread that could push."""
+    if not odds_string or odds_string == "0.0" or " " not in odds_string:
+        return odds_string
+    team_abbr, number_str = odds_string.rsplit(" ", 1)
+    try:
+        value = float(number_str)
+    except ValueError:
+        return odds_string
+    if value != 0 and value == int(value):
+        value += 0.5 if value < 0 else -0.5
+    return f"{team_abbr} {value:.1f}"
+
 st.set_page_config(page_title="Football Pick-7 Pool", page_icon="🏈", layout="wide")
 st.title("🏈 Pick 7 Against The Spread")
 
@@ -77,6 +92,7 @@ try:
         # Safely parse the live game-line odds string directly from the data wire
         odds_node = event.get("competitions", [{}])[0].get("odds", [{}])
         odds_line = odds_node[0].get("details", "0.0") if isinstance(odds_node, list) and odds_node else "0.0"
+        odds_line = nudge_off_whole_number(odds_line)
         
         espn_scores[g_id] = {
             "home_score": home_node.get("score", "0"),
