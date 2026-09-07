@@ -31,12 +31,22 @@ if not st.session_state.user:
             try:
                 res = supabase.auth.sign_in_with_password({"email": login_email, "password": login_pass})
                 st.session_state.user = res.user
+                st.session_state.access_token = res.session.access_token
+                st.session_state.refresh_token = res.session.refresh_token
                 st.rerun()
             except Exception: st.error("Login failed. Check entries.")
     st.stop()
 
 # --- Authenticated User Area Hub ---
 user = st.session_state.user
+if st.session_state.get("access_token"):
+    try:
+        supabase.auth.set_session(st.session_state.access_token, st.session_state.refresh_token)
+    except Exception:
+        # token expired or invalid -- force a fresh login
+        st.session_state.user = None
+        st.session_state.access_token = None
+        st.rerun()
 username = user.user_metadata.get("username", user.email)
 st.sidebar.write(f"Logged in as: **{username}**")
 if st.sidebar.button("Log Out", use_container_width=True):
