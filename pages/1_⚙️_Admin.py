@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+from datetime import datetime, time, timezone
 from supabase import create_client, Client
 
 # 1. Connection and Secrets Verification
@@ -23,11 +24,8 @@ user_id = st.session_state.user.id
 is_admin = False
 
 try:
-    # Fetch user records from your custom league_users table
     response = supabase.table("league_users").select("role").eq("id", user_id).execute()
     current_user_records = response.data
-    
-    # FIXED: Check if the list contains data first, then pull the index dictionary securely
     if current_user_records and len(current_user_records) > 0:
         if current_user_records[0].get("role") == "admin":
             is_admin = True
@@ -40,23 +38,43 @@ if not is_admin:
     st.stop()
 
 st.success("🔓 Commissioner Dashboard Unlocked!")
-active_week = st.number_input("Target Input Week Number:", min_value=1, max_value=18, value=1, step=1)
+active_week = st.number_input("Target Grouping Week Number (For Player Submissions):", min_value=1, max_value=18, value=1, step=1)
+
+# 📅 3. CALENDAR DATE SELECTOR SLIDER
+st.subheader("📆 Select Custom Game Extraction Windows")
+st.write("Choose the exact start and end dates on the calendar to scrape matches from the internet:")
+
+# Streamlit calendar range selector default to today's date profiles
+selected_range = st.date_input(
+    "Select Date Boundaries:",
+    value=(datetime.today().date(), datetime.today().date()),
+    help="Click and drag or choose two specific calendar dates to set your pool window."
+)
+
 st.write("---")
 
-# 3. COMBINED MULTI-LEAGUE AUTOMATED SYNCER
-st.subheader("🏈 Live Combined ESPN Board Auto-Fetcher")
-st.write("Wipe the board for the selected week and pull the complete NFL and College Football slates with point spreads simultaneously:")
+# 4. CHRONOLOGICAL DATE-DRIVEN AUTOMATED SYNCER
+if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
+    # Ensure user has selected an explicit start and end block
+    if isinstance(selected_range, tuple) and len(selected_range) == 2:
+        start_date, end_date = selected_range
+        
+        # Convert local calendar selections into fully compliant UTC start/end timestamp blocks
+        start_utc_str = datetime.combine(start_date, time.min).replace(tzinfo=timezone.utc).strftime("%Y%m%d")
+        end_utc_str = datetime.combine(end_date, time.max).replace(tzinfo=timezone.utc).strftime("%Y%m%d")
+    else:
+        st.error("Validation Error: Please select both a start date and an end date on the calendar.")
+        st.stop()
 
-if st.button("🔄 Auto-Fetch Combined NFL & NCAAF Slates", type="primary"):
-    with st.spinner("Downloading live schedules from ESPN wires..."):
+    with st.spinner(f"Downloading game schedules from {start_date} to {end_date}..."):
         try:
-            # Clear previous entries for the selected week to avoid duplicates
+            # Wipe previous entries for the selected grouping week to avoid grid overlap duplicates
             supabase.table("games").delete().eq("week_number", active_week).execute()
             
-            # We fetch from both master endpoints back-to-back
+            # Map parameters using ESPN's historical and real-time bounding date structures
             leagues_to_fetch = [
-                {"name": "NFL", "url": f"https://espn.com{active_week}"},
-                {"name": "CFB", "url": "https://espn.com"}
+                {"name": "NFL", "url": f"https://espn.com{start_utc_str}-{end_utc_str}"},
+                {"name": "CFB", "url": f"https://espn.com{start_utc_str}-{end_utc_str}"}
             ]
             
             total_games_inserted = 0
@@ -77,9 +95,9 @@ if st.button("🔄 Auto-Fetch Combined NFL & NCAAF Slates", type="primary"):
                     competitions = event.get("competitions", [{}])
                     competitors = competitions[0].get("competitors", [])
                     
-                    # Pull point spreads directly from ESPN's primary Vegas booking node
-                    odds_node = competitions[0].get("odds", [])
-                    odds_string = odds_node[0].get("details", "0.0") if odds_array else "0.0"
+                    # Pull betting spreads directly from the Vegas wire nodes inside the document object
+                    odds_array = competitions[0].get("odds", [])
+                    odds_string = odds_array[0].get("details", "0.0") if odds_array else "0.0"
                     
                     home_node = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
                     away_node = next((c for c in competitors if c.get("homeAway") == "away"), competitors[1])
@@ -87,7 +105,7 @@ if st.button("🔄 Auto-Fetch Combined NFL & NCAAF Slates", type="primary"):
                     home_team = home_node.get("team", {}).get("displayName", "Home Team")
                     away_team = away_node.get("team", {}).get("displayName", "Away Team")
                     
-                    # Split out the favorites vs underdogs based on the line string (e.g., "MIA -3.5")
+                    # Split out the favorites vs underdogs cleanly based on line notation strings
                     fav_team = away_team
                     und_team = home_team
                     fav_home = False
@@ -96,16 +114,16 @@ if st.button("🔄 Auto-Fetch Combined NFL & NCAAF Slates", type="primary"):
                     if odds_string != "0.0" and " " in odds_string:
                         line_parts = odds_string.split(" ")
                         home_abbr = home_node.get("team", {}).get("abbreviation", "")
-                        if line_parts[0].upper() == home_abbr.upper():
+                        if str(line_parts[0]).upper() == str(home_abbr).upper():
                             fav_team = home_team
                             und_team = away_team
                             fav_home = True
                             und_home = False
                     
-                    # Push directly to your Supabase database games record
+                    # Save dynamically generated dates data rows straight to your database columns mapping
                     supabase.table("games").insert({
                         "game_id": f"espn_{game_id}",
-                        "game_number": total_games_inserted, # Sequential numbering covering both leagues
+                        "game_number": total_games_inserted, 
                         "league": target_league["name"],
                         "favorite_team": fav_team,  
                         "underdog_team": und_team,  
@@ -117,8 +135,8 @@ if st.button("🔄 Auto-Fetch Combined NFL & NCAAF Slates", type="primary"):
                         "week_number": int(active_week)
                     }).execute()
                     
-            st.success(f"Success! Imported {total_games_inserted} total games (NFL + CFB) cleanly into Week {active_week}!")
+            st.success(f"Success! Imported {total_games_inserted} total games cleanly from {start_date} to {end_date} into Week {active_week}!")
             st.rerun()
             
         except Exception as e:
-            st.error(f"ESPN Multi-League Sync Failed: {e}")
+            st.error(f"ESPN Date Sync Failed: {e}")
