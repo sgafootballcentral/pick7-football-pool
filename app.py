@@ -98,12 +98,15 @@ if not all_games:
     st.info(f"No games loaded yet for Week {CURRENT_WEEK}.")
 else:
     all_games = sorted(all_games, key=lambda x: x.get("game_number") or 999)
+    # Sort chronologically first so the day groups come out in calendar order below
+    games_chronological = sorted(all_games, key=lambda g: g["kickoff_time"])
+
     current_picks_count = sum(1 for g in all_games if st.session_state.get(f"sel_{g['game_id']}", "-- Select --") != "-- Select --")
     ui_max_reached = current_picks_count >= 7
     chosen_picks = []
 
     grouped_by_date = {}
-    for game in all_games:
+    for game in games_chronological:
         kickoff_utc = datetime.fromisoformat(game['kickoff_time'].replace('Z', '+00:00'))
         kickoff_est = kickoff_utc.astimezone(EASTERN_TZ)
         date_str = kickoff_est.strftime("%A, %b %d")
