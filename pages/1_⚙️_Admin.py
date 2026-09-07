@@ -67,10 +67,13 @@ if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
             # Wipe previous entries for the selected grouping week to avoid duplication
             supabase.table("games").delete().eq("week_number", active_week).execute()
             
-            # 🌐 CORRECT PARSED ENDPOINTS
+            # 🌐 EXPLICIT API QUERY PARSING
+            nfl_endpoint = f"https://espn.com{start_utc_str}-{end_utc_str}"
+            cfb_endpoint = f"https://espn.com{start_utc_str}-{end_utc_str}"
+            
             leagues_to_fetch = [
-                {"name": "NFL", "url": f"https://espn.com{start_utc_str}-{end_utc_str}"},
-                {"name": "CFB", "url": f"https://espn.com{start_utc_str}-{end_utc_str}"}
+                {"name": "NFL", "url": nfl_endpoint},
+                {"name": "CFB", "url": cfb_endpoint}
             ]
             
             total_games_inserted = 0
@@ -107,17 +110,18 @@ if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
                     fav_home = False
                     und_home = True
                     
-                    # Accurate text mapping checks if the Home abbreviation matches the Vegas favorite indicator
+                    # Fixed verification targets the zero-index element of split text lists
                     if odds_string != "0.0" and " " in odds_string:
                         line_parts = odds_string.split(" ")
-                        fav_abbr_extracted = line_parts[0].strip().upper()
-                        home_abbr = home_node.get("team", {}).get("abbreviation", "").strip().upper()
-                        
-                        if fav_abbr_extracted == home_abbr:
-                            fav_team = home_team
-                            und_team = away_team
-                            fav_home = True
-                            und_home = False
+                        if len(line_parts) > 0:
+                            fav_abbr_extracted = line_parts[0].strip().upper()
+                            home_abbr = home_node.get("team", {}).get("abbreviation", "").strip().upper()
+                            
+                            if fav_abbr_extracted == home_abbr:
+                                fav_team = home_team
+                                und_team = away_team
+                                fav_home = True
+                                und_home = False
                     
                     # Save rows to database columns mapping
                     supabase.table("games").insert({
