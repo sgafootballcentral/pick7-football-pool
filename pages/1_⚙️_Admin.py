@@ -1,9 +1,6 @@
 import streamlit as st
-import pandas as pd
 import requests
-from io import StringIO
 from supabase import create_client, Client
-from datetime import datetime, timezone
 
 # 1. Connection and Secrets Verification
 SUPABASE_URL = st.secrets.get("SUPABASE_URL")
@@ -17,7 +14,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 st.title("⚙️ League Admin Panel")
 
-# 2. DYNAMIC LIVE ROLE DATABASE CHECK
+# 2. FIXED USER ACCESSIBILITY ROLE DATABASE CHECK
 if "user" not in st.session_state or not st.session_state.user:
     st.warning("Please log in on the home page first.")
     st.stop()
@@ -26,11 +23,11 @@ user_id = st.session_state.user.id
 is_admin = False
 
 try:
-    # Supabase returns a list of matching records
+    # Fetch user records from your custom league_users table
     response = supabase.table("league_users").select("role").eq("id", user_id).execute()
     current_user_records = response.data
     
-    # FIX: Safely grab the first dictionary from the list result
+    # FIXED: Check if the list contains data first, then pull the index dictionary securely
     if current_user_records and len(current_user_records) > 0:
         if current_user_records[0].get("role") == "admin":
             is_admin = True
@@ -39,63 +36,89 @@ except Exception as e:
     is_admin = False
 
 if not is_admin:
-    st.error("🚫 Access Denied.")
+    st.error("🚫 Access Denied. Your profile role must be set to 'admin' in your database.")
     st.stop()
 
 st.success("🔓 Commissioner Dashboard Unlocked!")
 active_week = st.number_input("Target Input Week Number:", min_value=1, max_value=18, value=1, step=1)
 st.write("---")
 
-# 3. DIRECT 100% ESPN AUTOMATED SYNCER WITH SECURITY OVERRIDES
-st.subheader("🏈 Live ESPN Board Auto-Fetcher")
-st.write("Wipe the board for the selected week and instantly pull the live college football slate directly from ESPN:")
+# 3. COMBINED MULTI-LEAGUE AUTOMATED SYNCER
+st.subheader("🏈 Live Combined ESPN Board Auto-Fetcher")
+st.write("Wipe the board for the selected week and pull the complete NFL and College Football slates with point spreads simultaneously:")
 
-if st.button("🔄 Auto-Fetch Live ESPN Slate", type="primary"):
-    with st.spinner("Downloading live schedule from ESPN..."):
+if st.button("🔄 Auto-Fetch Combined NFL & NCAAF Slates", type="primary"):
+    with st.spinner("Downloading live schedules from ESPN wires..."):
         try:
-            # Clear old games for the active week
+            # Clear previous entries for the selected week to avoid duplicates
             supabase.table("games").delete().eq("week_number", active_week).execute()
             
-            # FIX: Using ESPN's actual hidden JSON API endpoint instead of scraping the main HTML site
-            url = "https://espn.com"
-            headers = {"User-Agent": "Mozilla/5.0"}
-            response = requests.get(url, headers=headers).json()
+            # We fetch from both master endpoints back-to-back
+            leagues_to_fetch = [
+                {"name": "NFL", "url": f"https://espn.com{active_week}"},
+                {"name": "CFB", "url": "https://espn.com"}
+            ]
             
-            count = 0
-            for idx, event in enumerate(response.get("events", [])):
-                game_number = idx + 1
-                game_id = event.get("id")
-                kickoff_time = event.get("date")
+            total_games_inserted = 0
+            headers = {"User-Agent": "Mozilla/5.0"}
+            
+            for target_league in leagues_to_fetch:
+                api_call = requests.get(target_league["url"], headers=headers)
+                if api_call.status_code != 200:
+                    continue
+                    
+                response_data = api_call.json()
                 
-                competitions = event.get("competitions", [{}])
-                competitors = competitions[0].get("competitors", [])
-                
-                # Safely unpack opening spread values directly from the betting array node
-                odds_array = competitions[0].get("odds", [])
-                odds_string = odds_array[0].get("details", "OFF") if odds_array else "OFF"
-                
-                home_node = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
-                away_node = next((c for c in competitors if c.get("homeAway") == "away"), competitors[1])
-                
-                home_team = home_node.get("team", {}).get("displayName", "Home Team")
-                away_team = away_node.get("team", {}).get("displayName", "Away Team")
-                
-                supabase.table("games").insert({
-                    "game_id": f"espn_{game_id}",
-                    "game_number": game_number,
-                    "league": "CFB",
-                    "favorite_team": away_team,  
-                    "underdog_team": home_team,  
-                    "favorite_team_home": False,
-                    "underdog_team_home": True,  
-                    "spread_value": odds_string, 
-                    "display_text": f"{away_team} at {home_team}",
-                    "kickoff_time": kickoff_time,
-                    "week_number": int(active_week)
-                }).execute()
-                count += 1
-                
-            st.success(f"Success! Pulled {count} official games cleanly from ESPN into Week {active_week}!")
+                for event in response_data.get("events", []):
+                    total_games_inserted += 1
+                    game_id = event.get("id")
+                    kickoff_time = event.get("date")
+                    
+                    competitions = event.get("competitions", [{}])
+                    competitors = competitions[0].get("competitors", [])
+                    
+                    # Pull point spreads directly from ESPN's primary Vegas booking node
+                    odds_node = competitions[0].get("odds", [])
+                    odds_string = odds_node[0].get("details", "0.0") if odds_array else "0.0"
+                    
+                    home_node = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
+                    away_node = next((c for c in competitors if c.get("homeAway") == "away"), competitors[1])
+                    
+                    home_team = home_node.get("team", {}).get("displayName", "Home Team")
+                    away_team = away_node.get("team", {}).get("displayName", "Away Team")
+                    
+                    # Split out the favorites vs underdogs based on the line string (e.g., "MIA -3.5")
+                    fav_team = away_team
+                    und_team = home_team
+                    fav_home = False
+                    und_home = True
+                    
+                    if odds_string != "0.0" and " " in odds_string:
+                        line_parts = odds_string.split(" ")
+                        home_abbr = home_node.get("team", {}).get("abbreviation", "")
+                        if line_parts[0].upper() == home_abbr.upper():
+                            fav_team = home_team
+                            und_team = away_team
+                            fav_home = True
+                            und_home = False
+                    
+                    # Push directly to your Supabase database games record
+                    supabase.table("games").insert({
+                        "game_id": f"espn_{game_id}",
+                        "game_number": total_games_inserted, # Sequential numbering covering both leagues
+                        "league": target_league["name"],
+                        "favorite_team": fav_team,  
+                        "underdog_team": und_team,  
+                        "favorite_team_home": fav_home,
+                        "underdog_team_home": und_home,  
+                        "spread_value": odds_string, 
+                        "display_text": f"{away_team} at {home_team}",
+                        "kickoff_time": kickoff_time,
+                        "week_number": int(active_week)
+                    }).execute()
+                    
+            st.success(f"Success! Imported {total_games_inserted} total games (NFL + CFB) cleanly into Week {active_week}!")
             st.rerun()
+            
         except Exception as e:
-            st.error(f"ESPN Sync Failed: {e}")
+            st.error(f"ESPN Multi-League Sync Failed: {e}")
