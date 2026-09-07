@@ -49,7 +49,7 @@ st.header(f"Week {CURRENT_WEEK} Master Slate")
 now = datetime.now(timezone.utc)
 EASTERN_TZ = ZoneInfo("America/New_York")
 
-# 4. FETCH LIVE SCORES DIRECTLY VIA ESPN WIRE
+# 4. 🌐 LIVE SCOREBOARD FEED FROM THE INTERNET
 espn_scores = {}
 try:
     url = "https://espn.com"
@@ -60,15 +60,20 @@ try:
         state = status_info.get("type", {}).get("state", "scheduled")
         detail_clock = status_info.get("type", {}).get("detail", "")
         
-        competitors = event.get("competitions", [{}])[0].get("competitors", [])
-        home_node = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
-        away_node = next((c for c in competitors if c.get("homeAway") == "away"), competitors[1])
+        competitors = event.get("competitions", [{}]).get("competitors", [])
+        home_node = next((c for c in competitors if c.get("homeAway") == "home"), competitors)
+        away_node = next((c for c in competitors if c.get("homeAway") == "away"), competitors)
+        
+        # Safely parse the live game-line odds string directly from the data wire
+        odds_node = event.get("competitions", [{}])[0].get("odds", [{}])
+        odds_line = odds_node[0].get("details", "0.0") if isinstance(odds_node, list) and odds_node else "0.0"
         
         espn_scores[g_id] = {
             "home_score": home_node.get("score", "0"),
             "away_score": away_node.get("score", "0"),
             "state": state,
-            "clock": detail_clock
+            "clock": detail_clock,
+            "line": odds_line
         }
 except Exception:
     pass
@@ -116,17 +121,20 @@ else:
             fav_team = game.get("favorite_team", "Away Team")
             und_team = game.get("underdog_team", "Home Team")
             
-            # Explicitly layout home team labels directly based on database stamps
             fav_label = f"{fav_team} 🏠" if game.get("favorite_team_home") else fav_team
             und_label = f"{und_team} 🏠" if game.get("underdog_team_home") else und_team
 
             fav_score_text = ""
             und_score_text = ""
             status_ticker = f"`🕒 {time_str}`"
+            live_line = game.get("spread_value", "0.0")
 
-            # Connect database items to live scores instantly using explicit ESPN game IDs
             live_data = espn_scores.get(game["game_id"])
             if live_data:
+                # Update spreads dynamically from the live internet wire if present
+                if live_data.get("line") and live_data["line"] != "0.0":
+                    live_line = live_data["line"]
+                
                 state = live_data["state"]
                 if state != "scheduled":
                     fav_score_text = f"  \n**Score: {live_data['away_score']}**"
@@ -137,7 +145,7 @@ else:
             with c_num: st.write(f"**{g_num}**")
             with c_fav: st.markdown(f"**{fav_label}**{fav_score_text}  \n{status_ticker}")
             with c_und: st.markdown(f"**{und_label}**{und_score_text}")
-            with c_spr: st.markdown("`DK Line`")
+            with c_spr: st.markdown(f"`{live_line}`")
             with c_pck:
                 if is_time_locked:
                     st.button("🔒 Locked", key=f"lock_{game['game_id']}", disabled=True, use_container_width=True)
