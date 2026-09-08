@@ -38,6 +38,33 @@ def show_picks_recap(recap_rows):
     if st.button("Got it!", use_container_width=True):
         st.rerun()
 
+
+@st.dialog("⚠️ You've Already Submitted This Week")
+def confirm_resubmit(existing_rows, new_picks):
+    st.write("Here's what you already have on file for this week:")
+    for item in existing_rows:
+        st.markdown(f"- **{item['selected_team']}** — {item['matchup']}  (`{item['spread']}`)")
+    st.write("Want to replace these with your new selections?")
+
+    col_yes, col_no = st.columns(2)
+    with col_yes:
+        if st.button("Yes, resubmit", type="primary", use_container_width=True):
+            try:
+                supabase.table("picks").delete().eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute()
+                for p in new_picks:
+                    supabase.table("picks").insert({
+                        "user_id": user.id, "username": username, "week_number": CURRENT_WEEK,
+                        "game_id": p["game_id"], "selected_team": p["selected_team"],
+                    }).execute()
+                st.session_state.pending_resubmit = None
+                st.rerun()
+            except Exception as e:
+                st.error(f"Database error: {e}")
+    with col_no:
+        if st.button("Cancel", use_container_width=True):
+            st.session_state.pending_resubmit = None
+            st.rerun()
+
 st.set_page_config(page_title="Football Pick-7 Pool", page_icon="🏈", layout="wide")
 st.title("🏈 Pick 7 Against The Spread")
 
@@ -201,9 +228,26 @@ else:
     st.subheader("Your Submission Status")
     st.write(f"Total Games Selected: **{len(chosen_picks)} / 7**")
 
+    game_lookup = {g["game_id"]: g for g in all_games}
+    existing_picks = supabase.table("picks").select("*").eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute().data
+    already_submitted = bool(existing_picks)
+
     if st.button("Lock In Weekly Picks", type="primary"):
         if len(chosen_picks) != 7:
             st.error(f"Validation Error: You must pick exactly 7 games.")
+        elif already_submitted:
+            st.session_state.pending_resubmit = {
+                "existing_rows": [
+                    {
+                        "selected_team": p["selected_team"],
+                        "matchup": game_lookup.get(p["game_id"], {}).get("display_text", p["game_id"]),
+                        "spread": game_lookup.get(p["game_id"], {}).get("spread_value", ""),
+                    }
+                    for p in existing_picks
+                ],
+                "new_picks": chosen_picks,
+            }
+            st.rerun()
         else:
             try:
                 supabase.table("picks").delete().eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute()
@@ -211,7 +255,6 @@ else:
                     supabase.table("picks").insert({"user_id": user.id, "username": username, "week_number": CURRENT_WEEK, "game_id": p["game_id"], "selected_team": p["selected_team"]}).execute()
                 st.success("Boom! Your 7 picks are saved securely.")
 
-                game_lookup = {g["game_id"]: g for g in all_games}
                 recap_rows = [
                     {
                         "selected_team": p["selected_team"],
@@ -222,3 +265,11 @@ else:
                 ]
                 show_picks_recap(recap_rows)
             except Exception as e: st.error(f"Database error: {e}")
+
+    # Checked every rerun (not just on the button click above) so the dialog's own
+    # Yes/Cancel buttons get a chance to actually be detected as clicked.
+    if st.session_state.get("pending_resubmit"):
+        confirm_resubmit(
+            st.session_state.pending_resubmit["existing_rows"],
+            st.session_state.pending_resubmit["new_picks"],
+        )
