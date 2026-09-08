@@ -37,6 +37,31 @@ def nudge_off_whole_number(odds_string: str) -> str:
         value += 0.5 if value < 0 else -0.5
     return f"{team_abbr} {value:.1f}"
 
+
+@st.dialog("⚠️ Confirm Removal")
+def confirm_removal(info):
+    st.write(f"Remove **{info['player']}**'s picks for **Week {info['week']}**? This cannot be undone.")
+
+    col_yes, col_no = st.columns(2)
+    with col_yes:
+        remove_clicked = st.button("Yes, remove", type="primary", use_container_width=True)
+    with col_no:
+        cancel_clicked = st.button("Cancel", use_container_width=True)
+
+    if remove_clicked:
+        if not info.get("user_id"):
+            st.error("Couldn't find that player's user ID -- nothing was removed.")
+        else:
+            try:
+                supabase.table("picks").delete().eq("user_id", info["user_id"]).eq("week_number", info["week"]).execute()
+                st.session_state.pending_removal = None
+                st.rerun()
+            except Exception as e:
+                st.error(f"Database error: {e}")
+    elif cancel_clicked:
+        st.session_state.pending_removal = None
+        st.rerun()
+
 # 2. USER ACCESSIBILITY ROLE DATABASE CHECK
 if "user" not in st.session_state or not st.session_state.user:
     st.warning("Please log in on the home page first.")
@@ -269,6 +294,20 @@ else:
     selected_player = st.selectbox("View picks for:", players, key="selected_picks_player")
     player_df = df_picks_view[df_picks_view["Player"] == selected_player].sort_values("Matchup")
     st.dataframe(player_df.drop(columns=["Player"]), use_container_width=True, hide_index=True)
+
+    user_id_by_username = {p["username"]: p["user_id"] for p in picks_rows}
+
+    if st.button(f"🗑️ Remove {selected_player}'s picks for Week {view_week}", key="remove_picks_btn"):
+        st.session_state.pending_removal = {
+            "week": view_week,
+            "player": selected_player,
+            "user_id": user_id_by_username.get(selected_player),
+        }
+        st.rerun()
+
+# Checked every rerun so the dialog's own buttons get a chance to be detected as clicked.
+if st.session_state.get("pending_removal"):
+    confirm_removal(st.session_state.pending_removal)
 
 st.write("---")
 
