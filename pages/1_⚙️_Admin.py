@@ -2,8 +2,13 @@ import streamlit as st
 import requests
 import pandas as pd
 import time as time_module
+import io
 from datetime import datetime, time, timezone
+from zoneinfo import ZoneInfo
 from supabase import create_client, Client
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, PatternFill
+from openpyxl.utils import get_column_letter
 
 # 1. Connection and Secrets Verification
 SUPABASE_URL = st.secrets.get("SUPABASE_URL")
@@ -259,3 +264,68 @@ else:
     selected_player = st.selectbox("View picks for:", players, key="selected_picks_player")
     player_df = df_picks_view[df_picks_view["Player"] == selected_player].sort_values("Matchup")
     st.dataframe(player_df.drop(columns=["Player"]), use_container_width=True, hide_index=True)
+
+st.write("---")
+
+# 6. EXPORT SLATE TO EXCEL
+st.subheader("📊 Export Slate to Excel")
+export_week = st.number_input("Week to export:", min_value=1, max_value=18, value=int(active_week), step=1, key="export_week")
+
+export_games = supabase.table("games").select("*").eq("week_number", export_week).execute().data
+
+if not export_games:
+    st.info(f"No games found for Week {export_week}.")
+else:
+    def build_slate_workbook(games_rows, week_number):
+        wb = Workbook()
+        ws = wb.active
+        ws.title = f"Week {week_number}"[:31]
+
+        headers = ["#", "League", "Kickoff (ET)", "Favorite", "Underdog", "Spread"]
+        ws.append(headers)
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.font = Font(name="Arial", bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+            cell.alignment = Alignment(horizontal="center")
+
+        sorted_games = sorted(games_rows, key=lambda g: g.get("kickoff_time") or "")
+        for i, g in enumerate(sorted_games, start=1):
+            kickoff_display = g.get("kickoff_time", "")
+            try:
+                kickoff_dt = datetime.fromisoformat(kickoff_display.replace("Z", "+00:00")).astimezone(ZoneInfo("America/New_York"))
+                kickoff_display = kickoff_dt.strftime("%a %m/%d %I:%M %p ET").replace(" 0", " ")
+            except (ValueError, AttributeError):
+                pass
+
+            fav = g.get("favorite_team", "")
+            und = g.get("underdog_team", "")
+            fav = f"{fav} (Home)" if g.get("favorite_team_home") else fav
+            und = f"{und} (Home)" if g.get("underdog_team_home") else und
+
+            ws.append([i, g.get("league", ""), kickoff_display, fav, und, g.get("spread_value", "")])
+            for col_idx in range(1, len(headers) + 1):
+                ws.cell(row=i + 1, column=col_idx).font = Font(name="Arial")
+
+        for col_idx, header in enumerate(headers, start=1):
+            col_letter = get_column_letter(col_idx)
+            longest = max(
+                [len(str(header))] +
+                [len(str(ws.cell(row=r, column=col_idx).value or "")) for r in range(2, ws.max_row + 1)]
+            )
+            ws.column_dimensions[col_letter].width = longest + 4
+
+        ws.freeze_panes = "A2"
+
+        buffer = io.BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+        return buffer
+
+    excel_buffer = build_slate_workbook(export_games, export_week)
+    st.download_button(
+        "⬇️ Download Week's Slate (.xlsx)",
+        data=excel_buffer,
+        file_name=f"week_{export_week}_slate.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
