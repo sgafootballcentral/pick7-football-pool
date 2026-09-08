@@ -296,6 +296,8 @@ else:
 
             fav_team = g.get("favorite_team", "")
             und_team = g.get("underdog_team", "")
+            fav_team = f"{fav_team} (Home)" if g.get("favorite_team_home") else fav_team
+            und_team = f"{und_team} (Home)" if g.get("underdog_team_home") else und_team
             spread_number = (g.get("spread_value") or "").rsplit(" ", 1)[-1]
 
             ws.append([fav_num, fav_team, und_num, und_team, spread_number])
