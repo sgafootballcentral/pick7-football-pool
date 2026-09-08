@@ -29,6 +29,15 @@ def nudge_off_whole_number(odds_string: str) -> str:
         value += 0.5 if value < 0 else -0.5
     return f"{team_abbr} {value:.1f}"
 
+
+@st.dialog("🔒 Your Picks Are Locked In!")
+def show_picks_recap(recap_rows):
+    st.write("Here's what you picked for this week:")
+    for item in recap_rows:
+        st.markdown(f"- **{item['selected_team']}** — {item['matchup']}  (`{item['spread']}`)")
+    if st.button("Got it!", use_container_width=True):
+        st.rerun()
+
 st.set_page_config(page_title="Football Pick-7 Pool", page_icon="🏈", layout="wide")
 st.title("🏈 Pick 7 Against The Spread")
 
@@ -121,6 +130,8 @@ else:
     ui_max_reached = current_picks_count >= 7
     chosen_picks = []
 
+    st.progress(min(current_picks_count / 7, 1.0), text=f"🏈 {current_picks_count} of 7 games selected")
+
     grouped_by_date = {}
     for game in games_chronological:
         kickoff_utc = datetime.fromisoformat(game['kickoff_time'].replace('Z', '+00:00'))
@@ -199,4 +210,15 @@ else:
                 for p in chosen_picks:
                     supabase.table("picks").insert({"user_id": user.id, "username": username, "week_number": CURRENT_WEEK, "game_id": p["game_id"], "selected_team": p["selected_team"]}).execute()
                 st.success("Boom! Your 7 picks are saved securely.")
+
+                game_lookup = {g["game_id"]: g for g in all_games}
+                recap_rows = [
+                    {
+                        "selected_team": p["selected_team"],
+                        "matchup": game_lookup.get(p["game_id"], {}).get("display_text", p["game_id"]),
+                        "spread": game_lookup.get(p["game_id"], {}).get("spread_value", ""),
+                    }
+                    for p in chosen_picks
+                ]
+                show_picks_recap(recap_rows)
             except Exception as e: st.error(f"Database error: {e}")
