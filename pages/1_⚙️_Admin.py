@@ -281,7 +281,7 @@ else:
         ws = wb.active
         ws.title = f"Week {week_number}"[:31]
 
-        headers = ["#", "League", "Kickoff (ET)", "Favorite", "Underdog", "Spread"]
+        headers = ["FAVORITE", "UNDERDOG", "SPREAD"]
         ws.append(headers)
         for col_idx in range(1, len(headers) + 1):
             cell = ws.cell(row=1, column=col_idx)
@@ -291,19 +291,14 @@ else:
 
         sorted_games = sorted(games_rows, key=lambda g: g.get("kickoff_time") or "")
         for i, g in enumerate(sorted_games, start=1):
-            kickoff_display = g.get("kickoff_time", "")
-            try:
-                kickoff_dt = datetime.fromisoformat(kickoff_display.replace("Z", "+00:00")).astimezone(ZoneInfo("America/New_York"))
-                kickoff_display = kickoff_dt.strftime("%a %m/%d %I:%M %p ET").replace(" 0", " ")
-            except (ValueError, AttributeError):
-                pass
+            fav_num = 2 * i - 1  # favorites get odd numbers
+            und_num = 2 * i      # underdogs get even numbers
 
-            fav = g.get("favorite_team", "")
-            und = g.get("underdog_team", "")
-            fav = f"{fav} (Home)" if g.get("favorite_team_home") else fav
-            und = f"{und} (Home)" if g.get("underdog_team_home") else und
+            fav_team = g.get("favorite_team", "")
+            und_team = g.get("underdog_team", "")
+            spread_number = (g.get("spread_value") or "").rsplit(" ", 1)[-1]
 
-            ws.append([i, g.get("league", ""), kickoff_display, fav, und, g.get("spread_value", "")])
+            ws.append([f"{fav_num} {fav_team}", f"{und_num} {und_team}", spread_number])
             for col_idx in range(1, len(headers) + 1):
                 ws.cell(row=i + 1, column=col_idx).font = Font(name="Arial")
 
