@@ -141,6 +141,10 @@ def run_espn_sync(target_week: int, start_date, end_date):
                     away_team = away_node.get("team", {}).get("displayName", "Away Team")
                     home_abbr = home_node.get("team", {}).get("abbreviation", "").strip().upper()
 
+                    broadcasts = competitions.get("broadcasts") or event.get("broadcasts") or []
+                    tv_names = broadcasts[0].get("names", []) if broadcasts and isinstance(broadcasts, list) else []
+                    tv_network = ", ".join(tv_names)
+
                     if not has_line:
                         skipped_no_line += 1
                         continue  # no book has posted a spread for this one -- leave it out of the pool
@@ -185,6 +189,7 @@ def run_espn_sync(target_week: int, start_date, end_date):
                         "spread_value": nudge_off_whole_number(odds_string),
                         "display_text": f"{away_team} at {home_team}",
                         "kickoff_time": kickoff_time,
+                        "tv_network": tv_network,
                         "week_number": target_week
                     }).execute()
 
@@ -281,7 +286,7 @@ else:
         ws = wb.active
         ws.title = f"Week {week_number}"[:31]
 
-        headers = ["#", "FAVORITE", "#", "UNDERDOG", "SPREAD"]
+        headers = ["#", "FAVORITE", "#", "UNDERDOG", "SPREAD", "KICKOFF (ET)", "TV"]
         ws.append(headers)
         for col_idx in range(1, len(headers) + 1):
             cell = ws.cell(row=1, column=col_idx)
@@ -300,7 +305,16 @@ else:
             und_team = f"{und_team} (Home)" if g.get("underdog_team_home") else und_team
             spread_number = (g.get("spread_value") or "").rsplit(" ", 1)[-1]
 
-            ws.append([fav_num, fav_team, und_num, und_team, spread_number])
+            kickoff_display = g.get("kickoff_time", "") or ""
+            try:
+                kickoff_dt = datetime.fromisoformat(kickoff_display.replace("Z", "+00:00")).astimezone(ZoneInfo("America/New_York"))
+                kickoff_display = kickoff_dt.strftime("%a %m/%d %I:%M %p ET").replace(" 0", " ")
+            except (ValueError, AttributeError):
+                pass
+
+            tv_network = g.get("tv_network", "") or ""
+
+            ws.append([fav_num, fav_team, und_num, und_team, spread_number, kickoff_display, tv_network])
             for col_idx in range(1, len(headers) + 1):
                 ws.cell(row=i + 1, column=col_idx).font = Font(name="Arial")
 
