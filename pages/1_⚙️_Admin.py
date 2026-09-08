@@ -281,7 +281,7 @@ else:
         ws = wb.active
         ws.title = f"Week {week_number}"[:31]
 
-        headers = ["FAVORITE", "UNDERDOG", "SPREAD"]
+        headers = ["#", "FAVORITE", "#", "UNDERDOG", "SPREAD"]
         ws.append(headers)
         for col_idx in range(1, len(headers) + 1):
             cell = ws.cell(row=1, column=col_idx)
@@ -298,7 +298,7 @@ else:
             und_team = g.get("underdog_team", "")
             spread_number = (g.get("spread_value") or "").rsplit(" ", 1)[-1]
 
-            ws.append([f"{fav_num} {fav_team}", f"{und_num} {und_team}", spread_number])
+            ws.append([fav_num, fav_team, und_num, und_team, spread_number])
             for col_idx in range(1, len(headers) + 1):
                 ws.cell(row=i + 1, column=col_idx).font = Font(name="Arial")
 
