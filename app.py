@@ -40,11 +40,32 @@ def show_picks_recap(recap_rows):
 
 
 @st.dialog("⚠️ You've Already Submitted This Week")
-def confirm_resubmit(existing_rows, new_picks):
-    st.write("Here's what you already have on file for this week:")
-    for item in existing_rows:
-        st.markdown(f"- **{item['selected_team']}** — {item['matchup']}  (`{item['spread']}`)")
-    st.write("Want to replace these with your new selections?")
+def confirm_resubmit(existing_picks_raw, new_picks, game_lookup):
+    st.write("Here's how your on-file picks compare to your new selections:")
+
+    existing_map = {p["game_id"]: p["selected_team"] for p in existing_picks_raw}
+    new_map = {p["game_id"]: p["selected_team"] for p in new_picks}
+    all_game_ids = set(existing_map) | set(new_map)
+
+    comparison_rows = []
+    for gid in all_game_ids:
+        g = game_lookup.get(gid, {})
+        on_file = existing_map.get(gid, "—")
+        new_pick = new_map.get(gid, "—")
+        comparison_rows.append({
+            "_kickoff": g.get("kickoff_time", ""),
+            "Matchup": g.get("display_text", gid),
+            "Spread": g.get("spread_value", ""),
+            "On File": on_file,
+            "New Selection": new_pick,
+            "": "🔄" if on_file != new_pick else "",
+        })
+    comparison_rows.sort(key=lambda r: r["_kickoff"])
+    for r in comparison_rows:
+        r.pop("_kickoff")
+
+    st.dataframe(comparison_rows, use_container_width=True, hide_index=True)
+    st.write("Replace your on-file picks with the new selections above?")
 
     col_yes, col_no = st.columns(2)
     with col_yes:
@@ -157,7 +178,42 @@ else:
     ui_max_reached = current_picks_count >= 7
     chosen_picks = []
 
-    st.progress(min(current_picks_count / 7, 1.0), text=f"🏈 {current_picks_count} of 7 games selected")
+    pct = min(current_picks_count / 7 * 100, 100)
+    st.markdown(f"""
+        <style>
+        .sticky-ticker {{
+            position: fixed;
+            top: 3.7rem;
+            left: 0;
+            right: 0;
+            z-index: 999;
+            background-color: var(--background-color);
+            border-bottom: 1px solid var(--secondary-background-color);
+            padding: 8px 16px;
+            text-align: center;
+            font-weight: 600;
+        }}
+        .sticky-ticker-track {{
+            background-color: var(--secondary-background-color);
+            border-radius: 6px;
+            height: 8px;
+            width: 100%;
+            max-width: 500px;
+            margin: 6px auto 0 auto;
+            overflow: hidden;
+        }}
+        .sticky-ticker-fill {{
+            background-color: var(--primary-color);
+            height: 100%;
+            width: {pct}%;
+        }}
+        </style>
+        <div class="sticky-ticker">
+            🏈 {current_picks_count} of 7 games selected
+            <div class="sticky-ticker-track"><div class="sticky-ticker-fill"></div></div>
+        </div>
+        <div style="margin-top: 3.2rem;"></div>
+    """, unsafe_allow_html=True)
 
     grouped_by_date = {}
     for game in games_chronological:
@@ -237,15 +293,9 @@ else:
             st.error(f"Validation Error: You must pick exactly 7 games.")
         elif already_submitted:
             st.session_state.pending_resubmit = {
-                "existing_rows": [
-                    {
-                        "selected_team": p["selected_team"],
-                        "matchup": game_lookup.get(p["game_id"], {}).get("display_text", p["game_id"]),
-                        "spread": game_lookup.get(p["game_id"], {}).get("spread_value", ""),
-                    }
-                    for p in existing_picks
-                ],
+                "existing_picks": existing_picks,
                 "new_picks": chosen_picks,
+                "game_lookup": game_lookup,
             }
             st.rerun()
         else:
@@ -270,6 +320,7 @@ else:
     # Yes/Cancel buttons get a chance to actually be detected as clicked.
     if st.session_state.get("pending_resubmit"):
         confirm_resubmit(
-            st.session_state.pending_resubmit["existing_rows"],
+            st.session_state.pending_resubmit["existing_picks"],
             st.session_state.pending_resubmit["new_picks"],
+            st.session_state.pending_resubmit["game_lookup"],
         )
