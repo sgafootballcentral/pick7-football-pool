@@ -101,6 +101,7 @@ def run_espn_sync(target_week: int, start_date, end_date):
             ]
 
             total_games_inserted = 0
+            skipped_no_line = 0
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 "Referer": "https://www.espn.com/",
@@ -117,7 +118,6 @@ def run_espn_sync(target_week: int, start_date, end_date):
                 response_data = api_call.json()
 
                 for event in response_data.get("events", []):
-                    total_games_inserted += 1
                     game_id = event.get("id")
                     kickoff_time = event.get("date")
 
@@ -127,7 +127,7 @@ def run_espn_sync(target_week: int, start_date, end_date):
 
                     # FIX: Safely read list array nodes for opening Vegas spreads
                     odds_array = competitions.get("odds", [])
-                    odds_string = odds_array[0].get("details", "0.0") if odds_array and isinstance(odds_array, list) else "0.0"
+                    has_line = bool(odds_array) and isinstance(odds_array, list)
 
                     home_node = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
                     away_node = next((c for c in competitors if c.get("homeAway") == "away"), competitors[1])
@@ -135,6 +135,12 @@ def run_espn_sync(target_week: int, start_date, end_date):
                     home_team = home_node.get("team", {}).get("displayName", "Home Team")
                     away_team = away_node.get("team", {}).get("displayName", "Away Team")
                     home_abbr = home_node.get("team", {}).get("abbreviation", "").strip().upper()
+
+                    if not has_line:
+                        skipped_no_line += 1
+                        continue  # no book has posted a spread for this one -- leave it out of the pool
+
+                    odds_string = odds_array[0].get("details", "0.0")
 
                     fav_team, und_team = away_team, home_team
                     fav_home, und_home = False, True
@@ -147,8 +153,8 @@ def run_espn_sync(target_week: int, start_date, end_date):
                             fav_team, und_team = home_team, away_team
                             fav_home, und_home = True, False
 
-                    # No usable line from ESPN (missing market, or a genuine pick'em) --
-                    # default the home team to a -0.5 favorite so the game can't push.
+                    # A genuine POSTED pick'em (0-point) line -- keep the game, just default
+                    # the home team to -0.5 so it can't push.
                     spread_is_zero = True
                     if odds_string != "0.0" and " " in odds_string:
                         try:
@@ -159,6 +165,8 @@ def run_espn_sync(target_week: int, start_date, end_date):
                         fav_team, und_team = home_team, away_team
                         fav_home, und_home = True, False
                         odds_string = f"{home_abbr} -0.5"
+
+                    total_games_inserted += 1
 
                     # Save clean rows straight to your Supabase tables
                     supabase.table("games").insert({
@@ -175,7 +183,10 @@ def run_espn_sync(target_week: int, start_date, end_date):
                         "week_number": target_week
                     }).execute()
 
-            st.success(f"Success! Pulled {total_games_inserted} total games cleanly from {start_date} to {end_date} into Week {target_week}!")
+            st.success(
+                f"Success! Pulled {total_games_inserted} games with a posted line "
+                f"(skipped {skipped_no_line} with no spread) from {start_date} to {end_date} into Week {target_week}!"
+            )
             st.session_state.pending_refetch = None
             st.rerun()
         except Exception as e:
