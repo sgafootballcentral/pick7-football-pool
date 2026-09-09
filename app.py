@@ -76,6 +76,7 @@ def confirm_resubmit(existing_picks_raw, new_picks, game_lookup):
                     supabase.table("picks").insert({
                         "user_id": user.id, "username": username, "week_number": CURRENT_WEEK,
                         "game_id": p["game_id"], "selected_team": p["selected_team"],
+                        "spread_at_pick": game_lookup.get(p["game_id"], {}).get("spread_value", ""),
                     }).execute()
                 st.session_state.pending_resubmit = None
                 st.rerun()
@@ -302,7 +303,11 @@ else:
             try:
                 supabase.table("picks").delete().eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute()
                 for p in chosen_picks:
-                    supabase.table("picks").insert({"user_id": user.id, "username": username, "week_number": CURRENT_WEEK, "game_id": p["game_id"], "selected_team": p["selected_team"]}).execute()
+                    supabase.table("picks").insert({
+                        "user_id": user.id, "username": username, "week_number": CURRENT_WEEK,
+                        "game_id": p["game_id"], "selected_team": p["selected_team"],
+                        "spread_at_pick": game_lookup.get(p["game_id"], {}).get("spread_value", ""),
+                    }).execute()
                 st.success("Boom! Your 7 picks are saved securely.")
 
                 recap_rows = [
