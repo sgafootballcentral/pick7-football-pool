@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 import time as time_module
 import io
+import uuid
 from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
 from supabase import create_client, Client
@@ -291,7 +292,76 @@ if pending and pending["week"] == int(active_week):
 
 st.write("---")
 
-# 5. VIEW SUBMITTED PICKS
+# 5. ADD A GAME MANUALLY
+st.subheader("➕ Add a Game Manually")
+st.caption("For games ESPN doesn't have, or a line you want to set yourself.")
+
+with st.form("manual_add_game_form"):
+    manual_week = st.number_input("Week number:", min_value=1, max_value=18, value=int(active_week), step=1, key="manual_week")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        manual_fav_team = st.text_input("Favorite team name")
+    with col2:
+        manual_und_team = st.text_input("Underdog team name")
+
+    manual_home_side = st.radio("Who's the home team?", ["Favorite", "Underdog"], horizontal=True)
+    manual_spread = st.number_input("Spread (favorite's number, e.g. -6.5):", value=-3.0, step=0.5, format="%.1f")
+
+    col3, col4 = st.columns(2)
+    with col3:
+        manual_kickoff_date = st.date_input("Kickoff date", key="manual_kickoff_date")
+    with col4:
+        manual_kickoff_time = st.time_input("Kickoff time (Eastern)", key="manual_kickoff_time")
+
+    manual_tv = st.text_input("TV network (optional)")
+
+    manual_submitted = st.form_submit_button("Add Game")
+
+if manual_submitted:
+    if not manual_fav_team.strip() or not manual_und_team.strip():
+        st.error("Please enter both team names.")
+    else:
+        fav_team, und_team = manual_fav_team.strip(), manual_und_team.strip()
+        fav_home = manual_home_side == "Favorite"
+        spread_num = manual_spread
+
+        if spread_num == 0:
+            # Match the auto-fetch convention: a true pick'em defaults to the
+            # home team as a -0.5 favorite so it can never push.
+            if not fav_home:
+                fav_team, und_team = und_team, fav_team
+                fav_home = True
+            spread_str = f"{fav_team} -0.5"
+        else:
+            spread_str = nudge_off_whole_number(f"{fav_team} {spread_num:.1f}")
+
+        kickoff_dt_eastern = datetime.combine(manual_kickoff_date, manual_kickoff_time, tzinfo=ZoneInfo("America/New_York"))
+        kickoff_iso = kickoff_dt_eastern.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+        try:
+            supabase.table("games").insert({
+                "game_id": f"manual_{uuid.uuid4().hex[:12]}",
+                "game_number": 0,
+                "league": "MANUAL",
+                "favorite_team": fav_team,
+                "underdog_team": und_team,
+                "favorite_team_home": fav_home,
+                "underdog_team_home": not fav_home,
+                "spread_value": spread_str,
+                "display_text": f"{und_team if fav_home else fav_team} at {fav_team if fav_home else und_team}",
+                "kickoff_time": kickoff_iso,
+                "tv_network": manual_tv.strip(),
+                "week_number": int(manual_week),
+            }).execute()
+            st.success(f"Added {fav_team} vs {und_team} to Week {manual_week}.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Database error: {e}")
+
+st.write("---")
+
+# 6. VIEW SUBMITTED PICKS
 st.subheader("📋 Submitted Picks")
 view_week = st.number_input("Week to view picks for:", min_value=1, max_value=18, value=int(active_week), step=1, key="view_week_picks")
 
@@ -339,7 +409,7 @@ if st.session_state.get("pending_removal"):
 
 st.write("---")
 
-# 6. GRADE FINISHED GAMES
+# 7. GRADE FINISHED GAMES
 st.subheader("🏁 Grade Finished Games")
 grade_week_num = st.number_input("Week to grade:", min_value=1, max_value=18, value=int(active_week), step=1, key="grade_week")
 
@@ -475,7 +545,7 @@ if st.button("🔄 Refresh Scores & Grade", type="primary"):
 
 st.write("---")
 
-# 7. EXPORT SLATE TO EXCEL
+# 8. EXPORT SLATE TO EXCEL
 st.subheader("📊 Export Slate to Excel")
 export_week = st.number_input("Week to export:", min_value=1, max_value=18, value=int(active_week), step=1, key="export_week")
 
@@ -553,7 +623,7 @@ else:
 
 st.write("---")
 
-# 8. DELETE WEEK'S SLATE
+# 9. DELETE WEEK'S SLATE
 st.subheader("🗑️ Delete Week's Slate")
 delete_week_num = st.number_input("Week to delete:", min_value=1, max_value=18, value=int(active_week), step=1, key="delete_week")
 
