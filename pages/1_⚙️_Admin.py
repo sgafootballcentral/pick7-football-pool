@@ -463,9 +463,16 @@ else:
         ws.title = f"Week {week_number}"[:31]
 
         headers = ["#", "FAVORITE", "#", "UNDERDOG", "SPREAD", "KICKOFF (ET)", "TV"]
+
+        ws.append([f"Week {week_number}"])
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
+        title_cell = ws.cell(row=1, column=1)
+        title_cell.font = Font(name="Arial", bold=True, size=14)
+        title_cell.alignment = Alignment(horizontal="center")
+
         ws.append(headers)
         for col_idx in range(1, len(headers) + 1):
-            cell = ws.cell(row=1, column=col_idx)
+            cell = ws.cell(row=2, column=col_idx)
             cell.font = Font(name="Arial", bold=True, color="FFFFFF")
             cell.fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
             cell.alignment = Alignment(horizontal="center")
@@ -492,17 +499,17 @@ else:
 
             ws.append([fav_num, fav_team, und_num, und_team, spread_number, kickoff_display, tv_network])
             for col_idx in range(1, len(headers) + 1):
-                ws.cell(row=i + 1, column=col_idx).font = Font(name="Arial")
+                ws.cell(row=i + 2, column=col_idx).font = Font(name="Arial")
 
         for col_idx, header in enumerate(headers, start=1):
             col_letter = get_column_letter(col_idx)
             longest = max(
                 [len(str(header))] +
-                [len(str(ws.cell(row=r, column=col_idx).value or "")) for r in range(2, ws.max_row + 1)]
+                [len(str(ws.cell(row=r, column=col_idx).value or "")) for r in range(3, ws.max_row + 1)]
             )
             ws.column_dimensions[col_letter].width = longest + 4
 
-        ws.freeze_panes = "A2"
+        ws.freeze_panes = "A3"
 
         buffer = io.BytesIO()
         wb.save(buffer)
