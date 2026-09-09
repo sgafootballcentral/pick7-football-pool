@@ -121,6 +121,10 @@ if st.session_state.get("access_token"):
         st.session_state.access_token = None
         st.rerun()
 username = user.user_metadata.get("username", user.email)
+try:
+    supabase.table("players").upsert({"id": user.id, "username": username}).execute()
+except Exception:
+    pass  # non-critical -- don't block the session over this
 st.sidebar.write(f"Logged in as: **{username}**")
 if st.sidebar.button("Log Out", use_container_width=True):
     supabase.auth.sign_out()
