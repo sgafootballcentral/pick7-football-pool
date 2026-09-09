@@ -641,3 +641,68 @@ if st.button("Delete This Week's Games", key="delete_week_btn"):
 
 if st.session_state.get("pending_week_delete"):
     confirm_week_delete(st.session_state.pending_week_delete)
+
+st.write("---")
+
+# 10. MANUALLY ENTER PICKS FOR A PLAYER
+st.subheader("✍️ Manually Enter Picks for a Player")
+st.caption("For anyone who sent you picks by text instead of using the app.")
+
+manual_pick_week = st.number_input("Week:", min_value=1, max_value=18, value=int(active_week), step=1, key="manual_pick_week")
+
+players_roster = supabase.table("players").select("*").execute().data
+if not players_roster:
+    st.info("No players found yet -- they need to log in at least once before they show up here.")
+else:
+    player_options = {p["username"]: p["id"] for p in players_roster}
+    selected_manual_player = st.selectbox("Player:", sorted(player_options.keys()), key="manual_pick_player")
+    selected_manual_user_id = player_options[selected_manual_player]
+
+    week_games_for_manual = supabase.table("games").select("*").eq("week_number", manual_pick_week).execute().data
+
+    if not week_games_for_manual:
+        st.info(f"No games loaded for Week {manual_pick_week} yet.")
+    else:
+        existing_manual_picks = supabase.table("picks").select("*") \
+            .eq("user_id", selected_manual_user_id).eq("week_number", manual_pick_week).execute().data
+        existing_by_game = {p["game_id"]: p["selected_team"] for p in existing_manual_picks}
+
+        if existing_manual_picks:
+            st.caption(f"{selected_manual_player} already has {len(existing_manual_picks)} pick(s) on file for Week {manual_pick_week} -- shown pre-selected below.")
+
+        manual_selections = {}
+        sorted_manual_games = sorted(week_games_for_manual, key=lambda g: g.get("kickoff_time") or "")
+
+        for g in sorted_manual_games:
+            options = [g.get("favorite_team", ""), g.get("underdog_team", ""), "No pick"]
+            default_team = existing_by_game.get(g["game_id"], "No pick")
+            default_idx = options.index(default_team) if default_team in options else 2
+            choice = st.radio(
+                f"{g.get('display_text', '')}  (spread {g.get('spread_value', '')})",
+                options, index=default_idx, horizontal=True, key=f"manual_pick_{selected_manual_user_id}_{g['game_id']}",
+            )
+            if choice != "No pick":
+                manual_selections[g["game_id"]] = choice
+
+        st.write(f"Selected: {len(manual_selections)}/7")
+
+        if st.button(f"Save Picks for {selected_manual_player}", type="primary", key="save_manual_picks"):
+            if len(manual_selections) != 7:
+                st.error("You must select exactly 7 games.")
+            else:
+                try:
+                    supabase.table("picks").delete().eq("user_id", selected_manual_user_id).eq("week_number", manual_pick_week).execute()
+                    game_lookup_manual = {g["game_id"]: g for g in week_games_for_manual}
+                    for gid, team in manual_selections.items():
+                        supabase.table("picks").insert({
+                            "user_id": selected_manual_user_id,
+                            "username": selected_manual_player,
+                            "week_number": manual_pick_week,
+                            "game_id": gid,
+                            "selected_team": team,
+                            "spread_at_pick": game_lookup_manual.get(gid, {}).get("spread_value", ""),
+                        }).execute()
+                    st.success(f"Saved 7 picks for {selected_manual_player}, Week {manual_pick_week}.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Database error: {e}")
