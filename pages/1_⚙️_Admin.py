@@ -62,6 +62,33 @@ def confirm_removal(info):
         st.session_state.pending_removal = None
         st.rerun()
 
+
+@st.dialog("⚠️ Delete Entire Week?")
+def confirm_week_delete(info):
+    detail = f"This will permanently delete **{info['games_count']} game(s)** for Week {info['week']}"
+    if info["picks_count"]:
+        detail += f", along with **{info['picks_count']} pick(s)** from **{info['players_count']} player(s)**"
+    detail += ". This cannot be undone."
+    st.write(detail)
+
+    col_yes, col_no = st.columns(2)
+    with col_yes:
+        confirm_clicked = st.button(f"Yes, delete Week {info['week']}", type="primary", use_container_width=True)
+    with col_no:
+        cancel_clicked = st.button("Cancel", use_container_width=True)
+
+    if confirm_clicked:
+        try:
+            supabase.table("picks").delete().eq("week_number", info["week"]).execute()
+            supabase.table("games").delete().eq("week_number", info["week"]).execute()
+            st.session_state.pending_week_delete = None
+            st.rerun()
+        except Exception as e:
+            st.error(f"Database error: {e}")
+    elif cancel_clicked:
+        st.session_state.pending_week_delete = None
+        st.rerun()
+
 # 2. USER ACCESSIBILITY ROLE DATABASE CHECK
 if "user" not in st.session_state or not st.session_state.user:
     st.warning("Please log in on the home page first.")
@@ -523,3 +550,24 @@ else:
         file_name=f"week_{export_week}_slate.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+st.write("---")
+
+# 8. DELETE WEEK'S SLATE
+st.subheader("🗑️ Delete Week's Slate")
+delete_week_num = st.number_input("Week to delete:", min_value=1, max_value=18, value=int(active_week), step=1, key="delete_week")
+
+if st.button("Delete This Week's Games", key="delete_week_btn"):
+    games_for_delete = supabase.table("games").select("id").eq("week_number", delete_week_num).execute().data
+    picks_for_delete = supabase.table("picks").select("user_id").eq("week_number", delete_week_num).execute().data
+
+    st.session_state.pending_week_delete = {
+        "week": delete_week_num,
+        "games_count": len(games_for_delete),
+        "picks_count": len(picks_for_delete),
+        "players_count": len(set(p["user_id"] for p in picks_for_delete)),
+    }
+    st.rerun()
+
+if st.session_state.get("pending_week_delete"):
+    confirm_week_delete(st.session_state.pending_week_delete)
