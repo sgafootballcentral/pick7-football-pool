@@ -127,7 +127,14 @@ if st.sidebar.button("Log Out", use_container_width=True):
     st.session_state.user = None
     st.rerun()
 
-CURRENT_WEEK = 1 
+available_week_rows = supabase.table("games").select("week_number").execute().data
+available_weeks = sorted({w["week_number"] for w in available_week_rows}, reverse=True)
+
+if not available_weeks:
+    st.info("No games have been loaded yet. Check back once the admin sets up a week.")
+    st.stop()
+
+CURRENT_WEEK = st.selectbox("Select Week:", available_weeks, index=0)
 st.header(f"Week {CURRENT_WEEK} Master Slate")
 now = datetime.now(timezone.utc)
 EASTERN_TZ = ZoneInfo("America/New_York")
