@@ -248,9 +248,10 @@ if st.button("🔄 Auto-Fetch Games by Selected Dates", type="primary"):
 pending = st.session_state.get("pending_refetch")
 if pending and pending["week"] == int(active_week):
     st.warning(
-        f"⚠️ {pending['player_count']} player(s) have already submitted picks for Week {pending['week']}. "
-        "Re-pulling will refresh the spreads for this week. If a line moved, an already-submitted pick "
-        "could end up graded against a different number than what that person actually saw."
+        f"⚠️ Spreads for Week {pending['week']} have already been locked in by {pending['player_count']} "
+        "player(s)' picks. Re-pulling is safe for them -- each pick keeps grading against the exact spread "
+        "it locked in, even if the number changes here. This only affects the spread shown to anyone who "
+        "hasn't submitted yet."
     )
     col_go, col_cancel = st.columns(2)
     with col_go:
@@ -421,6 +422,23 @@ if st.button("🔄 Refresh Scores & Grade", type="primary"):
                     "status": "final",
                     "winning_team": winning_team,
                 }).eq("id", g["id"]).execute()
+
+                # Grade each pick against the spread IT actually saw, not necessarily
+                # today's spread_value -- protects anyone who picked before a re-sync.
+                picks_for_game = supabase.table("picks").select("*").eq("game_id", g["game_id"]).execute().data
+                for p in picks_for_game:
+                    locked_spread_str = (p.get("spread_at_pick") or g.get("spread_value") or "").rsplit(" ", 1)[-1]
+                    try:
+                        locked_spread_num = float(locked_spread_str)
+                    except ValueError:
+                        locked_spread_num = spread_num
+
+                    pick_margin = (fav_score + locked_spread_num) - und_score
+                    pick_winning_team = g.get("favorite_team") if pick_margin > 0 else g.get("underdog_team")
+                    pick_result = "win" if p.get("selected_team") == pick_winning_team else "loss"
+
+                    supabase.table("picks").update({"result": pick_result}).eq("id", p["id"]).execute()
+
                 graded_count += 1
 
         st.success(
