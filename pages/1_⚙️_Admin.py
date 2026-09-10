@@ -654,15 +654,36 @@ if st.session_state.get("pending_week_delete"):
 
 st.write("---")
 
-# 10. MANUALLY ENTER PICKS FOR A PLAYER
+# 10. ADD A PLAYER WITHOUT AN ACCOUNT
+st.subheader("➕ Add a Player Without an Account")
+st.caption("For someone you're tracking who doesn't log in or have an email on file.")
+
+manual_player_name = st.text_input("Player name:", key="manual_player_name")
+if st.button("Add Player", key="add_manual_player_btn"):
+    if not manual_player_name.strip():
+        st.error("Enter a name.")
+    else:
+        try:
+            supabase.table("players").insert({
+                "id": str(uuid.uuid4()),
+                "username": manual_player_name.strip(),
+            }).execute()
+            st.success(f"Added {manual_player_name.strip()}.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Database error: {e}")
+
+st.write("---")
+
+# 11. MANUALLY ENTER PICKS FOR A PLAYER (BY NUMBER)
 st.subheader("✍️ Manually Enter Picks for a Player")
-st.caption("For anyone who sent you picks by text instead of using the app.")
+st.caption("For anyone who sent you picks by text instead of using the app -- enter the numbers they gave you.")
 
 manual_pick_week = st.number_input("Week:", min_value=1, max_value=18, value=int(active_week), step=1, key="manual_pick_week")
 
 players_roster = supabase.table("players").select("*").execute().data
 if not players_roster:
-    st.info("No players found yet -- they need to log in at least once before they show up here.")
+    st.info("No players found yet -- add one above, or have them log in once.")
 else:
     player_options = {p["username"]: p["id"] for p in players_roster}
     selected_manual_player = st.selectbox("Player:", sorted(player_options.keys()), key="manual_pick_player")
@@ -673,53 +694,93 @@ else:
     if not week_games_for_manual:
         st.info(f"No games loaded for Week {manual_pick_week} yet.")
     else:
+        numbers_map_manual = compute_game_numbers(week_games_for_manual)
+        games_by_id_manual = {g["game_id"]: g for g in week_games_for_manual}
+
+        # number -> which game/team that number refers to, same odd/even scheme as the exports
+        number_lookup = {}
+        for g in week_games_for_manual:
+            nums = numbers_map_manual.get(g["game_id"], {})
+            number_lookup[nums["fav_num"]] = {"game_id": g["game_id"], "team": g.get("favorite_team", "")}
+            number_lookup[nums["und_num"]] = {"game_id": g["game_id"], "team": g.get("underdog_team", "")}
+
+        with st.expander(f"See all game numbers for Week {manual_pick_week}"):
+            ref_rows = [
+                {
+                    "#": num,
+                    "Team": info["team"],
+                    "Matchup": games_by_id_manual[info["game_id"]].get("display_text", ""),
+                    "Spread": games_by_id_manual[info["game_id"]].get("spread_value", ""),
+                }
+                for num, info in sorted(number_lookup.items())
+            ]
+            st.dataframe(ref_rows, use_container_width=True, hide_index=True)
+
         existing_manual_picks = supabase.table("picks").select("*") \
             .eq("user_id", selected_manual_user_id).eq("week_number", manual_pick_week).execute().data
-        existing_by_game = {p["game_id"]: p["selected_team"] for p in existing_manual_picks}
+
+        existing_numbers = []
+        for pk in existing_manual_picks:
+            g = games_by_id_manual.get(pk["game_id"])
+            if not g:
+                continue
+            nums = numbers_map_manual.get(pk["game_id"], {})
+            is_fav = pk["selected_team"] == g.get("favorite_team")
+            num = nums.get("fav_num") if is_fav else nums.get("und_num")
+            if num is not None:
+                existing_numbers.append(num)
+        existing_numbers.sort()
 
         if existing_manual_picks:
-            st.caption(f"{selected_manual_player} already has {len(existing_manual_picks)} pick(s) on file for Week {manual_pick_week} -- shown pre-selected below.")
+            st.caption(f"{selected_manual_player} already has {len(existing_manual_picks)} pick(s) on file for Week {manual_pick_week} -- pre-filled below.")
 
-        manual_selections = {}
-        sorted_manual_games = sorted(week_games_for_manual, key=lambda g: g.get("kickoff_time") or "")
-
-        for g in sorted_manual_games:
-            options = [g.get("favorite_team", ""), g.get("underdog_team", ""), "No pick"]
-            default_team = existing_by_game.get(g["game_id"], "No pick")
-            default_idx = options.index(default_team) if default_team in options else 2
-            choice = st.radio(
-                f"{g.get('display_text', '')}  (spread {g.get('spread_value', '')})",
-                options, index=default_idx, horizontal=True, key=f"manual_pick_{selected_manual_user_id}_{g['game_id']}",
-            )
-            if choice != "No pick":
-                manual_selections[g["game_id"]] = choice
-
-        st.write(f"Selected: {len(manual_selections)}/7")
+        numbers_input = st.text_input(
+            "Enter their 7 picks by number, comma-separated (e.g. 3,5,11,13,41,45,144):",
+            value=",".join(str(n) for n in existing_numbers),
+            key="manual_pick_numbers_input",
+        )
 
         if st.button(f"Save Picks for {selected_manual_player}", type="primary", key="save_manual_picks"):
-            if len(manual_selections) != 7:
-                st.error("You must select exactly 7 games.")
-            else:
-                try:
-                    supabase.table("picks").delete().eq("user_id", selected_manual_user_id).eq("week_number", manual_pick_week).execute()
-                    game_lookup_manual = {g["game_id"]: g for g in week_games_for_manual}
-                    for gid, team in manual_selections.items():
-                        supabase.table("picks").insert({
-                            "user_id": selected_manual_user_id,
-                            "username": selected_manual_player,
-                            "week_number": manual_pick_week,
-                            "game_id": gid,
-                            "selected_team": team,
-                            "spread_at_pick": game_lookup_manual.get(gid, {}).get("spread_value", ""),
-                        }).execute()
-                    st.success(f"Saved 7 picks for {selected_manual_player}, Week {manual_pick_week}.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Database error: {e}")
+            raw_parts = [p.strip() for p in numbers_input.split(",") if p.strip()]
+            try:
+                entered_numbers = [int(p) for p in raw_parts]
+            except ValueError:
+                entered_numbers = None
+                st.error("Please enter numbers only, separated by commas.")
+
+            if entered_numbers is not None:
+                invalid_numbers = sorted({n for n in entered_numbers if n not in number_lookup})
+                duplicate_numbers = sorted({n for n in entered_numbers if entered_numbers.count(n) > 1})
+
+                if invalid_numbers:
+                    st.error(f"These numbers don't match any game this week: {invalid_numbers}")
+                elif duplicate_numbers:
+                    st.error(f"These numbers were entered more than once: {duplicate_numbers}")
+                elif len(entered_numbers) != 7:
+                    st.error(f"You entered {len(entered_numbers)} number(s) -- exactly 7 are required.")
+                else:
+                    try:
+                        supabase.table("picks").delete().eq("user_id", selected_manual_user_id).eq("week_number", manual_pick_week).execute()
+                        for n in entered_numbers:
+                            info = number_lookup[n]
+                            g = games_by_id_manual[info["game_id"]]
+                            supabase.table("picks").insert({
+                                "user_id": selected_manual_user_id,
+                                "username": selected_manual_player,
+                                "week_number": manual_pick_week,
+                                "game_id": info["game_id"],
+                                "selected_team": info["team"],
+                                "spread_at_pick": g.get("spread_value", ""),
+                            }).execute()
+                        picked_teams = ", ".join(f"#{n} {number_lookup[n]['team']}" for n in sorted(entered_numbers))
+                        st.success(f"Saved picks for {selected_manual_player}: {picked_teams}")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Database error: {e}")
 
 st.write("---")
 
-# 11. PLAYER PAYMENT STATUS
+# 12. PLAYER PAYMENT STATUS
 st.subheader("💰 Player Payment Status")
 
 players_for_payment = supabase.table("players").select("*").order("username").execute().data
@@ -748,7 +809,7 @@ else:
 
 st.write("---")
 
-# 12. EXPORT SEASON TRACKER
+# 13. EXPORT SEASON TRACKER
 st.subheader("📥 Export Season Tracker (.xlsx)")
 st.caption("A running week-by-week win/loss breakdown for every player, in the same style as your old sheet.")
 
@@ -873,7 +934,7 @@ else:
 
 st.write("---")
 
-# 13. EXPORT WEEK + SEASON RESULTS (what you'd send out to the group)
+# 14. EXPORT WEEK + SEASON RESULTS (what you'd send out to the group)
 st.subheader("📤 Export Week + Season Results")
 st.caption("What you'd send out after grading a week: that week's individual results, plus updated season standings.")
 
