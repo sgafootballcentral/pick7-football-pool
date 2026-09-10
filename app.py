@@ -44,6 +44,25 @@ def compute_game_numbers(week_games):
     return numbers
 
 
+@st.dialog("🔢 Confirm Your Picks")
+def show_number_picks_preview(preview_data):
+    st.write(f"You are submitting picks for **Week {preview_data['week']}**.")
+    st.write("Here's what these numbers resolve to:")
+    st.dataframe(preview_data["rows"], use_container_width=True, hide_index=True)
+
+    col_apply, col_cancel = st.columns(2)
+    with col_apply:
+        if st.button("✅ Apply These Picks", type="primary", use_container_width=True, key="confirm_apply_number_picks"):
+            for item in preview_data["resolved"]:
+                st.session_state[f"sel_{item['game_id']}"] = item["team"]
+            st.session_state.pending_number_preview = None
+            st.rerun()
+    with col_cancel:
+        if st.button("Cancel", use_container_width=True, key="cancel_number_picks"):
+            st.session_state.pending_number_preview = None
+            st.rerun()
+
+
 @st.dialog("🔒 Your Picks Are Locked In!")
 def show_picks_recap(recap_rows):
     st.write("Here's what you picked for this week:")
@@ -342,6 +361,7 @@ else:
                     st.error(f"You entered {len(entered_numbers)} number(s) -- exactly 7 are required.")
                 else:
                     preview_rows = []
+                    resolved_picks = []
                     for n in entered_numbers:
                         info = number_lookup_player[n]
                         g = games_by_id_player[info["game_id"]]
@@ -349,26 +369,14 @@ else:
                             "#": n, "Team": info["team"],
                             "Matchup": g.get("display_text", ""), "Spread": g.get("spread_value", ""),
                         })
-                    st.session_state.pending_number_preview = {"numbers": entered_numbers, "rows": preview_rows}
+                        resolved_picks.append({"game_id": info["game_id"], "team": info["team"]})
+                    st.session_state.pending_number_preview = {
+                        "week": CURRENT_WEEK, "rows": preview_rows, "resolved": resolved_picks,
+                    }
                     st.rerun()
 
-        pending_preview = st.session_state.get("pending_number_preview")
-        if pending_preview:
-            st.write("Here's what these numbers resolve to:")
-            st.dataframe(pending_preview["rows"], use_container_width=True, hide_index=True)
-
-            col_apply, col_cancel_preview = st.columns(2)
-            with col_apply:
-                if st.button("✅ Apply These Picks", type="primary", key="confirm_apply_number_picks", use_container_width=True):
-                    for n in pending_preview["numbers"]:
-                        info = number_lookup_player[n]
-                        st.session_state[f"sel_{info['game_id']}"] = info["team"]
-                    st.session_state.pending_number_preview = None
-                    st.rerun()
-            with col_cancel_preview:
-                if st.button("Cancel", key="cancel_number_picks", use_container_width=True):
-                    st.session_state.pending_number_preview = None
-                    st.rerun()
+        if st.session_state.get("pending_number_preview"):
+            show_number_picks_preview(st.session_state.pending_number_preview)
 
     pct = min(current_picks_count / 7 * 100, 100)
     st.markdown(f"""
