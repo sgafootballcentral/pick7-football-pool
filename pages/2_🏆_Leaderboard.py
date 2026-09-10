@@ -59,11 +59,11 @@ try:
 
             medals = {1: "🥇", 2: "🥈", 3: "🥉"}
             standings["Rank"] = standings["Place"].map(lambda p: medals.get(p, str(p)))
-            standings = standings.drop(columns=["Place"]).rename(columns={"username": "Player"})
-            standings = standings[["Rank", "Player", "Wins", "Losses", "Win %"]]
+            standings = standings.rename(columns={"username": "Player"})
+            display_standings = standings[["Rank", "Player", "Wins", "Losses", "Win %"]]
 
             st.subheader("🔥 Current Standings")
-            st.dataframe(standings, use_container_width=True, hide_index=True)
+            st.dataframe(display_standings, use_container_width=True, hide_index=True)
 
             if is_admin:
                 players_rows = supabase.table("players").select("username, paid").execute().data
@@ -73,7 +73,7 @@ try:
                     wb = Workbook()
                     ws = wb.active
                     ws.title = "Season Standings"
-                    headers = ["Rank", "Player", "Wins", "Losses", "Win %", "Paid"]
+                    headers = ["Player", "Wins", "Losses", "Rank", "Paid"]
                     ws.append(headers)
                     for col_idx in range(1, len(headers) + 1):
                         cell = ws.cell(row=1, column=col_idx)
@@ -81,16 +81,24 @@ try:
                         cell.fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
                         cell.alignment = Alignment(horizontal="center")
 
+                    medal_colors = {1: "FFD700", 2: "C0C0C0", 3: "CD7F32"}
+
                     for _, row in standings_df.iterrows():
                         paid = paid_by_username.get(row["Player"], False)
-                        ws.append([row["Rank"], row["Player"], int(row["Wins"]), int(row["Losses"]), float(row["Win %"]), "Yes" if paid else "No"])
+                        ws.append([row["Player"], int(row["Wins"]), int(row["Losses"]), row["Rank"], "Yes" if paid else "No"])
                         r_idx = ws.max_row
-                        name_cell = ws.cell(row=r_idx, column=2)
+                        name_cell = ws.cell(row=r_idx, column=1)
                         name_cell.font = Font(name="Arial", bold=True)
                         paid_color = "FF00B050" if paid else "FFFF0000"
                         name_cell.fill = PatternFill(start_color=paid_color, end_color=paid_color, fill_type="solid")
-                        for col_idx in (1, 3, 4, 5, 6):
+                        for col_idx in (2, 3, 4, 5):
                             ws.cell(row=r_idx, column=col_idx).font = Font(name="Arial")
+
+                        if int(row["Place"]) in medal_colors:
+                            rank_cell = ws.cell(row=r_idx, column=4)
+                            rank_cell.font = Font(name="Arial", bold=True)
+                            rank_color = medal_colors[int(row["Place"])]
+                            rank_cell.fill = PatternFill(start_color=rank_color, end_color=rank_color, fill_type="solid")
 
                     for col_idx, header in enumerate(headers, start=1):
                         col_letter = get_column_letter(col_idx)
