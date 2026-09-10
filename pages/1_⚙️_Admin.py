@@ -286,17 +286,27 @@ if not is_admin:
 
 st.success("🔓 Commissioner Dashboard Unlocked!")
 
-# Follow the week selected on the main app page -- but only re-sync when that
-# value actually changes, so a manual override here isn't immediately overwritten.
-shared_week = st.session_state.get("shared_selected_week")
-if shared_week is not None and st.session_state.get("_last_synced_week") != shared_week:
-    st.session_state["active_week"] = shared_week
-    st.session_state["_last_synced_week"] = shared_week
+# Bidirectional week sync with the main app page, via a single shared "global_week"
+# value. Either page can change it; whichever page didn't just change it locally
+# adopts the new value on its next run.
+if "global_week" not in st.session_state:
+    st.session_state["global_week"] = 1
+
+if st.session_state.get("_admin_last_seen_global") != st.session_state["global_week"]:
+    st.session_state["active_week"] = st.session_state["global_week"]
+    st.session_state["_admin_last_seen_global"] = st.session_state["global_week"]
+
+if "active_week" not in st.session_state:
+    st.session_state["active_week"] = st.session_state["global_week"]
 
 active_week = st.number_input(
     "Target Grouping Week Number (For Player Submissions):",
-    min_value=1, max_value=18, value=st.session_state.get("active_week", 1), step=1, key="active_week",
+    min_value=1, max_value=18, step=1, key="active_week",
 )
+
+if active_week != st.session_state["global_week"]:
+    st.session_state["global_week"] = active_week
+    st.session_state["_admin_last_seen_global"] = active_week
 
 
 tab_setup, tab_picks, tab_grading, tab_players, tab_exports = st.tabs([
