@@ -482,7 +482,88 @@ if st.session_state.get("pending_removal"):
 
 st.write("---")
 
-# 7. GRADE FINISHED GAMES
+# 7. EXPORT EVERYONE'S PICKS (BEFORE GRADING)
+st.subheader("📤 Export Everyone's Picks")
+st.caption("The list you'd send out Saturday morning, before any games are graded -- just names and pick numbers.")
+
+picks_export_week = st.number_input("Week:", min_value=1, max_value=18, value=int(active_week), step=1, key="picks_export_week")
+
+picks_export_games = supabase.table("games").select("*").eq("week_number", picks_export_week).execute().data
+picks_export_picks = supabase.table("picks").select("*").eq("week_number", picks_export_week).execute().data
+picks_export_players = supabase.table("players").select("*").order("username").execute().data
+
+if not picks_export_games:
+    st.info(f"No games loaded for Week {picks_export_week} yet.")
+elif not picks_export_picks:
+    st.info(f"No picks submitted yet for Week {picks_export_week}.")
+else:
+    def build_picks_only_workbook(week_number, players_rows, picks_rows, games_rows):
+        numbers_map = compute_game_numbers(games_rows)
+        games_map = {g["game_id"]: g for g in games_rows}
+
+        picks_by_user = {}
+        for pk in picks_rows:
+            g = games_map.get(pk["game_id"])
+            if not g:
+                continue
+            nums = numbers_map.get(pk["game_id"], {})
+            is_fav = pk["selected_team"] == g.get("favorite_team")
+            num = nums.get("fav_num") if is_fav else nums.get("und_num")
+            if num is None:
+                continue
+            picks_by_user.setdefault(pk["user_id"], []).append(num)
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = f"Week {week_number} Picks"[:31]
+
+        headers = ["Player", f"Week {week_number} Picks"]
+        ws.append(headers)
+        for col_idx in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.font = Font(name="Arial", bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+            cell.alignment = Alignment(horizontal="center")
+
+        rows_with_picks = [p for p in players_rows if p["id"] in picks_by_user]
+        rows_with_picks.sort(key=lambda p: p["username"])
+
+        for p in rows_with_picks:
+            nums = sorted(picks_by_user[p["id"]])
+            ws.append([p["username"], ",".join(str(n) for n in nums)])
+            r_idx = ws.max_row
+            name_cell = ws.cell(row=r_idx, column=1)
+            name_cell.font = Font(name="Arial", bold=True)
+            paid_color = "FF00B050" if p.get("paid") else "FFFF0000"
+            name_cell.fill = PatternFill(start_color=paid_color, end_color=paid_color, fill_type="solid")
+            ws.cell(row=r_idx, column=2).font = Font(name="Arial")
+
+        for col_idx, header in enumerate(headers, start=1):
+            col_letter = get_column_letter(col_idx)
+            longest = max(
+                [len(str(header))] +
+                [len(str(ws.cell(row=r, column=col_idx).value or "")) for r in range(2, ws.max_row + 1)]
+            )
+            ws.column_dimensions[col_letter].width = min(longest + 3, 40)
+
+        ws.freeze_panes = "A2"
+
+        buffer = io.BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+        return buffer
+
+    picks_only_buffer = build_picks_only_workbook(int(picks_export_week), picks_export_players, picks_export_picks, picks_export_games)
+    st.download_button(
+        f"⬇️ Download Week {int(picks_export_week)} Picks (.xlsx)",
+        data=picks_only_buffer,
+        file_name=f"week_{int(picks_export_week)}_picks.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+st.write("---")
+
+# 8. GRADE FINISHED GAMES
 st.subheader("🏁 Grade Finished Games")
 grade_week_num = st.number_input("Week to grade:", min_value=1, max_value=18, value=int(active_week), step=1, key="grade_week")
 
@@ -618,7 +699,7 @@ if st.button("🔄 Refresh Scores & Grade", type="primary"):
 
 st.write("---")
 
-# 8. EXPORT SLATE TO EXCEL
+# 9. EXPORT SLATE TO EXCEL
 st.subheader("📊 Export Slate to Excel")
 export_week = st.number_input("Week to export:", min_value=1, max_value=18, value=int(active_week), step=1, key="export_week")
 
@@ -696,7 +777,7 @@ else:
 
 st.write("---")
 
-# 9. DELETE WEEK'S SLATE
+# 10. DELETE WEEK'S SLATE
 st.subheader("🗑️ Delete Week's Slate")
 delete_week_num = st.number_input("Week to delete:", min_value=1, max_value=18, value=int(active_week), step=1, key="delete_week")
 
@@ -717,7 +798,7 @@ if st.session_state.get("pending_week_delete"):
 
 st.write("---")
 
-# 10. ADD A PLAYER WITHOUT AN ACCOUNT
+# 11. ADD A PLAYER WITHOUT AN ACCOUNT
 st.subheader("➕ Add a Player Without an Account")
 st.caption("For someone you're tracking who doesn't log in or have an email on file.")
 
@@ -738,7 +819,7 @@ if st.button("Add Player", key="add_manual_player_btn"):
 
 st.write("---")
 
-# 11. MANUALLY ENTER PICKS FOR A PLAYER (BY NUMBER)
+# 12. MANUALLY ENTER PICKS FOR A PLAYER (BY NUMBER)
 st.subheader("✍️ Manually Enter Picks for a Player")
 st.caption("For anyone who sent you picks by text instead of using the app -- enter the numbers they gave you.")
 
@@ -843,7 +924,7 @@ else:
 
 st.write("---")
 
-# 12. MERGE A MANUAL PLAYER INTO A REAL ACCOUNT
+# 13. MERGE A MANUAL PLAYER INTO A REAL ACCOUNT
 st.subheader("🔀 Merge a Manual Player into a Real Account")
 st.caption("Once someone you added manually creates a real login, combine their pick history under the real account.")
 
@@ -889,7 +970,7 @@ if st.session_state.get("pending_merge"):
 
 st.write("---")
 
-# 13. PLAYER PAYMENT STATUS
+# 14. PLAYER PAYMENT STATUS
 st.subheader("💰 Player Payment Status")
 
 players_for_payment = supabase.table("players").select("*").order("username").execute().data
@@ -918,7 +999,7 @@ else:
 
 st.write("---")
 
-# 14. EXPORT SEASON TRACKER
+# 15. EXPORT SEASON TRACKER
 st.subheader("📥 Export Season Tracker (.xlsx)")
 st.caption("A running week-by-week win/loss breakdown for every player, in the same style as your old sheet.")
 
@@ -1043,7 +1124,7 @@ else:
 
 st.write("---")
 
-# 15. EXPORT WEEK + SEASON RESULTS (what you'd send out to the group)
+# 16. EXPORT WEEK + SEASON RESULTS (what you'd send out to the group)
 st.subheader("📤 Export Week + Season Results")
 st.caption("What you'd send out after grading a week: that week's individual results, plus updated season standings.")
 
