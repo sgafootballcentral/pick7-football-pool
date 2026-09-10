@@ -100,6 +100,64 @@ def confirm_week_delete(info):
         st.session_state.pending_week_delete = None
         st.rerun()
 
+
+@st.dialog("⚠️ Confirm Merge")
+def confirm_merge(info):
+    if not info.get("completed"):
+        st.write(
+            f"This will move **{info['from_picks_count']} pick(s)** from **{info['from_name']}** "
+            f"into **{info['to_name']}**, then remove {info['from_name']}'s separate entry."
+        )
+        if info["conflict_weeks"]:
+            st.warning(
+                f"Week(s) {info['conflict_weeks']} already have picks under {info['to_name']} for the same "
+                "game(s) -- those weeks will be SKIPPED to avoid duplicates. You'll need to sort those out by hand."
+            )
+        st.write("This cannot be undone.")
+
+        col_yes, col_no = st.columns(2)
+        with col_yes:
+            confirm_clicked = st.button("Yes, merge", type="primary", use_container_width=True)
+        with col_no:
+            cancel_clicked = st.button("Cancel", use_container_width=True)
+
+        if confirm_clicked:
+            try:
+                from_picks = supabase.table("picks").select("*").eq("user_id", info["from_id"]).execute().data
+                conflict_weeks = set(info["conflict_weeks"])
+                moved = 0
+                for p in from_picks:
+                    if p["week_number"] in conflict_weeks:
+                        continue
+                    supabase.table("picks").update({
+                        "user_id": info["to_id"], "username": info["to_name"],
+                    }).eq("id", p["id"]).execute()
+                    moved += 1
+
+                remaining = supabase.table("picks").select("id").eq("user_id", info["from_id"]).execute().data
+                removed_entry = False
+                if not remaining:
+                    supabase.table("players").delete().eq("id", info["from_id"]).execute()
+                    removed_entry = True
+
+                info["completed"] = True
+                info["moved"] = moved
+                info["removed_entry"] = removed_entry
+                st.session_state.pending_merge = info
+                st.rerun()
+            except Exception as e:
+                st.error(f"Database error: {e}")
+        elif cancel_clicked:
+            st.session_state.pending_merge = None
+            st.rerun()
+    else:
+        st.success(f"Moved {info['moved']} pick(s) into {info['to_name']}.")
+        if not info.get("removed_entry"):
+            st.warning(f"{info['from_name']}'s entry was kept because some weeks were skipped due to conflicts.")
+        if st.button("Close", use_container_width=True):
+            st.session_state.pending_merge = None
+            st.rerun()
+
 # 2. USER ACCESSIBILITY ROLE DATABASE CHECK
 if "user" not in st.session_state or not st.session_state.user:
     st.warning("Please log in on the home page first.")
@@ -780,7 +838,53 @@ else:
 
 st.write("---")
 
-# 12. PLAYER PAYMENT STATUS
+# 12. MERGE A MANUAL PLAYER INTO A REAL ACCOUNT
+st.subheader("🔀 Merge a Manual Player into a Real Account")
+st.caption("Once someone you added manually creates a real login, combine their pick history under the real account.")
+
+merge_players_roster = supabase.table("players").select("*").order("username").execute().data
+if len(merge_players_roster) < 2:
+    st.info("Need at least two player entries to merge.")
+else:
+    merge_options = {p["username"]: p["id"] for p in merge_players_roster}
+    col_from, col_to = st.columns(2)
+    with col_from:
+        merge_from_name = st.selectbox("Merge FROM (the manual entry):", sorted(merge_options.keys()), key="merge_from")
+    with col_to:
+        to_choices = [n for n in sorted(merge_options.keys()) if n != merge_from_name]
+        merge_to_name = st.selectbox("Merge INTO (the real account):", to_choices, key="merge_to")
+
+    if st.button("Merge Players", type="primary", key="merge_players_btn"):
+        from_id = merge_options[merge_from_name]
+        to_id = merge_options[merge_to_name]
+
+        from_picks = supabase.table("picks").select("*").eq("user_id", from_id).execute().data
+        to_picks = supabase.table("picks").select("week_number, game_id").eq("user_id", to_id).execute().data
+
+        to_game_ids_by_week = {}
+        for p in to_picks:
+            to_game_ids_by_week.setdefault(p["week_number"], set()).add(p["game_id"])
+
+        conflict_weeks = sorted({
+            p["week_number"] for p in from_picks
+            if p["game_id"] in to_game_ids_by_week.get(p["week_number"], set())
+        })
+
+        st.session_state.pending_merge = {
+            "from_id": from_id, "from_name": merge_from_name,
+            "to_id": to_id, "to_name": merge_to_name,
+            "from_picks_count": len(from_picks),
+            "conflict_weeks": conflict_weeks,
+            "completed": False,
+        }
+        st.rerun()
+
+if st.session_state.get("pending_merge"):
+    confirm_merge(st.session_state.pending_merge)
+
+st.write("---")
+
+# 13. PLAYER PAYMENT STATUS
 st.subheader("💰 Player Payment Status")
 
 players_for_payment = supabase.table("players").select("*").order("username").execute().data
@@ -809,7 +913,7 @@ else:
 
 st.write("---")
 
-# 13. EXPORT SEASON TRACKER
+# 14. EXPORT SEASON TRACKER
 st.subheader("📥 Export Season Tracker (.xlsx)")
 st.caption("A running week-by-week win/loss breakdown for every player, in the same style as your old sheet.")
 
@@ -934,7 +1038,7 @@ else:
 
 st.write("---")
 
-# 14. EXPORT WEEK + SEASON RESULTS (what you'd send out to the group)
+# 15. EXPORT WEEK + SEASON RESULTS (what you'd send out to the group)
 st.subheader("📤 Export Week + Season Results")
 st.caption("What you'd send out after grading a week: that week's individual results, plus updated season standings.")
 
