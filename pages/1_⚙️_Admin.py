@@ -10,6 +10,8 @@ from supabase import create_client, Client
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils import get_column_letter
+from openpyxl.cell.rich_text import CellRichText, TextBlock
+from openpyxl.cell.text import InlineFont
 
 # 1. Connection and Secrets Verification
 SUPABASE_URL = st.secrets.get("SUPABASE_URL")
@@ -47,6 +49,26 @@ def compute_game_numbers(week_games):
     for i, g in enumerate(sorted_games, start=1):
         numbers[g["game_id"]] = {"fav_num": 2 * i - 1, "und_num": 2 * i}
     return numbers
+
+
+def colored_picks_richtext(picks_nums, win_nums, loss_nums):
+    """A single cell's worth of comma-separated picks, with each number colored
+    green (bold) if it covered, red with a strikethrough if it didn't -- the
+    closest robust analog to a hand-drawn circle/slash that survives resizing,
+    re-opening, and different spreadsheet apps. Black if not graded yet.
+    IMPORTANT: never set .font on a cell holding this -- it silently wipes the
+    rich text back to None. Style with InlineFont here instead."""
+    win_set, loss_set = set(win_nums), set(loss_nums)
+    green = InlineFont(color="FF008000", b=True)
+    red = InlineFont(color="FFFF0000", b=True, strike=True)
+    black = InlineFont(color="FF000000", b=True)
+    blocks = []
+    for i, n in enumerate(picks_nums):
+        if i > 0:
+            blocks.append(TextBlock(black, ","))
+        font = green if n in win_set else red if n in loss_set else black
+        blocks.append(TextBlock(font, str(n)))
+    return CellRichText(blocks)
 
 
 @st.dialog("⚠️ Confirm Removal")
@@ -1042,6 +1064,7 @@ else:
             player_rows_data = []
             for p in players_rows:
                 weekly_cells = []
+                weekly_raw = []  # one entry per week: (picks_nums, win_nums, loss_nums), for coloring after append
                 total_wins, total_losses = 0, 0
 
                 for wk in weeks:
@@ -1066,8 +1089,9 @@ else:
                             loss_nums.append(num)
 
                     picks_nums.sort(); win_nums.sort(); loss_nums.sort()
+                    weekly_raw.append((picks_nums, win_nums, loss_nums))
                     weekly_cells += [
-                        ",".join(str(n) for n in picks_nums),
+                        None,  # Picks -- filled in with colored rich text after the row is appended
                         ",".join(str(n) for n in win_nums),
                         ",".join(str(n) for n in loss_nums),
                         len(win_nums),
@@ -1080,6 +1104,7 @@ else:
                     "username": p["username"],
                     "paid": bool(p.get("paid")),
                     "weekly_cells": weekly_cells,
+                    "weekly_raw": weekly_raw,
                     "total_wins": total_wins,
                     "total_losses": total_losses,
                 })
@@ -1096,7 +1121,15 @@ else:
                 name_cell.font = Font(name="Arial", bold=True)
                 paid_color = "FF00B050" if row["paid"] else "FFFF0000"
                 name_cell.fill = PatternFill(start_color=paid_color, end_color=paid_color, fill_type="solid")
-                for col_idx in range(2, len(headers) + 1):
+
+                for week_idx, (picks_nums, win_nums, loss_nums) in enumerate(row["weekly_raw"]):
+                    picks_col = 2 + week_idx * 5  # 1-based: Player is col 1, then 5 cols per week
+                    ws.cell(row=r_idx, column=picks_col).value = colored_picks_richtext(picks_nums, win_nums, loss_nums)
+                    for offset in (1, 2, 3, 4):  # Wins, Loss, W, L -- everything except the Picks column
+                        ws.cell(row=r_idx, column=picks_col + offset).font = Font(name="Arial")
+
+                # Overall Wins / Overall Losses / Place columns, at the very end
+                for col_idx in range(2 + len(row["weekly_raw"]) * 5, len(headers) + 1):
                     ws.cell(row=r_idx, column=col_idx).font = Font(name="Arial")
 
             for col_idx in range(1, len(headers) + 1):
@@ -1199,11 +1232,13 @@ else:
             week_rows_data.sort(key=lambda r: (-r["w"], r["l"], r["username"]))
             for r in week_rows_data:
                 ws1.append([
-                    r["username"], ",".join(map(str, r["picks"])), ",".join(map(str, r["wins"])),
+                    r["username"], None, ",".join(map(str, r["wins"])),
                     ",".join(map(str, r["losses"])), r["w"], r["l"],
                 ])
-                for col_idx in range(1, len(headers1) + 1):
-                    ws1.cell(row=ws1.max_row, column=col_idx).font = Font(name="Arial")
+                row_idx = ws1.max_row
+                ws1.cell(row=row_idx, column=2).value = colored_picks_richtext(r["picks"], r["wins"], r["losses"])
+                for col_idx in (1, 3, 4, 5, 6):
+                    ws1.cell(row=row_idx, column=col_idx).font = Font(name="Arial")
 
             autosize(ws1, headers1)
 
