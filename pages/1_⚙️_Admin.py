@@ -8,7 +8,7 @@ from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
 from supabase import create_client, Client
 from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, PatternFill
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.cell.rich_text import CellRichText, TextBlock
 from openpyxl.cell.text import InlineFont
@@ -1272,8 +1272,27 @@ with tab_exports:
 
                 # --- Sheet 2: season standings ---
                 ws2 = wb.create_sheet(title="Season Standings")
-                headers2 = ["Player", "Wins", "Losses", "Place", "Paid"]
-                style_header(ws2, headers2)
+
+                header_font = Font(name="Arial", bold=True, color="FFFFFF")
+                header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+                center = Alignment(horizontal="center")
+                divider = Border(right=Side(style="thin", color="000000"))
+
+                ws2.cell(row=1, column=1, value="Player")
+                ws2.merge_cells(start_row=1, start_column=1, end_row=2, end_column=1)
+                ws2.cell(row=1, column=2, value="Overall Record")
+                ws2.merge_cells(start_row=1, start_column=2, end_row=1, end_column=3)
+                ws2.cell(row=1, column=4, value="Place")
+                ws2.merge_cells(start_row=1, start_column=4, end_row=2, end_column=4)
+                ws2.cell(row=1, column=5, value="Paid")
+                ws2.merge_cells(start_row=1, start_column=5, end_row=2, end_column=5)
+
+                for hdr_row in (1, 2):
+                    for col_idx in range(1, 6):
+                        cell = ws2.cell(row=hdr_row, column=col_idx)
+                        cell.font = header_font
+                        cell.fill = header_fill
+                        cell.alignment = center
 
                 season_totals = {}
                 for wk in all_graded_weeks:
@@ -1310,6 +1329,7 @@ with tab_exports:
                     name_cell.fill = PatternFill(start_color=paid_color, end_color=paid_color, fill_type="solid")
                     for col_idx in (2, 3, 4, 5):
                         ws2.cell(row=r_idx, column=col_idx).font = Font(name="Arial")
+                    ws2.cell(row=r_idx, column=2).border = divider  # vertical line between wins/losses
 
                     if row["place"] in medal_colors:
                         place_cell = ws2.cell(row=r_idx, column=4)
@@ -1317,7 +1337,15 @@ with tab_exports:
                         place_color = medal_colors[row["place"]]
                         place_cell.fill = PatternFill(start_color=place_color, end_color=place_color, fill_type="solid")
 
-                autosize(ws2, headers2)
+                headers2_display = ["Player", "Overall Record", "", "Place", "Paid"]
+                for col_idx, header in enumerate(headers2_display, start=1):
+                    col_letter = get_column_letter(col_idx)
+                    longest = max(
+                        [len(str(header))] +
+                        [len(str(ws2.cell(row=r, column=col_idx).value or "")) for r in range(3, ws2.max_row + 1)]
+                    )
+                    ws2.column_dimensions[col_letter].width = min(longest + 3, 22)
+                ws2.freeze_panes = "A3"
 
                 buffer = io.BytesIO()
                 wb.save(buffer)
