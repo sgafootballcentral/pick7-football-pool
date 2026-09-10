@@ -34,6 +34,16 @@ def nudge_off_whole_number(odds_string: str) -> str:
     return f"{team_abbr} {value:.1f}"
 
 
+def compute_game_numbers(week_games):
+    """Same odd/even numbering as the Admin exports: favorite=odd, underdog=even,
+    assigned in chronological kickoff order."""
+    sorted_games = sorted(week_games, key=lambda g: g.get("kickoff_time") or "")
+    numbers = {}
+    for i, g in enumerate(sorted_games, start=1):
+        numbers[g["game_id"]] = {"fav_num": 2 * i - 1, "und_num": 2 * i}
+    return numbers
+
+
 @st.dialog("🔒 Your Picks Are Locked In!")
 def show_picks_recap(recap_rows):
     st.write("Here's what you picked for this week:")
@@ -280,6 +290,85 @@ else:
     current_picks_count = sum(1 for g in all_games if st.session_state.get(f"sel_{g['game_id']}", "-- Select --") != "-- Select --")
     ui_max_reached = current_picks_count >= 7
     chosen_picks = []
+
+    # 🔢 PICK BY NUMBER -- fills in the same dropdowns below rather than duplicating
+    # the submit logic, so locking, resubmit protection, etc. all just work.
+    with st.expander("🔢 Enter your picks by number instead"):
+        numbers_map_player = compute_game_numbers(all_games)
+        games_by_id_player = {g["game_id"]: g for g in all_games}
+        number_lookup_player = {}
+        for g in all_games:
+            nums = numbers_map_player.get(g["game_id"], {})
+            number_lookup_player[nums["fav_num"]] = {"game_id": g["game_id"], "team": g.get("favorite_team", "")}
+            number_lookup_player[nums["und_num"]] = {"game_id": g["game_id"], "team": g.get("underdog_team", "")}
+
+        numbers_text = st.text_input(
+            "Your 7 picks, comma-separated (e.g. 1,5,9,12,23,78,100):",
+            key="picks_by_number_input",
+        )
+
+        if st.button("Preview My Picks", key="preview_picks_by_number"):
+            raw_parts = [p.strip() for p in numbers_text.split(",") if p.strip()]
+            try:
+                entered_numbers = [int(p) for p in raw_parts]
+            except ValueError:
+                entered_numbers = None
+                st.error("Please enter numbers only, separated by commas.")
+
+            if entered_numbers is not None:
+                invalid_numbers = sorted({n for n in entered_numbers if n not in number_lookup_player})
+                duplicate_numbers = sorted({n for n in entered_numbers if entered_numbers.count(n) > 1})
+
+                locked_numbers = []
+                for n in entered_numbers:
+                    info = number_lookup_player.get(n)
+                    if not info:
+                        continue
+                    g = games_by_id_player.get(info["game_id"], {})
+                    try:
+                        kickoff_dt = datetime.fromisoformat(g.get("kickoff_time", "").replace("Z", "+00:00"))
+                        if now >= kickoff_dt:
+                            locked_numbers.append(n)
+                    except (ValueError, AttributeError):
+                        pass
+
+                if invalid_numbers:
+                    st.error(f"These numbers don't match any game this week: {invalid_numbers}")
+                elif duplicate_numbers:
+                    st.error(f"These numbers were entered more than once: {duplicate_numbers}")
+                elif locked_numbers:
+                    st.error(f"These games have already started and can't be picked: {locked_numbers}")
+                elif len(entered_numbers) != 7:
+                    st.error(f"You entered {len(entered_numbers)} number(s) -- exactly 7 are required.")
+                else:
+                    preview_rows = []
+                    for n in entered_numbers:
+                        info = number_lookup_player[n]
+                        g = games_by_id_player[info["game_id"]]
+                        preview_rows.append({
+                            "#": n, "Team": info["team"],
+                            "Matchup": g.get("display_text", ""), "Spread": g.get("spread_value", ""),
+                        })
+                    st.session_state.pending_number_preview = {"numbers": entered_numbers, "rows": preview_rows}
+                    st.rerun()
+
+        pending_preview = st.session_state.get("pending_number_preview")
+        if pending_preview:
+            st.write("Here's what these numbers resolve to:")
+            st.dataframe(pending_preview["rows"], use_container_width=True, hide_index=True)
+
+            col_apply, col_cancel_preview = st.columns(2)
+            with col_apply:
+                if st.button("✅ Apply These Picks", type="primary", key="confirm_apply_number_picks", use_container_width=True):
+                    for n in pending_preview["numbers"]:
+                        info = number_lookup_player[n]
+                        st.session_state[f"sel_{info['game_id']}"] = info["team"]
+                    st.session_state.pending_number_preview = None
+                    st.rerun()
+            with col_cancel_preview:
+                if st.button("Cancel", key="cancel_number_picks", use_container_width=True):
+                    st.session_state.pending_number_preview = None
+                    st.rerun()
 
     pct = min(current_picks_count / 7 * 100, 100)
     st.markdown(f"""
