@@ -39,6 +39,16 @@ def nudge_off_whole_number(odds_string: str) -> str:
     return f"{team_abbr} {value:.1f}"
 
 
+def compute_game_numbers(week_games):
+    """Same odd/even numbering as the weekly slate export: favorite=odd,
+    underdog=even, assigned in chronological kickoff order."""
+    sorted_games = sorted(week_games, key=lambda g: g.get("kickoff_time") or "")
+    numbers = {}
+    for i, g in enumerate(sorted_games, start=1):
+        numbers[g["game_id"]] = {"fav_num": 2 * i - 1, "und_num": 2 * i}
+    return numbers
+
+
 @st.dialog("⚠️ Confirm Removal")
 def confirm_removal(info):
     st.write(f"Remove **{info['player']}**'s picks for **Week {info['week']}**? This cannot be undone.")
@@ -706,3 +716,297 @@ else:
                     st.rerun()
                 except Exception as e:
                     st.error(f"Database error: {e}")
+
+st.write("---")
+
+# 11. PLAYER PAYMENT STATUS
+st.subheader("💰 Player Payment Status")
+
+players_for_payment = supabase.table("players").select("*").order("username").execute().data
+if not players_for_payment:
+    st.info("No players yet -- they need to log in at least once before they show up here.")
+else:
+    payment_df = pd.DataFrame([
+        {"Player": p["username"], "Paid": bool(p.get("paid")), "_id": p["id"]}
+        for p in players_for_payment
+    ])
+    edited_payment_df = st.data_editor(
+        payment_df.drop(columns=["_id"]),
+        column_config={"Paid": st.column_config.CheckboxColumn("Paid?")},
+        hide_index=True,
+        use_container_width=True,
+        key="payment_editor",
+    )
+    if st.button("Save Payment Status", key="save_payment_status"):
+        try:
+            for i, row in edited_payment_df.iterrows():
+                player_id = payment_df.iloc[i]["_id"]
+                supabase.table("players").update({"paid": bool(row["Paid"])}).eq("id", player_id).execute()
+            st.success("Payment status updated.")
+        except Exception as e:
+            st.error(f"Database error: {e}")
+
+st.write("---")
+
+# 12. EXPORT SEASON TRACKER
+st.subheader("📥 Export Season Tracker (.xlsx)")
+st.caption("A running week-by-week win/loss breakdown for every player, in the same style as your old sheet.")
+
+all_week_status_rows = supabase.table("games").select("week_number, status").execute().data
+graded_weeks = sorted({g["week_number"] for g in all_week_status_rows if g.get("status") == "final"})
+
+if not graded_weeks:
+    st.info("No graded weeks yet -- use 'Grade Finished Games' above first.")
+else:
+    players_for_export = supabase.table("players").select("*").order("username").execute().data
+    if not players_for_export:
+        st.info("No players found yet.")
+    else:
+        def build_season_tracker_workbook(players_rows, weeks):
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Season Tracker"
+
+            headers = ["Player"]
+            for wk in weeks:
+                headers += [f"Week {wk} Picks", f"Week {wk} Wins", f"Week {wk} Loss", f"Week {wk} W", f"Week {wk} L"]
+            headers += ["Overall Wins", "Overall Losses", "Place"]
+
+            ws.append(headers)
+            for col_idx in range(1, len(headers) + 1):
+                cell = ws.cell(row=1, column=col_idx)
+                cell.font = Font(name="Arial", bold=True, color="FFFFFF")
+                cell.fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+                cell.alignment = Alignment(horizontal="center")
+
+            # Pre-fetch each week's games/picks once
+            week_game_numbers, week_games_by_id, week_picks = {}, {}, {}
+            for wk in weeks:
+                games_this_week = supabase.table("games").select("*").eq("week_number", wk).execute().data
+                week_game_numbers[wk] = compute_game_numbers(games_this_week)
+                week_games_by_id[wk] = {g["game_id"]: g for g in games_this_week}
+                week_picks[wk] = supabase.table("picks").select("*").eq("week_number", wk).execute().data
+
+            # Build every player's row data first so ranking can happen before writing
+            player_rows_data = []
+            for p in players_rows:
+                weekly_cells = []
+                total_wins, total_losses = 0, 0
+
+                for wk in weeks:
+                    games_map = week_games_by_id[wk]
+                    numbers_map = week_game_numbers[wk]
+                    player_picks = [pk for pk in week_picks[wk] if pk["user_id"] == p["id"]]
+
+                    picks_nums, win_nums, loss_nums = [], [], []
+                    for pk in player_picks:
+                        g = games_map.get(pk["game_id"])
+                        if not g:
+                            continue
+                        nums = numbers_map.get(pk["game_id"], {})
+                        is_fav = pk["selected_team"] == g.get("favorite_team")
+                        num = nums.get("fav_num") if is_fav else nums.get("und_num")
+                        if num is None:
+                            continue
+                        picks_nums.append(num)
+                        if pk.get("result") == "win":
+                            win_nums.append(num)
+                        elif pk.get("result") == "loss":
+                            loss_nums.append(num)
+
+                    picks_nums.sort(); win_nums.sort(); loss_nums.sort()
+                    weekly_cells += [
+                        ",".join(str(n) for n in picks_nums),
+                        ",".join(str(n) for n in win_nums),
+                        ",".join(str(n) for n in loss_nums),
+                        len(win_nums),
+                        len(loss_nums),
+                    ]
+                    total_wins += len(win_nums)
+                    total_losses += len(loss_nums)
+
+                player_rows_data.append({
+                    "username": p["username"],
+                    "paid": bool(p.get("paid")),
+                    "weekly_cells": weekly_cells,
+                    "total_wins": total_wins,
+                    "total_losses": total_losses,
+                })
+
+            # Competition ranking -- ties share a place, same as your RANK() formula
+            for row in player_rows_data:
+                row["place"] = sum(1 for r in player_rows_data if r["total_wins"] > row["total_wins"]) + 1
+            player_rows_data.sort(key=lambda r: (-r["total_wins"], r["username"]))
+
+            for row in player_rows_data:
+                ws.append([row["username"]] + row["weekly_cells"] + [row["total_wins"], row["total_losses"], row["place"]])
+                r_idx = ws.max_row
+                name_cell = ws.cell(row=r_idx, column=1)
+                name_cell.font = Font(name="Arial", bold=True)
+                paid_color = "FF00B050" if row["paid"] else "FFFF0000"
+                name_cell.fill = PatternFill(start_color=paid_color, end_color=paid_color, fill_type="solid")
+                for col_idx in range(2, len(headers) + 1):
+                    ws.cell(row=r_idx, column=col_idx).font = Font(name="Arial")
+
+            for col_idx in range(1, len(headers) + 1):
+                col_letter = get_column_letter(col_idx)
+                longest = max(
+                    [len(str(headers[col_idx - 1]))] +
+                    [len(str(ws.cell(row=r, column=col_idx).value or "")) for r in range(2, ws.max_row + 1)]
+                )
+                ws.column_dimensions[col_letter].width = min(longest + 3, 22)
+
+            ws.freeze_panes = "B2"
+
+            buffer = io.BytesIO()
+            wb.save(buffer)
+            buffer.seek(0)
+            return buffer
+
+        tracker_buffer = build_season_tracker_workbook(players_for_export, graded_weeks)
+        st.download_button(
+            "⬇️ Download Season Tracker (.xlsx)",
+            data=tracker_buffer,
+            file_name="season_tracker.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+st.write("---")
+
+# 13. EXPORT WEEK + SEASON RESULTS (what you'd send out to the group)
+st.subheader("📤 Export Week + Season Results")
+st.caption("What you'd send out after grading a week: that week's individual results, plus updated season standings.")
+
+results_week = st.number_input("Week to report on:", min_value=1, max_value=18, value=int(active_week), step=1, key="results_export_week")
+
+if results_week not in graded_weeks:
+    st.info(f"Week {int(results_week)} hasn't been graded yet -- use 'Grade Finished Games' above first.")
+else:
+    players_for_results = supabase.table("players").select("*").order("username").execute().data
+    if not players_for_results:
+        st.info("No players found yet.")
+    else:
+        def build_week_and_season_workbook(players_rows, target_week, all_graded_weeks):
+            wb = Workbook()
+
+            def style_header(ws, headers):
+                ws.append(headers)
+                for col_idx in range(1, len(headers) + 1):
+                    cell = ws.cell(row=1, column=col_idx)
+                    cell.font = Font(name="Arial", bold=True, color="FFFFFF")
+                    cell.fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+                    cell.alignment = Alignment(horizontal="center")
+
+            def autosize(ws, headers):
+                for col_idx, header in enumerate(headers, start=1):
+                    col_letter = get_column_letter(col_idx)
+                    longest = max(
+                        [len(str(header))] +
+                        [len(str(ws.cell(row=r, column=col_idx).value or "")) for r in range(2, ws.max_row + 1)]
+                    )
+                    ws.column_dimensions[col_letter].width = min(longest + 3, 22)
+                ws.freeze_panes = "A2"
+
+            # --- Sheet 1: this week's individual results ---
+            ws1 = wb.active
+            ws1.title = f"Week {target_week} Results"[:31]
+
+            week_games = supabase.table("games").select("*").eq("week_number", target_week).execute().data
+            numbers_map = compute_game_numbers(week_games)
+            games_map = {g["game_id"]: g for g in week_games}
+            week_picks_rows = supabase.table("picks").select("*").eq("week_number", target_week).execute().data
+
+            headers1 = ["Player", "Picks", "Wins", "Loss", "W", "L"]
+            style_header(ws1, headers1)
+
+            week_rows_data = []
+            for p in players_rows:
+                player_picks = [pk for pk in week_picks_rows if pk["user_id"] == p["id"]]
+                if not player_picks:
+                    continue
+                picks_nums, win_nums, loss_nums = [], [], []
+                for pk in player_picks:
+                    g = games_map.get(pk["game_id"])
+                    if not g:
+                        continue
+                    nums = numbers_map.get(pk["game_id"], {})
+                    is_fav = pk["selected_team"] == g.get("favorite_team")
+                    num = nums.get("fav_num") if is_fav else nums.get("und_num")
+                    if num is None:
+                        continue
+                    picks_nums.append(num)
+                    if pk.get("result") == "win":
+                        win_nums.append(num)
+                    elif pk.get("result") == "loss":
+                        loss_nums.append(num)
+                picks_nums.sort(); win_nums.sort(); loss_nums.sort()
+                week_rows_data.append({
+                    "username": p["username"], "picks": picks_nums, "wins": win_nums,
+                    "losses": loss_nums, "w": len(win_nums), "l": len(loss_nums),
+                })
+
+            week_rows_data.sort(key=lambda r: (-r["w"], r["l"], r["username"]))
+            for r in week_rows_data:
+                ws1.append([
+                    r["username"], ",".join(map(str, r["picks"])), ",".join(map(str, r["wins"])),
+                    ",".join(map(str, r["losses"])), r["w"], r["l"],
+                ])
+                for col_idx in range(1, len(headers1) + 1):
+                    ws1.cell(row=ws1.max_row, column=col_idx).font = Font(name="Arial")
+
+            autosize(ws1, headers1)
+
+            # --- Sheet 2: season standings ---
+            ws2 = wb.create_sheet(title="Season Standings")
+            headers2 = ["Place", "Player", "Wins", "Losses", "Win %", "Paid"]
+            style_header(ws2, headers2)
+
+            season_totals = {}
+            for wk in all_graded_weeks:
+                picks_wk = supabase.table("picks").select("user_id, result").eq("week_number", wk).execute().data
+                for pk in picks_wk:
+                    uid = pk["user_id"]
+                    totals = season_totals.setdefault(uid, {"wins": 0, "losses": 0})
+                    if pk.get("result") == "win":
+                        totals["wins"] += 1
+                    elif pk.get("result") == "loss":
+                        totals["losses"] += 1
+
+            season_rows = []
+            for p in players_rows:
+                totals = season_totals.get(p["id"], {"wins": 0, "losses": 0})
+                wins, losses = totals["wins"], totals["losses"]
+                win_pct = round(wins / (wins + losses), 3) if (wins + losses) else 0.0
+                season_rows.append({
+                    "username": p["username"], "wins": wins, "losses": losses,
+                    "win_pct": win_pct, "paid": bool(p.get("paid")),
+                })
+
+            for row in season_rows:
+                row["place"] = sum(1 for r in season_rows if r["wins"] > row["wins"]) + 1
+            season_rows.sort(key=lambda r: (-r["wins"], r["losses"], r["username"]))
+
+            for row in season_rows:
+                ws2.append([row["place"], row["username"], row["wins"], row["losses"], row["win_pct"], "Yes" if row["paid"] else "No"])
+                r_idx = ws2.max_row
+                name_cell = ws2.cell(row=r_idx, column=2)
+                name_cell.font = Font(name="Arial", bold=True)
+                paid_color = "FF00B050" if row["paid"] else "FFFF0000"
+                name_cell.fill = PatternFill(start_color=paid_color, end_color=paid_color, fill_type="solid")
+                for col_idx in (1, 3, 4, 5, 6):
+                    ws2.cell(row=r_idx, column=col_idx).font = Font(name="Arial")
+
+            autosize(ws2, headers2)
+
+            buffer = io.BytesIO()
+            wb.save(buffer)
+            buffer.seek(0)
+            return buffer
+
+        results_buffer = build_week_and_season_workbook(players_for_results, int(results_week), graded_weeks)
+        st.download_button(
+            f"⬇️ Download Week {int(results_week)} + Season Results (.xlsx)",
+            data=results_buffer,
+            file_name=f"week_{int(results_week)}_and_season_results.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
