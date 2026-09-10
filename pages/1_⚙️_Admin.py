@@ -1272,7 +1272,7 @@ with tab_exports:
 
                 # --- Sheet 2: season standings ---
                 ws2 = wb.create_sheet(title="Season Standings")
-                headers2 = ["Place", "Player", "Wins", "Losses", "Win %", "Paid"]
+                headers2 = ["Player", "Wins", "Losses", "Place", "Paid"]
                 style_header(ws2, headers2)
 
                 season_totals = {}
@@ -1290,25 +1290,32 @@ with tab_exports:
                 for p in players_rows:
                     totals = season_totals.get(p["id"], {"wins": 0, "losses": 0})
                     wins, losses = totals["wins"], totals["losses"]
-                    win_pct = round(wins / (wins + losses), 3) if (wins + losses) else 0.0
                     season_rows.append({
                         "username": p["username"], "wins": wins, "losses": losses,
-                        "win_pct": win_pct, "paid": bool(p.get("paid")),
+                        "paid": bool(p.get("paid")),
                     })
 
                 for row in season_rows:
                     row["place"] = sum(1 for r in season_rows if r["wins"] > row["wins"]) + 1
                 season_rows.sort(key=lambda r: (-r["wins"], r["losses"], r["username"]))
 
+                medal_colors = {1: "FFD700", 2: "C0C0C0", 3: "CD7F32"}
+
                 for row in season_rows:
-                    ws2.append([row["place"], row["username"], row["wins"], row["losses"], row["win_pct"], "Yes" if row["paid"] else "No"])
+                    ws2.append([row["username"], row["wins"], row["losses"], row["place"], "Yes" if row["paid"] else "No"])
                     r_idx = ws2.max_row
-                    name_cell = ws2.cell(row=r_idx, column=2)
+                    name_cell = ws2.cell(row=r_idx, column=1)
                     name_cell.font = Font(name="Arial", bold=True)
                     paid_color = "FF00B050" if row["paid"] else "FFFF0000"
                     name_cell.fill = PatternFill(start_color=paid_color, end_color=paid_color, fill_type="solid")
-                    for col_idx in (1, 3, 4, 5, 6):
+                    for col_idx in (2, 3, 4, 5):
                         ws2.cell(row=r_idx, column=col_idx).font = Font(name="Arial")
+
+                    if row["place"] in medal_colors:
+                        place_cell = ws2.cell(row=r_idx, column=4)
+                        place_cell.font = Font(name="Arial", bold=True)
+                        place_color = medal_colors[row["place"]]
+                        place_cell.fill = PatternFill(start_color=place_color, end_color=place_color, fill_type="solid")
 
                 autosize(ws2, headers2)
 
