@@ -188,7 +188,8 @@ if not available_weeks:
     st.info("No games have been loaded yet. Check back once the admin sets up a week.")
     st.stop()
 
-CURRENT_WEEK = st.selectbox("Select Week:", available_weeks, index=0)
+CURRENT_WEEK = st.selectbox("Select Week:", available_weeks, index=0, key="app_selected_week")
+st.session_state["shared_selected_week"] = CURRENT_WEEK
 st.header(f"Week {CURRENT_WEEK} Master Slate")
 now = datetime.now(timezone.utc)
 EASTERN_TZ = ZoneInfo("America/New_York")
