@@ -31,12 +31,17 @@ try:
                 Losses=lambda r: (r == "loss").sum(),
             ).reset_index()
             standings["Win %"] = (standings["Wins"] / (standings["Wins"] + standings["Losses"])).round(3)
-            standings = standings.sort_values(["Win %", "Wins"], ascending=False).reset_index(drop=True)
-            standings.index = standings.index + 1
+
+            # Rank by total WINS (not win %) -- someone who skips a week shouldn't
+            # rank higher just for having fewer picks. Ties share the same place,
+            # same as "1-2-2-4" scoring: method="min" matches Excel's RANK().
+            standings["Place"] = standings["Wins"].rank(method="min", ascending=False).astype(int)
+            standings = standings.sort_values(["Wins", "Losses"], ascending=[False, True]).reset_index(drop=True)
 
             medals = {1: "🥇", 2: "🥈", 3: "🥉"}
-            standings.insert(0, "Rank", [medals.get(i, str(i)) for i in standings.index])
-            standings = standings.rename(columns={"username": "Player"})
+            standings["Rank"] = standings["Place"].map(lambda p: medals.get(p, str(p)))
+            standings = standings.drop(columns=["Place"]).rename(columns={"username": "Player"})
+            standings = standings[["Rank", "Player", "Wins", "Losses", "Win %"]]
 
             st.subheader("🔥 Current Standings")
             st.dataframe(standings, use_container_width=True, hide_index=True)
