@@ -188,8 +188,26 @@ if not available_weeks:
     st.info("No games have been loaded yet. Check back once the admin sets up a week.")
     st.stop()
 
-CURRENT_WEEK = st.selectbox("Select Week:", available_weeks, index=0, key="app_selected_week")
-st.session_state["shared_selected_week"] = CURRENT_WEEK
+# Bidirectional week sync with the Admin page, via a single shared "global_week"
+# value. Either page can change it; whichever page didn't just change it locally
+# adopts the new value on its next run.
+if "global_week" not in st.session_state:
+    st.session_state["global_week"] = available_weeks[0]
+
+if st.session_state.get("_app_last_seen_global") != st.session_state["global_week"]:
+    if st.session_state["global_week"] in available_weeks:
+        st.session_state["app_selected_week"] = st.session_state["global_week"]
+    st.session_state["_app_last_seen_global"] = st.session_state["global_week"]
+
+if st.session_state.get("app_selected_week") not in available_weeks:
+    st.session_state["app_selected_week"] = available_weeks[0]
+
+CURRENT_WEEK = st.selectbox("Select Week:", available_weeks, key="app_selected_week")
+
+if CURRENT_WEEK != st.session_state["global_week"]:
+    st.session_state["global_week"] = CURRENT_WEEK
+    st.session_state["_app_last_seen_global"] = CURRENT_WEEK
+
 st.header(f"Week {CURRENT_WEEK} Master Slate")
 now = datetime.now(timezone.utc)
 EASTERN_TZ = ZoneInfo("America/New_York")
