@@ -194,6 +194,33 @@ def confirm_merge(info):
             st.session_state.pending_merge = None
             st.rerun()
 
+
+@st.dialog("⚠️ Delete This Player?")
+def confirm_delete_player(info):
+    detail = f"This will permanently delete **{info['name']}**"
+    if info["picks_count"]:
+        detail += f", along with **{info['picks_count']} pick(s)** across **{info['weeks_count']} week(s)**"
+    detail += ". This cannot be undone."
+    st.write(detail)
+
+    col_yes, col_no = st.columns(2)
+    with col_yes:
+        confirm_clicked = st.button("Yes, delete", type="primary", use_container_width=True)
+    with col_no:
+        cancel_clicked = st.button("Cancel", use_container_width=True)
+
+    if confirm_clicked:
+        try:
+            supabase.table("picks").delete().eq("user_id", info["player_id"]).execute()
+            supabase.table("players").delete().eq("id", info["player_id"]).execute()
+            st.session_state.pending_player_delete = None
+            st.rerun()
+        except Exception as e:
+            st.error(f"Database error: {e}")
+    elif cancel_clicked:
+        st.session_state.pending_player_delete = None
+        st.rerun()
+
 # 2. USER ACCESSIBILITY ROLE DATABASE CHECK
 if "user" not in st.session_state or not st.session_state.user:
     st.warning("Please log in on the home page first.")
@@ -894,6 +921,48 @@ with tab_players:
 
     st.write("---")
 
+    # 11a. BULK ADD PLAYERS WITHOUT ACCOUNTS
+    st.subheader("📋 Bulk Add Players")
+    st.caption("Paste one name per line to add several at once -- e.g. importing a whole roster from a spreadsheet.")
+
+    bulk_names_text = st.text_area(
+        "One player name per line:",
+        height=150,
+        key="bulk_player_names",
+        placeholder="Trent Y.\nDusty Y.\nJoe P.\nJake H.",
+    )
+
+    if st.button("Add All", key="bulk_add_players_btn"):
+        raw_names = [n.strip() for n in bulk_names_text.split("\n") if n.strip()]
+        if not raw_names:
+            st.error("Paste at least one name.")
+        else:
+            existing_players = supabase.table("players").select("username").execute().data
+            existing_usernames = {p["username"] for p in existing_players}
+
+            added, skipped = [], []
+            for name in raw_names:
+                if name in existing_usernames:
+                    skipped.append(name)
+                    continue
+                try:
+                    supabase.table("players").insert({
+                        "id": str(uuid.uuid4()),
+                        "username": name,
+                    }).execute()
+                    added.append(name)
+                    existing_usernames.add(name)  # guard against duplicate lines in the same paste
+                except Exception as e:
+                    st.error(f"Failed to add {name}: {e}")
+
+            if added:
+                st.success(f"Added {len(added)} player(s): {', '.join(added)}")
+            if skipped:
+                st.info(f"Skipped {len(skipped)} already-existing name(s): {', '.join(skipped)}")
+            st.rerun()
+
+    st.write("---")
+
     # 13. MERGE A MANUAL PLAYER INTO A REAL ACCOUNT
     st.subheader("🔀 Merge a Manual Player into a Real Account")
     st.caption("Once someone you added manually creates a real login, combine their pick history under the real account.")
@@ -966,6 +1035,33 @@ with tab_players:
                 st.success("Payment status updated.")
             except Exception as e:
                 st.error(f"Database error: {e}")
+
+    st.write("---")
+
+    # 15. DELETE A PLAYER
+    st.subheader("🗑️ Delete a Player")
+    st.caption("For a player added by mistake, a duplicate, or someone who's leaving the league entirely.")
+
+    players_for_delete = supabase.table("players").select("*").order("username").execute().data
+    if not players_for_delete:
+        st.info("No players found yet.")
+    else:
+        delete_player_options = {p["username"]: p["id"] for p in players_for_delete}
+        selected_delete_player = st.selectbox("Player to delete:", sorted(delete_player_options.keys()), key="delete_player_select")
+        selected_delete_id = delete_player_options[selected_delete_player]
+
+        if st.button(f"Delete {selected_delete_player}", key="delete_player_btn"):
+            picks_for_player = supabase.table("picks").select("week_number").eq("user_id", selected_delete_id).execute().data
+            st.session_state.pending_player_delete = {
+                "player_id": selected_delete_id,
+                "name": selected_delete_player,
+                "picks_count": len(picks_for_player),
+                "weeks_count": len({p["week_number"] for p in picks_for_player}),
+            }
+            st.rerun()
+
+    if st.session_state.get("pending_player_delete"):
+        confirm_delete_player(st.session_state.pending_player_delete)
 
     st.write("---")
 
@@ -1049,7 +1145,7 @@ with tab_exports:
 
     st.write("---")
 
-    # 15. EXPORT SEASON TRACKER
+    # 16. EXPORT SEASON TRACKER
     st.subheader("📥 Export Season Tracker (.xlsx)")
     st.caption("A running week-by-week win/loss breakdown for every player, in the same style as your old sheet.")
 
@@ -1185,7 +1281,7 @@ with tab_exports:
 
     st.write("---")
 
-    # 16. EXPORT WEEK + SEASON RESULTS (what you'd send out to the group)
+    # 17. EXPORT WEEK + SEASON RESULTS (what you'd send out to the group)
     st.subheader("📤 Export Week + Season Results")
     st.caption("What you'd send out after grading a week: that week's individual results, plus updated season standings.")
 
