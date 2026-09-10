@@ -221,6 +221,38 @@ def confirm_delete_player(info):
         st.session_state.pending_player_delete = None
         st.rerun()
 
+
+@st.dialog("✍️ Confirm Picks Submission")
+def confirm_manual_picks_save(info):
+    st.write(f"You are submitting picks for **{info['player']}** — **Week {info['week']}**.")
+    st.dataframe(info["preview_rows"], use_container_width=True, hide_index=True)
+
+    col_yes, col_no = st.columns(2)
+    with col_yes:
+        confirm_clicked = st.button("Yes, save", type="primary", use_container_width=True)
+    with col_no:
+        cancel_clicked = st.button("Cancel", use_container_width=True)
+
+    if confirm_clicked:
+        try:
+            supabase.table("picks").delete().eq("user_id", info["user_id"]).eq("week_number", info["week"]).execute()
+            for item in info["resolved"]:
+                supabase.table("picks").insert({
+                    "user_id": info["user_id"],
+                    "username": info["player"],
+                    "week_number": info["week"],
+                    "game_id": item["game_id"],
+                    "selected_team": item["team"],
+                    "spread_at_pick": item["spread"],
+                }).execute()
+            st.session_state.pending_manual_picks_save = None
+            st.rerun()
+        except Exception as e:
+            st.error(f"Database error: {e}")
+    elif cancel_clicked:
+        st.session_state.pending_manual_picks_save = None
+        st.rerun()
+
 # 2. USER ACCESSIBILITY ROLE DATABASE CHECK
 if "user" not in st.session_state or not st.session_state.user:
     st.warning("Please log in on the home page first.")
@@ -739,24 +771,33 @@ with tab_picks:
                     elif len(entered_numbers) != 7:
                         st.error(f"You entered {len(entered_numbers)} number(s) -- exactly 7 are required.")
                     else:
-                        try:
-                            supabase.table("picks").delete().eq("user_id", selected_manual_user_id).eq("week_number", manual_pick_week).execute()
-                            for n in entered_numbers:
-                                info = number_lookup[n]
-                                g = games_by_id_manual[info["game_id"]]
-                                supabase.table("picks").insert({
-                                    "user_id": selected_manual_user_id,
-                                    "username": selected_manual_player,
-                                    "week_number": manual_pick_week,
-                                    "game_id": info["game_id"],
-                                    "selected_team": info["team"],
-                                    "spread_at_pick": g.get("spread_value", ""),
-                                }).execute()
-                            picked_teams = ", ".join(f"#{n} {number_lookup[n]['team']}" for n in sorted(entered_numbers))
-                            st.success(f"Saved picks for {selected_manual_player}: {picked_teams}")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Database error: {e}")
+                        preview_rows = [
+                            {
+                                "#": n, "Team": number_lookup[n]["team"],
+                                "Matchup": games_by_id_manual[number_lookup[n]["game_id"]].get("display_text", ""),
+                                "Spread": games_by_id_manual[number_lookup[n]["game_id"]].get("spread_value", ""),
+                            }
+                            for n in sorted(entered_numbers)
+                        ]
+                        resolved = [
+                            {
+                                "game_id": number_lookup[n]["game_id"],
+                                "team": number_lookup[n]["team"],
+                                "spread": games_by_id_manual[number_lookup[n]["game_id"]].get("spread_value", ""),
+                            }
+                            for n in entered_numbers
+                        ]
+                        st.session_state.pending_manual_picks_save = {
+                            "week": manual_pick_week,
+                            "player": selected_manual_player,
+                            "user_id": selected_manual_user_id,
+                            "preview_rows": preview_rows,
+                            "resolved": resolved,
+                        }
+                        st.rerun()
+
+    if st.session_state.get("pending_manual_picks_save"):
+        confirm_manual_picks_save(st.session_state.pending_manual_picks_save)
 
     st.write("---")
 
