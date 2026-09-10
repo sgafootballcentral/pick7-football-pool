@@ -285,7 +285,18 @@ if not is_admin:
     st.stop()
 
 st.success("🔓 Commissioner Dashboard Unlocked!")
-active_week = st.number_input("Target Grouping Week Number (For Player Submissions):", min_value=1, max_value=18, value=1, step=1)
+
+# Follow the week selected on the main app page -- but only re-sync when that
+# value actually changes, so a manual override here isn't immediately overwritten.
+shared_week = st.session_state.get("shared_selected_week")
+if shared_week is not None and st.session_state.get("_last_synced_week") != shared_week:
+    st.session_state["active_week"] = shared_week
+    st.session_state["_last_synced_week"] = shared_week
+
+active_week = st.number_input(
+    "Target Grouping Week Number (For Player Submissions):",
+    min_value=1, max_value=18, value=st.session_state.get("active_week", 1), step=1, key="active_week",
+)
 
 
 tab_setup, tab_picks, tab_grading, tab_players, tab_exports = st.tabs([
