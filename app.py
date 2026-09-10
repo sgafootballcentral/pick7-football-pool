@@ -121,6 +121,14 @@ def confirm_resubmit(existing_picks_raw, new_picks, game_lookup):
             st.rerun()
 
 st.set_page_config(page_title="Football Pick-7 Pool", page_icon="🏈", layout="wide")
+
+# Reserve space for the sticky bar (defined later, once the week's picks are known)
+# right at the top of the page -- position:fixed always renders at the same screen
+# spot regardless of where in the code it's defined, so everything that follows
+# needs to be pushed down NOW, before the title/header/etc. render, or the fixed
+# bar will simply sit on top of them instead of the space reserved for it.
+st.markdown('<div style="margin-top: 8.5rem;"></div>', unsafe_allow_html=True)
+
 st.title("🏈 Pick 7 Against The Spread")
 
 # 2. Track user sessions
@@ -407,25 +415,28 @@ else:
     pct = min(current_picks_count / 7 * 100, 100)
 
     # CSS targets the container below by its Streamlit-assigned key class, making
-    # the WHOLE bar (ticker + button) stick to the top together. Background is
-    # fully opaque (no alpha channel) with a solid border and shadow specifically
-    # so scrolled team names never show through or overlap the bar's own text.
+    # the WHOLE bar (ticker + button) stick to the top together. !important and a
+    # solid fallback color make sure this background is never see-through, since
+    # a theme-variable-only background wasn't reliably reaching this element.
     st.markdown("""
         <style>
         div[class*="st-key-sticky_top_bar"] {
-            position: fixed;
+            position: fixed !important;
             top: 3.7rem;
             left: 0;
             right: 0;
             z-index: 9999;
-            background-color: var(--background-color);
-            opacity: 1;
             padding: 10px 20px 4px 20px;
-            border-bottom: 2px solid var(--secondary-background-color);
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+            border-bottom: 2px solid var(--secondary-background-color, #333);
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+        }
+        div[class*="st-key-sticky_top_bar"],
+        div[class*="st-key-sticky_top_bar"] > div {
+            background-color: var(--background-color, #0e1117) !important;
+            opacity: 1 !important;
         }
         .sticky-ticker-track {
-            background-color: var(--secondary-background-color);
+            background-color: var(--secondary-background-color, #333);
             border-radius: 6px;
             height: 8px;
             width: 100%;
@@ -434,11 +445,10 @@ else:
             overflow: hidden;
         }
         .sticky-ticker-fill {
-            background-color: var(--primary-color);
+            background-color: var(--primary-color, #ff4b4b);
             height: 100%;
         }
         </style>
-        <div style="margin-top: 8.5rem;"></div>
     """, unsafe_allow_html=True)
 
     with st.container(key="sticky_top_bar"):
