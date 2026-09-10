@@ -3,7 +3,7 @@ import pandas as pd
 import io
 from supabase import create_client, Client
 from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, PatternFill
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 
 SUPABASE_URL = st.secrets.get("SUPABASE_URL")
@@ -60,7 +60,10 @@ try:
             medals = {1: "🥇", 2: "🥈", 3: "🥉"}
             standings["Rank"] = standings["Place"].map(lambda p: medals.get(p, str(p)))
             standings = standings.rename(columns={"username": "Player"})
-            display_standings = standings[["Rank", "Player", "Wins", "Losses", "Win %"]]
+
+            display_standings = standings.copy()
+            display_standings["Overall Record"] = display_standings["Wins"].astype(str) + " | " + display_standings["Losses"].astype(str)
+            display_standings = display_standings[["Rank", "Player", "Overall Record", "Win %"]]
 
             st.subheader("🔥 Current Standings")
             st.dataframe(display_standings, use_container_width=True, hide_index=True)
@@ -73,13 +76,28 @@ try:
                     wb = Workbook()
                     ws = wb.active
                     ws.title = "Season Standings"
-                    headers = ["Player", "Wins", "Losses", "Rank", "Paid"]
-                    ws.append(headers)
-                    for col_idx in range(1, len(headers) + 1):
-                        cell = ws.cell(row=1, column=col_idx)
-                        cell.font = Font(name="Arial", bold=True, color="FFFFFF")
-                        cell.fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
-                        cell.alignment = Alignment(horizontal="center")
+
+                    header_font = Font(name="Arial", bold=True, color="FFFFFF")
+                    header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+                    center = Alignment(horizontal="center")
+                    divider = Border(right=Side(style="thin", color="000000"))
+
+                    # Row 1: Player and Place/Paid span two rows; Overall Record spans two columns.
+                    ws.cell(row=1, column=1, value="Player")
+                    ws.merge_cells(start_row=1, start_column=1, end_row=2, end_column=1)
+                    ws.cell(row=1, column=2, value="Overall Record")
+                    ws.merge_cells(start_row=1, start_column=2, end_row=1, end_column=3)
+                    ws.cell(row=1, column=4, value="Place")
+                    ws.merge_cells(start_row=1, start_column=4, end_row=2, end_column=4)
+                    ws.cell(row=1, column=5, value="Paid")
+                    ws.merge_cells(start_row=1, start_column=5, end_row=2, end_column=5)
+
+                    for row in (1, 2):
+                        for col_idx in range(1, 6):
+                            cell = ws.cell(row=row, column=col_idx)
+                            cell.font = header_font
+                            cell.fill = header_fill
+                            cell.alignment = center
 
                     medal_colors = {1: "FFD700", 2: "C0C0C0", 3: "CD7F32"}
 
@@ -93,6 +111,7 @@ try:
                         name_cell.fill = PatternFill(start_color=paid_color, end_color=paid_color, fill_type="solid")
                         for col_idx in (2, 3, 4, 5):
                             ws.cell(row=r_idx, column=col_idx).font = Font(name="Arial")
+                        ws.cell(row=r_idx, column=2).border = divider  # the vertical line between wins/losses
 
                         if int(row["Place"]) in medal_colors:
                             rank_cell = ws.cell(row=r_idx, column=4)
@@ -100,14 +119,15 @@ try:
                             rank_color = medal_colors[int(row["Place"])]
                             rank_cell.fill = PatternFill(start_color=rank_color, end_color=rank_color, fill_type="solid")
 
+                    headers = ["Player", "Overall Record", "", "Place", "Paid"]
                     for col_idx, header in enumerate(headers, start=1):
                         col_letter = get_column_letter(col_idx)
                         longest = max(
                             [len(str(header))] +
-                            [len(str(ws.cell(row=r, column=col_idx).value or "")) for r in range(2, ws.max_row + 1)]
+                            [len(str(ws.cell(row=r, column=col_idx).value or "")) for r in range(3, ws.max_row + 1)]
                         )
                         ws.column_dimensions[col_letter].width = min(longest + 3, 22)
-                    ws.freeze_panes = "A2"
+                    ws.freeze_panes = "A3"
 
                     buffer = io.BytesIO()
                     wb.save(buffer)
