@@ -327,7 +327,14 @@ else:
 
     current_picks_count = sum(1 for g in all_games if st.session_state.get(f"sel_{g['game_id']}", "-- Select --") != "-- Select --")
     ui_max_reached = current_picks_count >= 7
-    chosen_picks = []
+
+    # Computed immediately (not inside the game-row loop below) so the Lock In
+    # button can live in a sticky bar at the top, before any games have rendered.
+    chosen_picks = [
+        {"game_id": g["game_id"], "selected_team": st.session_state.get(f"sel_{g['game_id']}")}
+        for g in all_games
+        if st.session_state.get(f"sel_{g['game_id']}", "-- Select --") != "-- Select --"
+    ]
 
     # 🔢 PICK BY NUMBER -- fills in the same dropdowns below rather than duplicating
     # the submit logic, so locking, resubmit protection, etc. all just work.
@@ -398,41 +405,97 @@ else:
             show_number_picks_preview(st.session_state.pending_number_preview)
 
     pct = min(current_picks_count / 7 * 100, 100)
-    st.markdown(f"""
+
+    # CSS targets the container below by its Streamlit-assigned key class, making
+    # the WHOLE bar (ticker + button) stick to the top together. Background is
+    # fully opaque (no alpha channel) with a solid border and shadow specifically
+    # so scrolled team names never show through or overlap the bar's own text.
+    st.markdown("""
         <style>
-        .sticky-ticker {{
+        div[class*="st-key-sticky_top_bar"] {
             position: fixed;
             top: 3.7rem;
             left: 0;
             right: 0;
-            z-index: 999;
+            z-index: 9999;
             background-color: var(--background-color);
-            border-bottom: 1px solid var(--secondary-background-color);
-            padding: 8px 16px;
-            text-align: center;
-            font-weight: 600;
-        }}
-        .sticky-ticker-track {{
+            opacity: 1;
+            padding: 10px 20px 4px 20px;
+            border-bottom: 2px solid var(--secondary-background-color);
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+        }
+        .sticky-ticker-track {
             background-color: var(--secondary-background-color);
             border-radius: 6px;
             height: 8px;
             width: 100%;
             max-width: 500px;
-            margin: 6px auto 0 auto;
+            margin: 6px auto 10px auto;
             overflow: hidden;
-        }}
-        .sticky-ticker-fill {{
+        }
+        .sticky-ticker-fill {
             background-color: var(--primary-color);
             height: 100%;
-            width: {pct}%;
-        }}
+        }
         </style>
-        <div class="sticky-ticker">
-            🏈 {current_picks_count} of 7 games selected
-            <div class="sticky-ticker-track"><div class="sticky-ticker-fill"></div></div>
-        </div>
-        <div style="margin-top: 3.2rem;"></div>
+        <div style="margin-top: 8.5rem;"></div>
     """, unsafe_allow_html=True)
+
+    with st.container(key="sticky_top_bar"):
+        st.markdown(f"""
+            <div style="text-align: center; font-weight: 600;">
+                🏈 {current_picks_count} of 7 games selected
+                <div class="sticky-ticker-track">
+                    <div class="sticky-ticker-fill" style="width: {pct}%;"></div>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+
+        game_lookup = {g["game_id"]: g for g in all_games}
+        existing_picks = supabase.table("picks").select("*").eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute().data
+        already_submitted = bool(existing_picks)
+
+        if st.button("Lock In Weekly Picks", type="primary", use_container_width=True):
+            if len(chosen_picks) != 7:
+                st.error("Validation Error: You must pick exactly 7 games.")
+            elif already_submitted:
+                st.session_state.pending_resubmit = {
+                    "existing_picks": existing_picks,
+                    "new_picks": chosen_picks,
+                    "game_lookup": game_lookup,
+                }
+                st.rerun()
+            else:
+                try:
+                    supabase.table("picks").delete().eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute()
+                    for p in chosen_picks:
+                        supabase.table("picks").insert({
+                            "user_id": user.id, "username": username, "week_number": CURRENT_WEEK,
+                            "game_id": p["game_id"], "selected_team": p["selected_team"],
+                            "spread_at_pick": game_lookup.get(p["game_id"], {}).get("spread_value", ""),
+                        }).execute()
+                    st.success("Boom! Your 7 picks are saved securely.")
+
+                    recap_rows = [
+                        {
+                            "selected_team": p["selected_team"],
+                            "matchup": game_lookup.get(p["game_id"], {}).get("display_text", p["game_id"]),
+                            "spread": game_lookup.get(p["game_id"], {}).get("spread_value", ""),
+                        }
+                        for p in chosen_picks
+                    ]
+                    show_picks_recap(recap_rows)
+                except Exception as e:
+                    st.error(f"Database error: {e}")
+
+        # Checked every rerun (not just on the button click above) so the dialog's
+        # own Yes/Cancel buttons get a chance to actually be detected as clicked.
+        if st.session_state.get("pending_resubmit"):
+            confirm_resubmit(
+                st.session_state.pending_resubmit["existing_picks"],
+                st.session_state.pending_resubmit["new_picks"],
+                st.session_state.pending_resubmit["game_lookup"],
+            )
 
     grouped_by_date = {}
     for game in games_chronological:
@@ -496,54 +559,8 @@ else:
                         "Choose", options=["-- Select --", fav_team, und_team], 
                         key=f"sel_{game['game_id']}", label_visibility="collapsed", disabled=should_disable
                     )
-                    if pick != "-- Select --":
-                        chosen_picks.append({"game_id": game['game_id'], "selected_team": pick})
 
     st.divider()
     st.subheader("Your Submission Status")
     st.write(f"Total Games Selected: **{len(chosen_picks)} / 7**")
-
-    game_lookup = {g["game_id"]: g for g in all_games}
-    existing_picks = supabase.table("picks").select("*").eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute().data
-    already_submitted = bool(existing_picks)
-
-    if st.button("Lock In Weekly Picks", type="primary"):
-        if len(chosen_picks) != 7:
-            st.error(f"Validation Error: You must pick exactly 7 games.")
-        elif already_submitted:
-            st.session_state.pending_resubmit = {
-                "existing_picks": existing_picks,
-                "new_picks": chosen_picks,
-                "game_lookup": game_lookup,
-            }
-            st.rerun()
-        else:
-            try:
-                supabase.table("picks").delete().eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute()
-                for p in chosen_picks:
-                    supabase.table("picks").insert({
-                        "user_id": user.id, "username": username, "week_number": CURRENT_WEEK,
-                        "game_id": p["game_id"], "selected_team": p["selected_team"],
-                        "spread_at_pick": game_lookup.get(p["game_id"], {}).get("spread_value", ""),
-                    }).execute()
-                st.success("Boom! Your 7 picks are saved securely.")
-
-                recap_rows = [
-                    {
-                        "selected_team": p["selected_team"],
-                        "matchup": game_lookup.get(p["game_id"], {}).get("display_text", p["game_id"]),
-                        "spread": game_lookup.get(p["game_id"], {}).get("spread_value", ""),
-                    }
-                    for p in chosen_picks
-                ]
-                show_picks_recap(recap_rows)
-            except Exception as e: st.error(f"Database error: {e}")
-
-    # Checked every rerun (not just on the button click above) so the dialog's own
-    # Yes/Cancel buttons get a chance to actually be detected as clicked.
-    if st.session_state.get("pending_resubmit"):
-        confirm_resubmit(
-            st.session_state.pending_resubmit["existing_picks"],
-            st.session_state.pending_resubmit["new_picks"],
-            st.session_state.pending_resubmit["game_lookup"],
-        )
+    st.caption("Use the 'Lock In Weekly Picks' button at the top of the page to submit.")
