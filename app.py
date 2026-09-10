@@ -1,8 +1,12 @@
 import streamlit as st
 import requests
+import io
 from supabase import create_client, Client
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, PatternFill
+from openpyxl.utils import get_column_letter
 
 # 1. Connection and Secrets Verification
 SUPABASE_URL = st.secrets.get("SUPABASE_URL")
@@ -199,6 +203,76 @@ except Exception:
 if not all_games:
     st.info(f"No games loaded yet for Week {CURRENT_WEEK}.")
 else:
+    is_admin = False
+    try:
+        role_resp = supabase.table("league_users").select("role").eq("id", user.id).execute()
+        if role_resp.data and role_resp.data[0].get("role") == "admin":
+            is_admin = True
+    except Exception:
+        pass
+
+    if is_admin:
+        def build_slate_workbook_for_export(games_rows, week_number):
+            wb = Workbook()
+            ws = wb.active
+            ws.title = f"Week {week_number}"[:31]
+            headers = ["#", "FAVORITE", "#", "UNDERDOG", "SPREAD", "KICKOFF (ET)", "TV"]
+
+            ws.append([f"Week {week_number}"])
+            ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
+            title_cell = ws.cell(row=1, column=1)
+            title_cell.font = Font(name="Arial", bold=True, size=14)
+            title_cell.alignment = Alignment(horizontal="center")
+
+            ws.append(headers)
+            for col_idx in range(1, len(headers) + 1):
+                cell = ws.cell(row=2, column=col_idx)
+                cell.font = Font(name="Arial", bold=True, color="FFFFFF")
+                cell.fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+                cell.alignment = Alignment(horizontal="center")
+
+            sorted_for_export = sorted(games_rows, key=lambda g: g.get("kickoff_time") or "")
+            for i, g in enumerate(sorted_for_export, start=1):
+                fav_num, und_num = 2 * i - 1, 2 * i
+                fav_t = g.get("favorite_team", "")
+                und_t = g.get("underdog_team", "")
+                fav_t = f"{fav_t} (Home)" if g.get("favorite_team_home") else fav_t
+                und_t = f"{und_t} (Home)" if g.get("underdog_team_home") else und_t
+                spread_number = (g.get("spread_value") or "").rsplit(" ", 1)[-1]
+
+                kickoff_display = g.get("kickoff_time", "") or ""
+                try:
+                    kickoff_dt = datetime.fromisoformat(kickoff_display.replace("Z", "+00:00")).astimezone(ZoneInfo("America/New_York"))
+                    kickoff_display = kickoff_dt.strftime("%a %m/%d %I:%M %p ET").replace(" 0", " ")
+                except (ValueError, AttributeError):
+                    pass
+
+                ws.append([fav_num, fav_t, und_num, und_t, spread_number, kickoff_display, g.get("tv_network", "") or ""])
+                for col_idx in range(1, len(headers) + 1):
+                    ws.cell(row=i + 2, column=col_idx).font = Font(name="Arial")
+
+            for col_idx, header in enumerate(headers, start=1):
+                col_letter = get_column_letter(col_idx)
+                longest = max(
+                    [len(str(header))] +
+                    [len(str(ws.cell(row=r, column=col_idx).value or "")) for r in range(3, ws.max_row + 1)]
+                )
+                ws.column_dimensions[col_letter].width = longest + 4
+            ws.freeze_panes = "A3"
+
+            buffer = io.BytesIO()
+            wb.save(buffer)
+            buffer.seek(0)
+            return buffer
+
+        slate_buffer = build_slate_workbook_for_export(all_games, CURRENT_WEEK)
+        st.download_button(
+            f"⬇️ Export Week {CURRENT_WEEK} Slate (.xlsx)",
+            data=slate_buffer,
+            file_name=f"week_{CURRENT_WEEK}_slate.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
     all_games = sorted(all_games, key=lambda x: x.get("game_number") or 999)
     # Sort chronologically first so the day groups come out in calendar order below
     games_chronological = sorted(all_games, key=lambda g: g["kickoff_time"])
