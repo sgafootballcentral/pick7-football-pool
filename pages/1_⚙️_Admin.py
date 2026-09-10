@@ -597,19 +597,23 @@ with tab_picks:
         st.dataframe(counts, use_container_width=True, hide_index=True)
 
         players = sorted(df_picks_view["Player"].unique())
-        selected_player = st.selectbox("View picks for:", players, key="selected_picks_player")
-        player_df = df_picks_view[df_picks_view["Player"] == selected_player].sort_values("#")
-        st.dataframe(player_df.drop(columns=["Player"]), use_container_width=True, hide_index=True)
+        selected_player = st.selectbox("View picks for:", ["— Select a player —"] + players, key="selected_picks_player")
 
-        user_id_by_username = {p["username"]: p["user_id"] for p in picks_rows}
+        if selected_player == "— Select a player —":
+            st.info("Select a player above to see their picks.")
+        else:
+            player_df = df_picks_view[df_picks_view["Player"] == selected_player].sort_values("#")
+            st.dataframe(player_df.drop(columns=["Player"]), use_container_width=True, hide_index=True)
 
-        if st.button(f"🗑️ Remove {selected_player}'s picks for Week {view_week}", key="remove_picks_btn"):
-            st.session_state.pending_removal = {
-                "week": view_week,
-                "player": selected_player,
-                "user_id": user_id_by_username.get(selected_player),
-            }
-            st.rerun()
+            user_id_by_username = {p["username"]: p["user_id"] for p in picks_rows}
+
+            if st.button(f"🗑️ Remove {selected_player}'s picks for Week {view_week}", key="remove_picks_btn"):
+                st.session_state.pending_removal = {
+                    "week": view_week,
+                    "player": selected_player,
+                    "user_id": user_id_by_username.get(selected_player),
+                }
+                st.rerun()
 
     # Checked every rerun so the dialog's own buttons get a chance to be detected as clicked.
     if st.session_state.get("pending_removal"):
@@ -709,103 +713,108 @@ with tab_picks:
         st.info("No players found yet -- add one above, or have them log in once.")
     else:
         player_options = {p["username"]: p["id"] for p in players_roster}
-        selected_manual_player = st.selectbox("Player:", sorted(player_options.keys()), key="manual_pick_player")
-        selected_manual_user_id = player_options[selected_manual_player]
-
-        week_games_for_manual = supabase.table("games").select("*").eq("week_number", manual_pick_week).execute().data
-
-        if not week_games_for_manual:
-            st.info(f"No games loaded for Week {manual_pick_week} yet.")
+        selected_manual_player = st.selectbox(
+            "Player:", ["— Select a player —"] + sorted(player_options.keys()), key="manual_pick_player"
+        )
+        if selected_manual_player == "— Select a player —":
+            st.info("Select a player above to enter picks for them.")
         else:
-            numbers_map_manual = compute_game_numbers(week_games_for_manual)
-            games_by_id_manual = {g["game_id"]: g for g in week_games_for_manual}
+            selected_manual_user_id = player_options[selected_manual_player]
 
-            # number -> which game/team that number refers to, same odd/even scheme as the exports
-            number_lookup = {}
-            for g in week_games_for_manual:
-                nums = numbers_map_manual.get(g["game_id"], {})
-                number_lookup[nums["fav_num"]] = {"game_id": g["game_id"], "team": g.get("favorite_team", "")}
-                number_lookup[nums["und_num"]] = {"game_id": g["game_id"], "team": g.get("underdog_team", "")}
+            week_games_for_manual = supabase.table("games").select("*").eq("week_number", manual_pick_week).execute().data
 
-            with st.expander(f"See all game numbers for Week {manual_pick_week}"):
-                ref_rows = [
-                    {
-                        "#": num,
-                        "Team": info["team"],
-                        "Matchup": games_by_id_manual[info["game_id"]].get("display_text", ""),
-                        "Spread": games_by_id_manual[info["game_id"]].get("spread_value", ""),
-                    }
-                    for num, info in sorted(number_lookup.items())
-                ]
-                st.dataframe(ref_rows, use_container_width=True, hide_index=True)
+            if not week_games_for_manual:
+                st.info(f"No games loaded for Week {manual_pick_week} yet.")
+            else:
+                numbers_map_manual = compute_game_numbers(week_games_for_manual)
+                games_by_id_manual = {g["game_id"]: g for g in week_games_for_manual}
 
-            existing_manual_picks = supabase.table("picks").select("*") \
-                .eq("user_id", selected_manual_user_id).eq("week_number", manual_pick_week).execute().data
+                # number -> which game/team that number refers to, same odd/even scheme as the exports
+                number_lookup = {}
+                for g in week_games_for_manual:
+                    nums = numbers_map_manual.get(g["game_id"], {})
+                    number_lookup[nums["fav_num"]] = {"game_id": g["game_id"], "team": g.get("favorite_team", "")}
+                    number_lookup[nums["und_num"]] = {"game_id": g["game_id"], "team": g.get("underdog_team", "")}
 
-            existing_numbers = []
-            for pk in existing_manual_picks:
-                g = games_by_id_manual.get(pk["game_id"])
-                if not g:
-                    continue
-                nums = numbers_map_manual.get(pk["game_id"], {})
-                is_fav = pk["selected_team"] == g.get("favorite_team")
-                num = nums.get("fav_num") if is_fav else nums.get("und_num")
-                if num is not None:
-                    existing_numbers.append(num)
-            existing_numbers.sort()
-
-            if existing_manual_picks:
-                st.caption(f"{selected_manual_player} already has {len(existing_manual_picks)} pick(s) on file for Week {manual_pick_week} -- pre-filled below.")
-
-            numbers_input = st.text_input(
-                "Enter their 7 picks by number, comma-separated (e.g. 3,5,11,13,41,45,144):",
-                value=",".join(str(n) for n in existing_numbers),
-                key="manual_pick_numbers_input",
-            )
-
-            if st.button(f"Save Picks for {selected_manual_player}", type="primary", key="save_manual_picks"):
-                raw_parts = [p.strip() for p in numbers_input.split(",") if p.strip()]
-                try:
-                    entered_numbers = [int(p) for p in raw_parts]
-                except ValueError:
-                    entered_numbers = None
-                    st.error("Please enter numbers only, separated by commas.")
-
-                if entered_numbers is not None:
-                    invalid_numbers = sorted({n for n in entered_numbers if n not in number_lookup})
-                    duplicate_numbers = sorted({n for n in entered_numbers if entered_numbers.count(n) > 1})
-
-                    if invalid_numbers:
-                        st.error(f"These numbers don't match any game this week: {invalid_numbers}")
-                    elif duplicate_numbers:
-                        st.error(f"These numbers were entered more than once: {duplicate_numbers}")
-                    elif len(entered_numbers) != 7:
-                        st.error(f"You entered {len(entered_numbers)} number(s) -- exactly 7 are required.")
-                    else:
-                        preview_rows = [
-                            {
-                                "#": n, "Team": number_lookup[n]["team"],
-                                "Matchup": games_by_id_manual[number_lookup[n]["game_id"]].get("display_text", ""),
-                                "Spread": games_by_id_manual[number_lookup[n]["game_id"]].get("spread_value", ""),
-                            }
-                            for n in sorted(entered_numbers)
-                        ]
-                        resolved = [
-                            {
-                                "game_id": number_lookup[n]["game_id"],
-                                "team": number_lookup[n]["team"],
-                                "spread": games_by_id_manual[number_lookup[n]["game_id"]].get("spread_value", ""),
-                            }
-                            for n in entered_numbers
-                        ]
-                        st.session_state.pending_manual_picks_save = {
-                            "week": manual_pick_week,
-                            "player": selected_manual_player,
-                            "user_id": selected_manual_user_id,
-                            "preview_rows": preview_rows,
-                            "resolved": resolved,
+                with st.expander(f"See all game numbers for Week {manual_pick_week}"):
+                    ref_rows = [
+                        {
+                            "#": num,
+                            "Team": info["team"],
+                            "Matchup": games_by_id_manual[info["game_id"]].get("display_text", ""),
+                            "Spread": games_by_id_manual[info["game_id"]].get("spread_value", ""),
                         }
-                        st.rerun()
+                        for num, info in sorted(number_lookup.items())
+                    ]
+                    st.dataframe(ref_rows, use_container_width=True, hide_index=True)
+
+                existing_manual_picks = supabase.table("picks").select("*") \
+                    .eq("user_id", selected_manual_user_id).eq("week_number", manual_pick_week).execute().data
+
+                existing_numbers = []
+                for pk in existing_manual_picks:
+                    g = games_by_id_manual.get(pk["game_id"])
+                    if not g:
+                        continue
+                    nums = numbers_map_manual.get(pk["game_id"], {})
+                    is_fav = pk["selected_team"] == g.get("favorite_team")
+                    num = nums.get("fav_num") if is_fav else nums.get("und_num")
+                    if num is not None:
+                        existing_numbers.append(num)
+                existing_numbers.sort()
+
+                if existing_manual_picks:
+                    st.caption(f"{selected_manual_player} already has {len(existing_manual_picks)} pick(s) on file for Week {manual_pick_week} -- pre-filled below.")
+
+                numbers_input = st.text_input(
+                    "Enter their 7 picks by number, comma-separated (e.g. 3,5,11,13,41,45,144):",
+                    value=",".join(str(n) for n in existing_numbers),
+                    key="manual_pick_numbers_input",
+                )
+
+                if st.button(f"Save Picks for {selected_manual_player}", type="primary", key="save_manual_picks"):
+                    raw_parts = [p.strip() for p in numbers_input.split(",") if p.strip()]
+                    try:
+                        entered_numbers = [int(p) for p in raw_parts]
+                    except ValueError:
+                        entered_numbers = None
+                        st.error("Please enter numbers only, separated by commas.")
+
+                    if entered_numbers is not None:
+                        invalid_numbers = sorted({n for n in entered_numbers if n not in number_lookup})
+                        duplicate_numbers = sorted({n for n in entered_numbers if entered_numbers.count(n) > 1})
+
+                        if invalid_numbers:
+                            st.error(f"These numbers don't match any game this week: {invalid_numbers}")
+                        elif duplicate_numbers:
+                            st.error(f"These numbers were entered more than once: {duplicate_numbers}")
+                        elif len(entered_numbers) != 7:
+                            st.error(f"You entered {len(entered_numbers)} number(s) -- exactly 7 are required.")
+                        else:
+                            preview_rows = [
+                                {
+                                    "#": n, "Team": number_lookup[n]["team"],
+                                    "Matchup": games_by_id_manual[number_lookup[n]["game_id"]].get("display_text", ""),
+                                    "Spread": games_by_id_manual[number_lookup[n]["game_id"]].get("spread_value", ""),
+                                }
+                                for n in sorted(entered_numbers)
+                            ]
+                            resolved = [
+                                {
+                                    "game_id": number_lookup[n]["game_id"],
+                                    "team": number_lookup[n]["team"],
+                                    "spread": games_by_id_manual[number_lookup[n]["game_id"]].get("spread_value", ""),
+                                }
+                                for n in entered_numbers
+                            ]
+                            st.session_state.pending_manual_picks_save = {
+                                "week": manual_pick_week,
+                                "player": selected_manual_player,
+                                "user_id": selected_manual_user_id,
+                                "preview_rows": preview_rows,
+                                "resolved": resolved,
+                            }
+                            st.rerun()
 
     if st.session_state.get("pending_manual_picks_save"):
         confirm_manual_picks_save(st.session_state.pending_manual_picks_save)
@@ -1026,12 +1035,16 @@ with tab_players:
         merge_options = {p["username"]: p["id"] for p in merge_players_roster}
         col_from, col_to = st.columns(2)
         with col_from:
-            merge_from_name = st.selectbox("Merge FROM (the manual entry):", sorted(merge_options.keys()), key="merge_from")
+            merge_from_name = st.selectbox(
+                "Merge FROM (the manual entry):", ["— Select a player —"] + sorted(merge_options.keys()), key="merge_from"
+            )
         with col_to:
-            to_choices = [n for n in sorted(merge_options.keys()) if n != merge_from_name]
+            to_choices = ["— Select a player —"] + [n for n in sorted(merge_options.keys()) if n != merge_from_name]
             merge_to_name = st.selectbox("Merge INTO (the real account):", to_choices, key="merge_to")
 
-        if st.button("Merge Players", type="primary", key="merge_players_btn"):
+        if merge_from_name == "— Select a player —" or merge_to_name == "— Select a player —":
+            st.info("Select both a FROM and an INTO player above to merge.")
+        elif st.button("Merge Players", type="primary", key="merge_players_btn"):
             from_id = merge_options[merge_from_name]
             to_id = merge_options[merge_to_name]
 
@@ -1099,18 +1112,24 @@ with tab_players:
         st.info("No players found yet.")
     else:
         delete_player_options = {p["username"]: p["id"] for p in players_for_delete}
-        selected_delete_player = st.selectbox("Player to delete:", sorted(delete_player_options.keys()), key="delete_player_select")
-        selected_delete_id = delete_player_options[selected_delete_player]
+        selected_delete_player = st.selectbox(
+            "Player to delete:", ["— Select a player —"] + sorted(delete_player_options.keys()), key="delete_player_select"
+        )
 
-        if st.button(f"Delete {selected_delete_player}", key="delete_player_btn"):
-            picks_for_player = supabase.table("picks").select("week_number").eq("user_id", selected_delete_id).execute().data
-            st.session_state.pending_player_delete = {
-                "player_id": selected_delete_id,
-                "name": selected_delete_player,
-                "picks_count": len(picks_for_player),
-                "weeks_count": len({p["week_number"] for p in picks_for_player}),
-            }
-            st.rerun()
+        if selected_delete_player == "— Select a player —":
+            st.info("Select a player above to delete them.")
+        else:
+            selected_delete_id = delete_player_options[selected_delete_player]
+
+            if st.button(f"Delete {selected_delete_player}", key="delete_player_btn"):
+                picks_for_player = supabase.table("picks").select("week_number").eq("user_id", selected_delete_id).execute().data
+                st.session_state.pending_player_delete = {
+                    "player_id": selected_delete_id,
+                    "name": selected_delete_player,
+                    "picks_count": len(picks_for_player),
+                    "weeks_count": len({p["week_number"] for p in picks_for_player}),
+                }
+                st.rerun()
 
     if st.session_state.get("pending_player_delete"):
         confirm_delete_player(st.session_state.pending_player_delete)
