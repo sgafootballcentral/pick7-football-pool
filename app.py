@@ -108,6 +108,23 @@ if not st.session_state.user:
                 st.session_state.refresh_token = res.session.refresh_token
                 st.rerun()
             except Exception: st.error("Login failed. Check entries.")
+    with tab2:
+        signup_email = st.text_input("Email", key="s_email")
+        signup_pass = st.text_input("Password", type="password", key="s_pass")
+        signup_username = st.text_input("Display name", key="s_username")
+        if st.button("Sign Up", use_container_width=True):
+            if not signup_username.strip():
+                st.error("Please enter a display name.")
+            else:
+                try:
+                    supabase.auth.sign_up({
+                        "email": signup_email,
+                        "password": signup_pass,
+                        "options": {"data": {"username": signup_username.strip()}},
+                    })
+                    st.success("Account created! If your league requires email confirmation, check your inbox, then log in on the other tab.")
+                except Exception as e:
+                    st.error(f"Sign up failed: {e}")
     st.stop()
 
 # --- Authenticated User Area Hub ---
