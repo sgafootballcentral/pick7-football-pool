@@ -434,9 +434,10 @@ st.subheader("📋 Submitted Picks")
 view_week = st.number_input("Week to view picks for:", min_value=1, max_value=18, value=int(active_week), step=1, key="view_week_picks")
 
 picks_rows = supabase.table("picks").select("*").eq("week_number", view_week).execute().data
-games_rows = supabase.table("games").select("game_id, display_text, favorite_team, underdog_team, spread_value") \
+games_rows = supabase.table("games").select("game_id, display_text, favorite_team, underdog_team, spread_value, kickoff_time") \
     .eq("week_number", view_week).execute().data
 game_lookup = {g["game_id"]: g for g in games_rows}
+pick_numbers_map = compute_game_numbers(games_rows)
 
 if not picks_rows:
     st.info(f"No picks submitted yet for Week {view_week}.")
@@ -444,8 +445,12 @@ else:
     display_rows = []
     for p in picks_rows:
         g = game_lookup.get(p["game_id"], {})
+        nums = pick_numbers_map.get(p["game_id"], {})
+        is_fav = p.get("selected_team") == g.get("favorite_team")
+        pick_num = nums.get("fav_num") if is_fav else nums.get("und_num")
         display_rows.append({
             "Player": p.get("username", "Unknown"),
+            "#": pick_num,
             "Matchup": g.get("display_text", p["game_id"]),
             "Pick": p.get("selected_team"),
             "Spread": g.get("spread_value", ""),
@@ -458,7 +463,7 @@ else:
 
     players = sorted(df_picks_view["Player"].unique())
     selected_player = st.selectbox("View picks for:", players, key="selected_picks_player")
-    player_df = df_picks_view[df_picks_view["Player"] == selected_player].sort_values("Matchup")
+    player_df = df_picks_view[df_picks_view["Player"] == selected_player].sort_values("#")
     st.dataframe(player_df.drop(columns=["Player"]), use_container_width=True, hide_index=True)
 
     user_id_by_username = {p["username"]: p["user_id"] for p in picks_rows}
