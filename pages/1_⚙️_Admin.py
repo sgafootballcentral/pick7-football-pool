@@ -71,6 +71,20 @@ def colored_picks_richtext(picks_nums, win_nums, loss_nums):
     return CellRichText(blocks)
 
 
+def section_week_selector(key_prefix, master_week, label="Week:"):
+    """A per-section week picker that follows the master 'Target Grouping Week
+    Number' above by default. Checking the override box is the deliberate
+    confirmation step to pick a different week just for this one section."""
+    override = st.checkbox(
+        f"Use a different week for this section (currently following Week {int(master_week)})",
+        key=f"{key_prefix}_override",
+    )
+    if override:
+        return st.number_input(label, min_value=1, max_value=18, value=int(master_week), step=1, key=f"{key_prefix}_week_value")
+    st.caption(f"Following the master week selector above: **Week {int(master_week)}**")
+    return int(master_week)
+
+
 @st.dialog("⚠️ Confirm Removal")
 def confirm_removal(info):
     st.write(f"Remove **{info['player']}**'s picks for **Week {info['week']}**? This cannot be undone.")
@@ -392,9 +406,9 @@ with tab_setup:
     st.subheader("➕ Add a Game Manually")
     st.caption("For games ESPN doesn't have, or a line you want to set yourself.")
 
-    with st.form("manual_add_game_form"):
-        manual_week = st.number_input("Week number:", min_value=1, max_value=18, value=int(active_week), step=1, key="manual_week")
+    manual_week = section_week_selector("manual_week", active_week, "Week number:")
 
+    with st.form("manual_add_game_form"):
         col1, col2 = st.columns(2)
         with col1:
             manual_fav_team = st.text_input("Favorite team name")
@@ -459,7 +473,7 @@ with tab_setup:
 
     # 10. DELETE WEEK'S SLATE
     st.subheader("🗑️ Delete Week's Slate")
-    delete_week_num = st.number_input("Week to delete:", min_value=1, max_value=18, value=int(active_week), step=1, key="delete_week")
+    delete_week_num = section_week_selector("delete_week", active_week, "Week to delete:")
 
     if st.button("Delete This Week's Games", key="delete_week_btn"):
         games_for_delete = supabase.table("games").select("id").eq("week_number", delete_week_num).execute().data
@@ -482,7 +496,7 @@ with tab_setup:
 with tab_picks:
     # 6. VIEW SUBMITTED PICKS
     st.subheader("📋 Submitted Picks")
-    view_week = st.number_input("Week to view picks for:", min_value=1, max_value=18, value=int(active_week), step=1, key="view_week_picks")
+    view_week = section_week_selector("view_week_picks", active_week, "Week to view picks for:")
 
     picks_rows = supabase.table("picks").select("*").eq("week_number", view_week).execute().data
     games_rows = supabase.table("games").select("game_id, display_text, favorite_team, underdog_team, spread_value, kickoff_time") \
@@ -537,7 +551,7 @@ with tab_picks:
     st.subheader("📤 Export Everyone's Picks")
     st.caption("The list you'd send out Saturday morning, before any games are graded -- just names and pick numbers.")
 
-    picks_export_week = st.number_input("Week:", min_value=1, max_value=18, value=int(active_week), step=1, key="picks_export_week")
+    picks_export_week = section_week_selector("picks_export_week", active_week)
 
     picks_export_games = supabase.table("games").select("*").eq("week_number", picks_export_week).execute().data
     picks_export_picks = supabase.table("picks").select("*").eq("week_number", picks_export_week).execute().data
@@ -618,7 +632,7 @@ with tab_picks:
     st.subheader("✍️ Manually Enter Picks for a Player")
     st.caption("For anyone who sent you picks by text instead of using the app -- enter the numbers they gave you.")
 
-    manual_pick_week = st.number_input("Week:", min_value=1, max_value=18, value=int(active_week), step=1, key="manual_pick_week")
+    manual_pick_week = section_week_selector("manual_pick_week", active_week)
 
     players_roster = supabase.table("players").select("*").execute().data
     if not players_roster:
@@ -723,7 +737,7 @@ with tab_picks:
 with tab_grading:
     # 8. GRADE FINISHED GAMES
     st.subheader("🏁 Grade Finished Games")
-    grade_week_num = st.number_input("Week to grade:", min_value=1, max_value=18, value=int(active_week), step=1, key="grade_week")
+    grade_week_num = section_week_selector("grade_week", active_week, "Week to grade:")
 
     if st.button("🔄 Refresh Scores & Grade", type="primary"):
         games_in_week = supabase.table("games").select("*").eq("week_number", grade_week_num).execute().data
@@ -959,7 +973,7 @@ with tab_players:
 with tab_exports:
     # 9. EXPORT SLATE TO EXCEL
     st.subheader("📊 Export Slate to Excel")
-    export_week = st.number_input("Week to export:", min_value=1, max_value=18, value=int(active_week), step=1, key="export_week")
+    export_week = section_week_selector("export_week", active_week, "Week to export:")
 
     export_games = supabase.table("games").select("*").eq("week_number", export_week).execute().data
 
@@ -1175,7 +1189,7 @@ with tab_exports:
     st.subheader("📤 Export Week + Season Results")
     st.caption("What you'd send out after grading a week: that week's individual results, plus updated season standings.")
 
-    results_week = st.number_input("Week to report on:", min_value=1, max_value=18, value=int(active_week), step=1, key="results_export_week")
+    results_week = section_week_selector("results_export_week", active_week, "Week to report on:")
 
     if results_week not in graded_weeks:
         st.info(f"Week {int(results_week)} hasn't been graded yet -- use 'Grade Finished Games' above first.")
