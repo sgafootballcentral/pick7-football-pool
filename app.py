@@ -131,9 +131,11 @@ if "user" not in st.session_state:
 if not st.session_state.user:
     tab1, tab2 = st.tabs(["Log In", "Sign Up"])
     with tab1:
-        login_email = st.text_input("Email", key="l_email")
-        login_pass = st.text_input("Password", type="password", key="l_pass")
-        if st.button("Log In", use_container_width=True):
+        with st.form("login_form"):
+            login_email = st.text_input("Email", key="l_email")
+            login_pass = st.text_input("Password", type="password", key="l_pass")
+            login_submitted = st.form_submit_button("Log In", use_container_width=True)
+        if login_submitted:
             try:
                 res = supabase.auth.sign_in_with_password({"email": login_email, "password": login_pass})
                 st.session_state.user = res.user
@@ -142,10 +144,12 @@ if not st.session_state.user:
                 st.rerun()
             except Exception: st.error("Login failed. Check entries.")
     with tab2:
-        signup_email = st.text_input("Email", key="s_email")
-        signup_pass = st.text_input("Password", type="password", key="s_pass")
-        signup_username = st.text_input("Display name", key="s_username")
-        if st.button("Sign Up", use_container_width=True):
+        with st.form("signup_form"):
+            signup_email = st.text_input("Email", key="s_email")
+            signup_pass = st.text_input("Password", type="password", key="s_pass")
+            signup_username = st.text_input("Display name", key="s_username")
+            signup_submitted = st.form_submit_button("Sign Up", use_container_width=True)
+        if signup_submitted:
             if not signup_username.strip():
                 st.error("Please enter a display name.")
             else:
