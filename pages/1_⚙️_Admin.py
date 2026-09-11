@@ -584,6 +584,24 @@ with tab_picks:
     game_lookup = {g["game_id"]: g for g in games_rows}
     pick_numbers_map = compute_game_numbers(games_rows)
 
+    all_players_rows = supabase.table("players").select("username").execute().data
+    total_players = len(all_players_rows)
+
+    picks_per_username = {}
+    for p in picks_rows:
+        uname = p.get("username", "Unknown")
+        picks_per_username[uname] = picks_per_username.get(uname, 0) + 1
+
+    submitted_count = len(picks_per_username)
+    complete_count = sum(1 for n in picks_per_username.values() if n == 7)
+    not_started_count = total_players - submitted_count
+
+    col_total, col_submitted, col_complete, col_not_started = st.columns(4)
+    col_total.metric("Total Players", total_players)
+    col_submitted.metric("Submitted (any)", submitted_count)
+    col_complete.metric("Complete (7/7)", complete_count)
+    col_not_started.metric("Not Started", not_started_count)
+
     if not picks_rows:
         st.info(f"No picks submitted yet for Week {view_week}.")
     else:
