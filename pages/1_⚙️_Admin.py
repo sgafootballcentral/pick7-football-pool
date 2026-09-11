@@ -602,6 +602,23 @@ with tab_picks:
     col_complete.metric("Complete (7/7)", complete_count)
     col_not_started.metric("Not Started", not_started_count)
 
+    def status_for(n):
+        if n == 0:
+            return "❌ Not Started"
+        if n == 7:
+            return "✅ Complete"
+        return f"⏳ {n}/7"
+
+    roster_status = pd.DataFrame([
+        {
+            "Player": p["username"],
+            "Picks Submitted": picks_per_username.get(p["username"], 0),
+            "Status": status_for(picks_per_username.get(p["username"], 0)),
+        }
+        for p in all_players_rows
+    ]).sort_values("Player").reset_index(drop=True)
+    st.dataframe(roster_status, use_container_width=True, hide_index=True)
+
     if not picks_rows:
         st.info(f"No picks submitted yet for Week {view_week}.")
     else:
@@ -619,10 +636,6 @@ with tab_picks:
                 "Spread": g.get("spread_value", ""),
             })
         df_picks_view = pd.DataFrame(display_rows)
-
-        counts = df_picks_view.groupby("Player").size().reset_index(name="Picks Submitted")
-        counts["Status"] = counts["Picks Submitted"].apply(lambda n: "✅ Complete" if n == 7 else f"⏳ {n}/7")
-        st.dataframe(counts, use_container_width=True, hide_index=True)
 
         players = sorted(df_picks_view["Player"].unique())
         selected_player = st.selectbox("View picks for:", ["— Select a player —"] + players, key="selected_picks_player")
