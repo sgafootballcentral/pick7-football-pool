@@ -216,41 +216,84 @@ st.header(f"Week {CURRENT_WEEK} Master Slate")
 now = datetime.now(timezone.utc)
 EASTERN_TZ = ZoneInfo("America/New_York")
 
-# 4. 🌐 LIVE SCOREBOARD FEED FROM THE INTERNET
-espn_scores = {}
-try:
-    url = "https://espn.com"
-    response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}).json()
-    for event in response.get("events", []):
-        g_id = f"espn_{event.get('id')}"
-        status_info = event.get("status", {})
-        state = status_info.get("type", {}).get("state", "scheduled")
-        detail_clock = status_info.get("type", {}).get("detail", "")
-        
-        competitors = event.get("competitions", [{}]).get("competitors", [])
-        home_node = next((c for c in competitors if c.get("homeAway") == "home"), competitors)
-        away_node = next((c for c in competitors if c.get("homeAway") == "away"), competitors)
-        
-        # Safely parse the live game-line odds string directly from the data wire
-        odds_node = event.get("competitions", [{}])[0].get("odds", [{}])
-        odds_line = odds_node[0].get("details", "0.0") if isinstance(odds_node, list) and odds_node else "0.0"
-        odds_line = nudge_off_whole_number(odds_line)
-        
-        espn_scores[g_id] = {
-            "home_score": home_node.get("score", "0"),
-            "away_score": away_node.get("score", "0"),
-            "state": state,
-            "clock": detail_clock,
-            "line": odds_line
-        }
-except Exception:
-    pass
-
-# 5. Pull active week slate from database rows
+# 4. Pull active week slate from database rows
 try:
     all_games = supabase.table("games").select("*").eq("week_number", CURRENT_WEEK).execute().data
 except Exception:
     all_games = []
+
+# 5. 🌐 LIVE SCOREBOARD FEED FROM ESPN
+@st.cache_data(ttl=60)
+def fetch_live_scores(games_for_week):
+    """Pull live/final scores from ESPN for whatever leagues/dates this week's
+    games actually span. Cached for 60s so repeated page loads/reruns across
+    everyone viewing the app don't hammer ESPN's rate limits."""
+    scores = {}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": "https://www.espn.com/",
+        "Accept": "application/json",
+    }
+    league_url_map = {
+        "NFL": "https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
+        "CFB": "https://site.web.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard",
+    }
+
+    games_by_league = {}
+    for g in games_for_week:
+        games_by_league.setdefault(g.get("league"), []).append(g)
+
+    for league_name, league_games in games_by_league.items():
+        url = league_url_map.get(league_name)
+        if not url:
+            continue  # manually-added or historical-import games have no live ESPN source
+
+        kickoff_dates = []
+        for g in league_games:
+            try:
+                kickoff_dates.append(datetime.fromisoformat(g["kickoff_time"].replace("Z", "+00:00")))
+            except (ValueError, AttributeError, TypeError):
+                pass
+        if not kickoff_dates:
+            continue
+
+        params = {"limit": 1000, "dates": f"{min(kickoff_dates):%Y%m%d}-{max(kickoff_dates):%Y%m%d}"}
+        if league_name == "CFB":
+            params["groups"] = 80
+
+        try:
+            resp = requests.get(url, params=params, headers=headers, timeout=15)
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+        except Exception:
+            continue
+
+        for event in data.get("events", []):
+            g_id = f"espn_{event.get('id')}"
+            state = event.get("status", {}).get("type", {}).get("state", "scheduled")
+            detail_clock = event.get("status", {}).get("type", {}).get("detail", "")
+
+            competitions = event.get("competitions", [{}])[0]
+            competitors = competitions.get("competitors", [])
+            home_node = next((c for c in competitors if c.get("homeAway") == "home"), {})
+            away_node = next((c for c in competitors if c.get("homeAway") == "away"), {})
+
+            odds_node = competitions.get("odds", [])
+            odds_line = odds_node[0].get("details", "0.0") if odds_node else "0.0"
+            odds_line = nudge_off_whole_number(odds_line)
+
+            scores[g_id] = {
+                "home_score": home_node.get("score", "0"),
+                "away_score": away_node.get("score", "0"),
+                "state": state,
+                "clock": detail_clock,
+                "line": odds_line,
+            }
+    return scores
+
+
+espn_scores = fetch_live_scores(all_games) if all_games else {}
 
 if not all_games:
     st.info(f"No games loaded yet for Week {CURRENT_WEEK}.")
@@ -546,8 +589,10 @@ else:
                 
                 state = live_data["state"]
                 if state != "scheduled":
-                    fav_score_text = f"  \n**Score: {live_data['away_score']}**"
-                    und_score_text = f"  \n**Score: {live_data['home_score']}**"
+                    fav_score = live_data["home_score"] if game.get("favorite_team_home") else live_data["away_score"]
+                    und_score = live_data["home_score"] if game.get("underdog_team_home") else live_data["away_score"]
+                    fav_score_text = f"  \n**Score: {fav_score}**"
+                    und_score_text = f"  \n**Score: {und_score}**"
                     status_ticker = f"`🔴 LIVE - {live_data['clock']}`" if state == "in" else "`🏁 FINAL`"
 
             c_fav, c_und, c_spr, c_pck = st.columns(4)
