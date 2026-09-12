@@ -271,8 +271,11 @@ def fetch_live_scores(games_for_week):
 
         for event in data.get("events", []):
             g_id = f"espn_{event.get('id')}"
-            state = event.get("status", {}).get("type", {}).get("state", "scheduled")
-            detail_clock = event.get("status", {}).get("type", {}).get("detail", "")
+            status_type = event.get("status", {}).get("type", {})
+            state = status_type.get("state", "pre")
+            completed = bool(status_type.get("completed", False))
+            status_name = (status_type.get("name") or "").upper()
+            detail_clock = status_type.get("shortDetail") or status_type.get("detail", "")
 
             competitions = event.get("competitions", [{}])[0]
             competitors = competitions.get("competitors", [])
@@ -287,6 +290,8 @@ def fetch_live_scores(games_for_week):
                 "home_score": home_node.get("score", "0"),
                 "away_score": away_node.get("score", "0"),
                 "state": state,
+                "completed": completed,
+                "status_name": status_name,
                 "clock": detail_clock,
                 "line": odds_line,
             }
@@ -586,14 +591,27 @@ else:
                 # Update spreads dynamically from the live internet wire if present
                 if live_data.get("line") and live_data["line"] != "0.0":
                     live_line = live_data["line"]
-                
+
                 state = live_data["state"]
-                if state != "scheduled":
+                completed = live_data.get("completed", False)
+
+                if completed:
                     fav_score = live_data["home_score"] if game.get("favorite_team_home") else live_data["away_score"]
                     und_score = live_data["home_score"] if game.get("underdog_team_home") else live_data["away_score"]
                     fav_score_text = f"  \n**Score: {fav_score}**"
                     und_score_text = f"  \n**Score: {und_score}**"
-                    status_ticker = f"`🔴 LIVE - {live_data['clock']}`" if state == "in" else "`🏁 FINAL`"
+                    status_ticker = "`🏁 FINAL`"
+                elif state == "in":
+                    fav_score = live_data["home_score"] if game.get("favorite_team_home") else live_data["away_score"]
+                    und_score = live_data["home_score"] if game.get("underdog_team_home") else live_data["away_score"]
+                    fav_score_text = f"  \n**Score: {fav_score}**"
+                    und_score_text = f"  \n**Score: {und_score}**"
+                    status_ticker = f"`🔴 LIVE - {live_data['clock']}`"
+                elif any(flag in live_data.get("status_name", "") for flag in ("DELAY", "POSTPON", "SUSPEND", "CANCEL")):
+                    # Genuinely unusual -- e.g. "Weather Delay", "Postponed". Show
+                    # ESPN's own description instead of the normal scheduled-time
+                    # ticker, and definitely instead of falsely claiming FINAL.
+                    status_ticker = f"`⏳ {live_data['clock']}`" if live_data.get("clock") else "`⏳ Delayed`"
 
             c_fav, c_und, c_spr, c_pck = st.columns(4)
             with c_fav: st.markdown(f"**{fav_label}**{fav_score_text}  \n{status_ticker}")
