@@ -288,15 +288,15 @@ if not is_admin:
 
 st.success("🔓 Commissioner Dashboard Unlocked!")
 
-# Bidirectional week sync with the main app page, via a single shared "global_week"
-# value. Either page can change it; whichever page didn't just change it locally
-# adopts the new value on its next run.
+# Bidirectional week sync with the main app page (and Leaderboard), via a single
+# shared "global_week" value. IMPORTANT: Streamlit deletes a widget's own
+# session_state key entirely when you navigate away from the page it's on, so
+# the widget key ("active_week") must be reseeded from global_week whenever
+# it's missing -- not just "when global_week last changed" (that was the actual
+# bug: the key can vanish from navigation even when global_week hasn't changed
+# at all, and the old code only checked the latter).
 if "global_week" not in st.session_state:
     st.session_state["global_week"] = 1
-
-if st.session_state.get("_admin_last_seen_global") != st.session_state["global_week"]:
-    st.session_state["active_week"] = st.session_state["global_week"]
-    st.session_state["_admin_last_seen_global"] = st.session_state["global_week"]
 
 if "active_week" not in st.session_state:
     st.session_state["active_week"] = st.session_state["global_week"]
@@ -308,7 +308,6 @@ active_week = st.selectbox(
 
 if active_week != st.session_state["global_week"]:
     st.session_state["global_week"] = active_week
-    st.session_state["_admin_last_seen_global"] = active_week
 
 
 tab_setup, tab_picks, tab_grading, tab_players, tab_exports = st.tabs([
