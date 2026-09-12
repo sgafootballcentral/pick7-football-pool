@@ -51,13 +51,13 @@ with col_auto_interval:
 if is_admin:
     with st.expander("🏁 Grade Finished Games (Admin)"):
         # Follows the same shared "global_week" used on the app and Admin pages --
-        # changing it here also updates it there, and vice versa.
+        # changing it here also updates it there, and vice versa. Note: Streamlit
+        # deletes a widget's own session_state key entirely when you navigate away
+        # from the page it's on, so the widget key must be reseeded from
+        # global_week whenever it's missing -- not just "when global_week last
+        # changed", since the key can vanish even when global_week hasn't.
         if "global_week" not in st.session_state:
             st.session_state["global_week"] = 1
-
-        if st.session_state.get("_lb_last_seen_global") != st.session_state["global_week"]:
-            st.session_state["lb_grade_week"] = st.session_state["global_week"]
-            st.session_state["_lb_last_seen_global"] = st.session_state["global_week"]
 
         if "lb_grade_week" not in st.session_state:
             st.session_state["lb_grade_week"] = st.session_state["global_week"]
@@ -66,7 +66,6 @@ if is_admin:
 
         if grade_week_num != st.session_state["global_week"]:
             st.session_state["global_week"] = grade_week_num
-            st.session_state["_lb_last_seen_global"] = grade_week_num
 
         if st.button("🔄 Refresh Scores & Grade", type="primary", key="lb_grade_btn"):
             games_in_week = supabase.table("games").select("*").eq("week_number", grade_week_num).execute().data
@@ -229,12 +228,12 @@ try:
             standings = standings.rename(columns={"username": "Player"})
 
             # Week selector for the per-week record column -- follows the same
-            # shared "global_week" as everywhere else in the app.
+            # shared "global_week" as everywhere else in the app. Same fix as
+            # above: reseed whenever the widget key is missing, since Streamlit
+            # deletes it on navigating away regardless of whether global_week
+            # itself changed in the meantime.
             if "global_week" not in st.session_state:
                 st.session_state["global_week"] = 1
-            if st.session_state.get("_lb_view_last_seen_global") != st.session_state["global_week"]:
-                st.session_state["lb_view_week"] = st.session_state["global_week"]
-                st.session_state["_lb_view_last_seen_global"] = st.session_state["global_week"]
             if "lb_view_week" not in st.session_state:
                 st.session_state["lb_view_week"] = st.session_state["global_week"]
 
@@ -242,7 +241,6 @@ try:
 
             if selected_week != st.session_state["global_week"]:
                 st.session_state["global_week"] = selected_week
-                st.session_state["_lb_view_last_seen_global"] = selected_week
 
             # Per-week record, merged in alongside the overall record
             week_df = df_graded[df_graded["week_number"] == selected_week]
