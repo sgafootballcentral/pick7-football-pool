@@ -1123,39 +1123,56 @@ with tab_players:
     if not players_for_payment:
         st.info("No players yet -- they need to log in at least once before they show up here.")
     else:
-        payment_df = pd.DataFrame([
-            {
-                "Player": p["username"],
-                "Paid": bool(p.get("paid")),
-                "Payment Method": p.get("payment_method") or "",
-                "Other Method": p.get("payment_method_other") or "",
-                "_id": p["id"],
-            }
-            for p in players_for_payment
-        ])
-        edited_payment_df = st.data_editor(
-            payment_df.drop(columns=["_id"]),
-            column_config={
-                "Paid": st.column_config.CheckboxColumn("Paid?"),
-                "Payment Method": st.column_config.SelectboxColumn(
-                    "Payment Method", options=["", "CashApp", "Venmo", "Cash", "Other"]
-                ),
-                "Other Method": st.column_config.TextColumn("Other Method (if 'Other')"),
-            },
-            hide_index=True,
-            use_container_width=True,
-            key="payment_editor",
-        )
+        # Built as individual per-row widgets (not st.data_editor) specifically
+        # because a data_editor column can't be conditionally disabled based on
+        # another column's value in the same row -- there's no way to grey out
+        # "Payment Method" only when that row's "Paid" checkbox is off. Separate
+        # widgets can see each other's live state on every rerun, which is what
+        # makes that actually possible.
+        method_options = ["", "CashApp", "Venmo", "Cash", "Other"]
+
+        col_h1, col_h2, col_h3, col_h4 = st.columns([2, 1, 2, 2])
+        col_h1.markdown("**Player**")
+        col_h2.markdown("**Paid?**")
+        col_h3.markdown("**Payment Method**")
+        col_h4.markdown("**Other Method (if 'Other')**")
+
+        for p in players_for_payment:
+            pid = p["id"]
+            col1, col2, col3, col4 = st.columns([2, 1, 2, 2])
+
+            with col1:
+                st.write(p["username"])
+            with col2:
+                paid_checked = st.checkbox("Paid?", value=bool(p.get("paid")), key=f"paid_{pid}", label_visibility="collapsed")
+            with col3:
+                current_method = p.get("payment_method") or ""
+                method_index = method_options.index(current_method) if current_method in method_options else 0
+                selected_method = st.selectbox(
+                    "Method", method_options, index=method_index, key=f"method_{pid}",
+                    disabled=not paid_checked, label_visibility="collapsed",
+                )
+            with col4:
+                st.text_input(
+                    "Other", value=p.get("payment_method_other") or "", key=f"other_{pid}",
+                    disabled=(not paid_checked) or selected_method != "Other", label_visibility="collapsed",
+                    placeholder="Describe other method",
+                )
+
         if st.button("Save Payment Status", key="save_payment_status"):
             try:
-                for i, row in edited_payment_df.iterrows():
-                    player_id = payment_df.iloc[i]["_id"]
-                    method = row["Payment Method"] or None
+                for p in players_for_payment:
+                    pid = p["id"]
+                    paid_checked = st.session_state.get(f"paid_{pid}", False)
+                    # Defensive: even if a disabled widget somehow retained a
+                    # stale value, never save a method/other for someone unpaid.
+                    selected_method = st.session_state.get(f"method_{pid}", "") if paid_checked else ""
+                    other_val = st.session_state.get(f"other_{pid}", "") if (paid_checked and selected_method == "Other") else ""
                     supabase.table("players").update({
-                        "paid": bool(row["Paid"]),
-                        "payment_method": method,
-                        "payment_method_other": row["Other Method"] if method == "Other" else None,
-                    }).eq("id", player_id).execute()
+                        "paid": bool(paid_checked),
+                        "payment_method": selected_method or None,
+                        "payment_method_other": other_val or None,
+                    }).eq("id", pid).execute()
                 st.success("Payment status updated.")
             except Exception as e:
                 st.error(f"Database error: {e}")
