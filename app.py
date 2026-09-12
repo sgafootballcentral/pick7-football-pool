@@ -292,24 +292,6 @@ st.header(f"Week {CURRENT_WEEK} Master Slate")
 now = datetime.now(timezone.utc)
 EASTERN_TZ = ZoneInfo("America/New_York")
 
-# Score refresh controls. Auto-refresh options start at 60s (not 30s) since the
-# underlying ESPN fetch is itself cached for 60s -- refreshing the page faster
-# than the data can actually change would just show the same numbers twice.
-col_refresh_btn, col_auto_toggle, col_auto_interval = st.columns([1, 1, 1])
-with col_refresh_btn:
-    if st.button("🔄 Refresh Scores Now"):
-        fetch_live_scores.clear()
-        st.rerun()
-with col_auto_toggle:
-    auto_refresh_on = st.checkbox("Auto-refresh", key="auto_refresh_enabled")
-with col_auto_interval:
-    if auto_refresh_on:
-        interval_label = st.selectbox(
-            "Every:", ["60 sec", "2 min", "5 min"], key="auto_refresh_interval", label_visibility="collapsed",
-        )
-        interval_seconds = {"60 sec": 60, "2 min": 120, "5 min": 300}[interval_label]
-        st_autorefresh(interval=interval_seconds * 1000, key="scoreboard_autorefresh")
-
 # 4. Pull active week slate from database rows
 try:
     all_games = supabase.table("games").select("*").eq("week_number", CURRENT_WEEK).execute().data
@@ -529,7 +511,24 @@ else:
         existing_picks = supabase.table("picks").select("*").eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute().data
         already_submitted = bool(existing_picks)
 
-        if st.button("Lock In Weekly Picks", type="primary", use_container_width=True):
+        col_lock, col_refresh_btn, col_auto_toggle, col_auto_interval = st.columns([2, 1, 1, 1])
+        with col_lock:
+            lock_clicked = st.button("Lock In Weekly Picks", type="primary", use_container_width=True)
+        with col_refresh_btn:
+            if st.button("🔄 Refresh Scores", use_container_width=True):
+                fetch_live_scores.clear()
+                st.rerun()
+        with col_auto_toggle:
+            auto_refresh_on = st.checkbox("Auto-refresh", key="auto_refresh_enabled")
+        with col_auto_interval:
+            if auto_refresh_on:
+                interval_label = st.selectbox(
+                    "Every:", ["60 sec", "2 min", "5 min"], key="auto_refresh_interval", label_visibility="collapsed",
+                )
+                interval_seconds = {"60 sec": 60, "2 min": 120, "5 min": 300}[interval_label]
+                st_autorefresh(interval=interval_seconds * 1000, key="scoreboard_autorefresh")
+
+        if lock_clicked:
             if len(chosen_picks) != 7:
                 st.error("Validation Error: You must pick exactly 7 games.")
             elif already_submitted:
