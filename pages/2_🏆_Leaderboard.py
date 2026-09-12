@@ -62,7 +62,7 @@ if is_admin:
         if "lb_grade_week" not in st.session_state:
             st.session_state["lb_grade_week"] = st.session_state["global_week"]
 
-        grade_week_num = st.selectbox("Week to grade:", options=list(range(1, 19)), key="lb_grade_week")
+        grade_week_num = st.selectbox("Week to grade:", options=list(range(1, 17)), key="lb_grade_week")
 
         if grade_week_num != st.session_state["global_week"]:
             st.session_state["global_week"] = grade_week_num
@@ -199,7 +199,7 @@ try:
     # Pull every pick's graded result -- this is now written directly onto each pick
     # by the Admin "Grade Finished Games" step, using the spread that pick actually
     # locked in, so it stays correct even if a week's games get re-synced later.
-    picks_data = supabase.table("picks").select("username, result").execute().data
+    picks_data = supabase.table("picks").select("username, result, week_number").execute().data
 
     if not picks_data:
         st.info("No player picks have been submitted yet in this league.")
@@ -228,9 +228,38 @@ try:
             standings["Rank"] = standings["Place"].map(lambda p: medals.get(p, str(p)))
             standings = standings.rename(columns={"username": "Player"})
 
-            display_standings = standings.copy()
+            # Week selector for the per-week record column -- follows the same
+            # shared "global_week" as everywhere else in the app.
+            if "global_week" not in st.session_state:
+                st.session_state["global_week"] = 1
+            if st.session_state.get("_lb_view_last_seen_global") != st.session_state["global_week"]:
+                st.session_state["lb_view_week"] = st.session_state["global_week"]
+                st.session_state["_lb_view_last_seen_global"] = st.session_state["global_week"]
+            if "lb_view_week" not in st.session_state:
+                st.session_state["lb_view_week"] = st.session_state["global_week"]
+
+            selected_week = st.selectbox("Show record for week:", options=list(range(1, 17)), key="lb_view_week")
+
+            if selected_week != st.session_state["global_week"]:
+                st.session_state["global_week"] = selected_week
+                st.session_state["_lb_view_last_seen_global"] = selected_week
+
+            # Per-week record, merged in alongside the overall record
+            week_df = df_graded[df_graded["week_number"] == selected_week]
+            if week_df.empty:
+                week_record = pd.DataFrame(columns=["Player", "WeekWins", "WeekLosses"])
+            else:
+                week_record = week_df.groupby("username")["result"].agg(
+                    WeekWins=lambda r: (r == "win").sum(),
+                    WeekLosses=lambda r: (r == "loss").sum(),
+                ).reset_index().rename(columns={"username": "Player"})
+
+            display_standings = standings.merge(week_record, on="Player", how="left")
+            display_standings["WeekWins"] = display_standings["WeekWins"].fillna(0).astype(int)
+            display_standings["WeekLosses"] = display_standings["WeekLosses"].fillna(0).astype(int)
             display_standings["Overall Record"] = display_standings["Wins"].astype(str) + " | " + display_standings["Losses"].astype(str)
-            display_standings = display_standings[["Rank", "Player", "Overall Record", "Win %"]]
+            display_standings[f"Week {selected_week} Record"] = display_standings["WeekWins"].astype(str) + " | " + display_standings["WeekLosses"].astype(str)
+            display_standings = display_standings[["Rank", "Player", "Overall Record", f"Week {selected_week} Record", "Win %"]]
 
             st.subheader("🔥 Current Standings")
             st.dataframe(display_standings, use_container_width=True, hide_index=True)
