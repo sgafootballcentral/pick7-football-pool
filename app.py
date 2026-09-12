@@ -282,25 +282,25 @@ if not available_weeks:
     st.info("No games have been loaded yet. Check back once the admin sets up a week.")
     st.stop()
 
-# Bidirectional week sync with the Admin page, via a single shared "global_week"
-# value. Either page can change it; whichever page didn't just change it locally
-# adopts the new value on its next run.
+# Bidirectional week sync with the Admin page (and Leaderboard), via a single
+# shared "global_week" value. IMPORTANT: Streamlit deletes a widget's own
+# session_state key entirely when you navigate away from the page it's on, so
+# the widget key ("app_selected_week") must be reseeded from global_week
+# whenever it's missing or invalid for this page -- not just "when global_week
+# last changed" (that was the actual bug: the key can vanish from navigation
+# even when global_week hasn't changed at all).
 if "global_week" not in st.session_state:
     st.session_state["global_week"] = available_weeks[0]
 
-if st.session_state.get("_app_last_seen_global") != st.session_state["global_week"]:
-    if st.session_state["global_week"] in available_weeks:
-        st.session_state["app_selected_week"] = st.session_state["global_week"]
-    st.session_state["_app_last_seen_global"] = st.session_state["global_week"]
-
-if st.session_state.get("app_selected_week") not in available_weeks:
-    st.session_state["app_selected_week"] = available_weeks[0]
+if "app_selected_week" not in st.session_state or st.session_state["app_selected_week"] not in available_weeks:
+    st.session_state["app_selected_week"] = (
+        st.session_state["global_week"] if st.session_state["global_week"] in available_weeks else available_weeks[0]
+    )
 
 CURRENT_WEEK = st.selectbox("Select Week:", available_weeks, key="app_selected_week")
 
 if CURRENT_WEEK != st.session_state["global_week"]:
     st.session_state["global_week"] = CURRENT_WEEK
-    st.session_state["_app_last_seen_global"] = CURRENT_WEEK
 
 st.header(f"Week {CURRENT_WEEK} Master Slate")
 now = datetime.now(timezone.utc)
