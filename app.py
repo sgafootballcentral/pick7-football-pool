@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import io
+from streamlit_autorefresh import st_autorefresh
 from supabase import create_client, Client
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -42,6 +43,81 @@ def compute_game_numbers(week_games):
     for i, g in enumerate(sorted_games, start=1):
         numbers[g["game_id"]] = {"fav_num": 2 * i - 1, "und_num": 2 * i}
     return numbers
+
+
+@st.cache_data(ttl=60)
+def fetch_live_scores(games_for_week):
+    """Pull live/final scores from ESPN for whatever leagues/dates this week's
+    games actually span. Cached for 60s so repeated page loads/reruns across
+    everyone viewing the app don't hammer ESPN's rate limits."""
+    scores = {}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": "https://www.espn.com/",
+        "Accept": "application/json",
+    }
+    league_url_map = {
+        "NFL": "https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
+        "CFB": "https://site.web.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard",
+    }
+
+    games_by_league = {}
+    for g in games_for_week:
+        games_by_league.setdefault(g.get("league"), []).append(g)
+
+    for league_name, league_games in games_by_league.items():
+        url = league_url_map.get(league_name)
+        if not url:
+            continue  # manually-added or historical-import games have no live ESPN source
+
+        kickoff_dates = []
+        for g in league_games:
+            try:
+                kickoff_dates.append(datetime.fromisoformat(g["kickoff_time"].replace("Z", "+00:00")))
+            except (ValueError, AttributeError, TypeError):
+                pass
+        if not kickoff_dates:
+            continue
+
+        params = {"limit": 1000, "dates": f"{min(kickoff_dates):%Y%m%d}-{max(kickoff_dates):%Y%m%d}"}
+        if league_name == "CFB":
+            params["groups"] = 80
+
+        try:
+            resp = requests.get(url, params=params, headers=headers, timeout=15)
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+        except Exception:
+            continue
+
+        for event in data.get("events", []):
+            g_id = f"espn_{event.get('id')}"
+            status_type = event.get("status", {}).get("type", {})
+            state = status_type.get("state", "pre")
+            completed = bool(status_type.get("completed", False))
+            status_name = (status_type.get("name") or "").upper()
+            detail_clock = status_type.get("shortDetail") or status_type.get("detail", "")
+
+            competitions = event.get("competitions", [{}])[0]
+            competitors = competitions.get("competitors", [])
+            home_node = next((c for c in competitors if c.get("homeAway") == "home"), {})
+            away_node = next((c for c in competitors if c.get("homeAway") == "away"), {})
+
+            odds_node = competitions.get("odds", [])
+            odds_line = odds_node[0].get("details", "0.0") if odds_node else "0.0"
+            odds_line = nudge_off_whole_number(odds_line)
+
+            scores[g_id] = {
+                "home_score": home_node.get("score", "0"),
+                "away_score": away_node.get("score", "0"),
+                "state": state,
+                "completed": completed,
+                "status_name": status_name,
+                "clock": detail_clock,
+                "line": odds_line,
+            }
+    return scores
 
 
 @st.dialog("🔢 Confirm Your Picks")
@@ -216,88 +292,32 @@ st.header(f"Week {CURRENT_WEEK} Master Slate")
 now = datetime.now(timezone.utc)
 EASTERN_TZ = ZoneInfo("America/New_York")
 
+# Score refresh controls. Auto-refresh options start at 60s (not 30s) since the
+# underlying ESPN fetch is itself cached for 60s -- refreshing the page faster
+# than the data can actually change would just show the same numbers twice.
+col_refresh_btn, col_auto_toggle, col_auto_interval = st.columns([1, 1, 1])
+with col_refresh_btn:
+    if st.button("🔄 Refresh Scores Now"):
+        fetch_live_scores.clear()
+        st.rerun()
+with col_auto_toggle:
+    auto_refresh_on = st.checkbox("Auto-refresh", key="auto_refresh_enabled")
+with col_auto_interval:
+    if auto_refresh_on:
+        interval_label = st.selectbox(
+            "Every:", ["60 sec", "2 min", "5 min"], key="auto_refresh_interval", label_visibility="collapsed",
+        )
+        interval_seconds = {"60 sec": 60, "2 min": 120, "5 min": 300}[interval_label]
+        st_autorefresh(interval=interval_seconds * 1000, key="scoreboard_autorefresh")
+
 # 4. Pull active week slate from database rows
 try:
     all_games = supabase.table("games").select("*").eq("week_number", CURRENT_WEEK).execute().data
 except Exception:
     all_games = []
 
-# 5. 🌐 LIVE SCOREBOARD FEED FROM ESPN
-@st.cache_data(ttl=60)
-def fetch_live_scores(games_for_week):
-    """Pull live/final scores from ESPN for whatever leagues/dates this week's
-    games actually span. Cached for 60s so repeated page loads/reruns across
-    everyone viewing the app don't hammer ESPN's rate limits."""
-    scores = {}
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Referer": "https://www.espn.com/",
-        "Accept": "application/json",
-    }
-    league_url_map = {
-        "NFL": "https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
-        "CFB": "https://site.web.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard",
-    }
-
-    games_by_league = {}
-    for g in games_for_week:
-        games_by_league.setdefault(g.get("league"), []).append(g)
-
-    for league_name, league_games in games_by_league.items():
-        url = league_url_map.get(league_name)
-        if not url:
-            continue  # manually-added or historical-import games have no live ESPN source
-
-        kickoff_dates = []
-        for g in league_games:
-            try:
-                kickoff_dates.append(datetime.fromisoformat(g["kickoff_time"].replace("Z", "+00:00")))
-            except (ValueError, AttributeError, TypeError):
-                pass
-        if not kickoff_dates:
-            continue
-
-        params = {"limit": 1000, "dates": f"{min(kickoff_dates):%Y%m%d}-{max(kickoff_dates):%Y%m%d}"}
-        if league_name == "CFB":
-            params["groups"] = 80
-
-        try:
-            resp = requests.get(url, params=params, headers=headers, timeout=15)
-            if resp.status_code != 200:
-                continue
-            data = resp.json()
-        except Exception:
-            continue
-
-        for event in data.get("events", []):
-            g_id = f"espn_{event.get('id')}"
-            status_type = event.get("status", {}).get("type", {})
-            state = status_type.get("state", "pre")
-            completed = bool(status_type.get("completed", False))
-            status_name = (status_type.get("name") or "").upper()
-            detail_clock = status_type.get("shortDetail") or status_type.get("detail", "")
-
-            competitions = event.get("competitions", [{}])[0]
-            competitors = competitions.get("competitors", [])
-            home_node = next((c for c in competitors if c.get("homeAway") == "home"), {})
-            away_node = next((c for c in competitors if c.get("homeAway") == "away"), {})
-
-            odds_node = competitions.get("odds", [])
-            odds_line = odds_node[0].get("details", "0.0") if odds_node else "0.0"
-            odds_line = nudge_off_whole_number(odds_line)
-
-            scores[g_id] = {
-                "home_score": home_node.get("score", "0"),
-                "away_score": away_node.get("score", "0"),
-                "state": state,
-                "completed": completed,
-                "status_name": status_name,
-                "clock": detail_clock,
-                "line": odds_line,
-            }
-    return scores
-
-
+# 5. 🌐 LIVE SCOREBOARD FEED FROM ESPN (fetch_live_scores is defined near the
+# top of this file so the refresh controls above can call .clear() on it)
 espn_scores = fetch_live_scores(all_games) if all_games else {}
 
 if not all_games:
