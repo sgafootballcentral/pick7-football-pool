@@ -62,7 +62,7 @@ if is_admin:
         if "lb_grade_week" not in st.session_state:
             st.session_state["lb_grade_week"] = st.session_state["global_week"]
 
-        grade_week_num = st.number_input("Week to grade:", min_value=1, max_value=18, step=1, key="lb_grade_week")
+        grade_week_num = st.selectbox("Week to grade:", options=list(range(1, 19)), key="lb_grade_week")
 
         if grade_week_num != st.session_state["global_week"]:
             st.session_state["global_week"] = grade_week_num
