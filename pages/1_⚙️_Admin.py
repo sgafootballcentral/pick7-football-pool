@@ -80,7 +80,9 @@ def section_week_selector(key_prefix, master_week, label="Week:"):
         key=f"{key_prefix}_override",
     )
     if override:
-        return st.number_input(label, min_value=1, max_value=18, value=int(master_week), step=1, key=f"{key_prefix}_week_value")
+        options = list(range(1, 19))
+        default_index = options.index(int(master_week)) if int(master_week) in options else 0
+        return st.selectbox(label, options=options, index=default_index, key=f"{key_prefix}_week_value")
     st.caption(f"Following the master week selector above: **Week {int(master_week)}**")
     return int(master_week)
 
@@ -299,9 +301,9 @@ if st.session_state.get("_admin_last_seen_global") != st.session_state["global_w
 if "active_week" not in st.session_state:
     st.session_state["active_week"] = st.session_state["global_week"]
 
-active_week = st.number_input(
+active_week = st.selectbox(
     "Target Grouping Week Number (For Player Submissions):",
-    min_value=1, max_value=18, step=1, key="active_week",
+    options=list(range(1, 19)), key="active_week",
 )
 
 if active_week != st.session_state["global_week"]:
