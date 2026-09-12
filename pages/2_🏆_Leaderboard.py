@@ -1,6 +1,9 @@
 import streamlit as st
 import pandas as pd
 import io
+import requests
+import time as time_module
+from datetime import datetime
 from supabase import create_client, Client
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
@@ -27,6 +30,137 @@ if st.session_state.get("user"):
 
 st.title("🏆 League Standings & Leaderboard")
 st.write("Running tab of each participant's record week over week.")
+
+if is_admin:
+    with st.expander("🏁 Grade Finished Games (Admin)"):
+        grade_week_num = st.number_input("Week to grade:", min_value=1, max_value=18, value=1, step=1, key="lb_grade_week")
+
+        if st.button("🔄 Refresh Scores & Grade", type="primary", key="lb_grade_btn"):
+            games_in_week = supabase.table("games").select("*").eq("week_number", grade_week_num).execute().data
+
+            if not games_in_week:
+                st.warning(f"No games found for Week {grade_week_num}.")
+            else:
+                with st.spinner("Pulling final scores from ESPN..."):
+                    headers = {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                        "Referer": "https://www.espn.com/",
+                        "Accept": "application/json",
+                    }
+                    league_url_map = {
+                        "NFL": "https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
+                        "CFB": "https://site.web.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard",
+                    }
+
+                    games_by_league = {}
+                    for g in games_in_week:
+                        games_by_league.setdefault(g["league"], []).append(g)
+
+                    espn_scores = {}
+
+                    for league_name, league_games in games_by_league.items():
+                        url = league_url_map.get(league_name)
+                        if not url:
+                            continue
+
+                        kickoff_dates = []
+                        for g in league_games:
+                            try:
+                                kickoff_dates.append(datetime.fromisoformat(g["kickoff_time"].replace("Z", "+00:00")))
+                            except (ValueError, AttributeError, TypeError):
+                                pass
+                        if not kickoff_dates:
+                            continue
+
+                        params = {
+                            "limit": 1000,
+                            "dates": f"{min(kickoff_dates):%Y%m%d}-{max(kickoff_dates):%Y%m%d}",
+                        }
+                        if league_name == "CFB":
+                            params["groups"] = 80
+
+                        try:
+                            resp = requests.get(url, params=params, headers=headers, timeout=15)
+                            if resp.status_code != 200:
+                                st.warning(f"{league_name} score refresh failed: HTTP {resp.status_code}")
+                                continue
+                            data = resp.json()
+                            time_module.sleep(2)
+                        except Exception as e:
+                            st.warning(f"{league_name} score refresh error: {e}")
+                            continue
+
+                        for event in data.get("events", []):
+                            gid = f"espn_{event.get('id')}"
+                            state = event.get("status", {}).get("type", {}).get("state", "pre")
+
+                            competitions = event.get("competitions", [{}])[0]
+                            competitors = competitions.get("competitors", [])
+                            home_node = next((c for c in competitors if c.get("homeAway") == "home"), {})
+                            away_node = next((c for c in competitors if c.get("homeAway") == "away"), {})
+                            try:
+                                home_score = int(home_node.get("score", 0))
+                                away_score = int(away_node.get("score", 0))
+                            except (TypeError, ValueError):
+                                home_score, away_score = 0, 0
+
+                            espn_scores[gid] = {"state": state, "home_score": home_score, "away_score": away_score}
+
+                    graded_count = 0
+                    already_final_count = 0
+                    still_pending_count = 0
+
+                    for g in games_in_week:
+                        if g.get("status") == "final":
+                            already_final_count += 1
+                            continue
+
+                        live = espn_scores.get(g["game_id"])
+                        if not live or live["state"] != "post":
+                            still_pending_count += 1
+                            continue
+
+                        home_score, away_score = live["home_score"], live["away_score"]
+
+                        spread_num_str = (g.get("spread_value") or "").rsplit(" ", 1)[-1]
+                        try:
+                            spread_num = float(spread_num_str)
+                        except ValueError:
+                            spread_num = 0.0
+
+                        fav_is_home = bool(g.get("favorite_team_home"))
+                        fav_score = home_score if fav_is_home else away_score
+                        und_score = away_score if fav_is_home else home_score
+
+                        margin = (fav_score + spread_num) - und_score
+                        winning_team = g.get("favorite_team") if margin > 0 else g.get("underdog_team")
+
+                        supabase.table("games").update({
+                            "status": "final",
+                            "winning_team": winning_team,
+                        }).eq("id", g["id"]).execute()
+
+                        picks_for_game = supabase.table("picks").select("*").eq("game_id", g["game_id"]).execute().data
+                        for p in picks_for_game:
+                            locked_spread_str = (p.get("spread_at_pick") or g.get("spread_value") or "").rsplit(" ", 1)[-1]
+                            try:
+                                locked_spread_num = float(locked_spread_str)
+                            except ValueError:
+                                locked_spread_num = spread_num
+
+                            pick_margin = (fav_score + locked_spread_num) - und_score
+                            pick_winning_team = g.get("favorite_team") if pick_margin > 0 else g.get("underdog_team")
+                            pick_result = "win" if p.get("selected_team") == pick_winning_team else "loss"
+
+                            supabase.table("picks").update({"result": pick_result}).eq("id", p["id"]).execute()
+
+                        graded_count += 1
+
+                st.success(
+                    f"Graded {graded_count} newly-final game(s) for Week {grade_week_num}. "
+                    f"{already_final_count} were already graded, {still_pending_count} still in progress or not yet started."
+                )
+                st.rerun()
 
 try:
     # Pull every pick's graded result -- this is now written directly onto each pick
