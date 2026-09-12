@@ -197,6 +197,19 @@ def confirm_resubmit(existing_picks_raw, new_picks, game_lookup):
             st.rerun()
 
 st.set_page_config(page_title="Football Pick-7 Pool", page_icon="🏈", layout="wide")
+
+# Reserve space for the fixed sticky bar defined later in this file. This has to
+# happen here, before ANY other content (including the title), because a
+# position:fixed element always renders at the same screen coordinate no matter
+# where in the page it's actually defined -- so everything that would otherwise
+# render underneath it needs to be pushed down first. Streamlit doesn't support
+# true sticky/fixed containers natively (see streamlit/streamlit#7034, #9545),
+# so this is a manual, best-effort spacer -- sized generously since the bar now
+# holds two rows (the ticker + the button row). If there's a visible gap or
+# overlap once this is live, tell me which direction it's off by and I'll
+# adjust this one number.
+st.markdown('<div style="margin-top: 10.5rem;"></div>', unsafe_allow_html=True)
+
 st.title("🏈 Pick 7 Against The Spread")
 
 # 2. Track user sessions
@@ -460,17 +473,22 @@ else:
 
     pct = min(current_picks_count / 7 * 100, 100)
 
-    # CSS targets the container below by its Streamlit-assigned key class. "sticky"
-    # (not "fixed") is deliberate: it keeps the bar in its normal spot in the page
-    # flow -- below the title, week selector, etc. -- until scrolling would carry
-    # it off-screen, at which point it sticks in place. "fixed" ignores document
-    # flow entirely and always renders at the same screen coordinate, which is
-    # why the previous version covered the title from the moment the page loaded.
+    # CSS targets the container below by its Streamlit-assigned key class.
+    # "fixed" (not "sticky") -- position:sticky is silently broken here because
+    # a Streamlit ancestor container has overflow set for its own internal
+    # scrolling, which disables sticky per the CSS spec (this is a documented,
+    # open Streamlit limitation: streamlit/streamlit#7034, #9545). "fixed"
+    # doesn't have that restriction, but it ignores document flow entirely and
+    # always renders at the same screen coordinate -- which is why the matching
+    # spacer at the very top of this file (before the title) has to exist, to
+    # keep it from covering anything.
     st.markdown("""
         <style>
         div[class*="st-key-sticky_top_bar"] {
-            position: sticky !important;
+            position: fixed !important;
             top: 3.7rem;
+            left: 0;
+            right: 0;
             z-index: 9999;
             padding: 10px 20px 4px 20px;
             border-bottom: 2px solid var(--secondary-background-color, #333);
