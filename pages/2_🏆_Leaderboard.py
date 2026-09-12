@@ -4,6 +4,7 @@ import io
 import requests
 import time as time_module
 from datetime import datetime
+from streamlit_autorefresh import st_autorefresh
 from supabase import create_client, Client
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
@@ -31,9 +32,41 @@ if st.session_state.get("user"):
 st.title("🏆 League Standings & Leaderboard")
 st.write("Running tab of each participant's record week over week.")
 
+# Refresh controls, same idea as the main app page -- available to everyone,
+# since seeing updated standings matters to players too, not just admins.
+col_refresh_btn, col_auto_toggle, col_auto_interval = st.columns([1, 1, 1])
+with col_refresh_btn:
+    if st.button("🔄 Refresh Now"):
+        st.rerun()
+with col_auto_toggle:
+    lb_auto_refresh_on = st.checkbox("Auto-refresh", key="lb_auto_refresh_enabled")
+with col_auto_interval:
+    if lb_auto_refresh_on:
+        lb_interval_label = st.selectbox(
+            "Every:", ["60 sec", "2 min", "5 min"], key="lb_auto_refresh_interval", label_visibility="collapsed",
+        )
+        lb_interval_seconds = {"60 sec": 60, "2 min": 120, "5 min": 300}[lb_interval_label]
+        st_autorefresh(interval=lb_interval_seconds * 1000, key="lb_autorefresh")
+
 if is_admin:
     with st.expander("🏁 Grade Finished Games (Admin)"):
-        grade_week_num = st.number_input("Week to grade:", min_value=1, max_value=18, value=1, step=1, key="lb_grade_week")
+        # Follows the same shared "global_week" used on the app and Admin pages --
+        # changing it here also updates it there, and vice versa.
+        if "global_week" not in st.session_state:
+            st.session_state["global_week"] = 1
+
+        if st.session_state.get("_lb_last_seen_global") != st.session_state["global_week"]:
+            st.session_state["lb_grade_week"] = st.session_state["global_week"]
+            st.session_state["_lb_last_seen_global"] = st.session_state["global_week"]
+
+        if "lb_grade_week" not in st.session_state:
+            st.session_state["lb_grade_week"] = st.session_state["global_week"]
+
+        grade_week_num = st.number_input("Week to grade:", min_value=1, max_value=18, step=1, key="lb_grade_week")
+
+        if grade_week_num != st.session_state["global_week"]:
+            st.session_state["global_week"] = grade_week_num
+            st.session_state["_lb_last_seen_global"] = grade_week_num
 
         if st.button("🔄 Refresh Scores & Grade", type="primary", key="lb_grade_btn"):
             games_in_week = supabase.table("games").select("*").eq("week_number", grade_week_num).execute().data
