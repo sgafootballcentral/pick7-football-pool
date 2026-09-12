@@ -487,8 +487,14 @@ else:
         div[class*="st-key-sticky_top_bar"] {
             position: fixed !important;
             top: 3.7rem;
-            left: 0;
-            right: 0;
+            /* Deliberately no left/right here -- leaving both unset makes the
+               browser use the element's own "static position" (wherever it
+               naturally sits in the main content column) instead of forcing
+               it to the literal edges of the browser window. That keeps it
+               clear of the sidebar automatically, whether it's open, closed,
+               or resized, without hardcoding a sidebar width that could
+               change (Streamlit itself changed its default sidebar width in
+               a past release). */
             z-index: 9999;
             padding: 10px 20px 4px 20px;
             border-bottom: 2px solid var(--secondary-background-color, #333);
