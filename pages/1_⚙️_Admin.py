@@ -80,7 +80,7 @@ def section_week_selector(key_prefix, master_week, label="Week:"):
         key=f"{key_prefix}_override",
     )
     if override:
-        options = list(range(1, 19))
+        options = list(range(1, 17))
         default_index = options.index(int(master_week)) if int(master_week) in options else 0
         return st.selectbox(label, options=options, index=default_index, key=f"{key_prefix}_week_value")
     st.caption(f"Following the master week selector above: **Week {int(master_week)}**")
@@ -303,7 +303,7 @@ if "active_week" not in st.session_state:
 
 active_week = st.selectbox(
     "Target Grouping Week Number (For Player Submissions):",
-    options=list(range(1, 19)), key="active_week",
+    options=list(range(1, 17)), key="active_week",
 )
 
 if active_week != st.session_state["global_week"]:
