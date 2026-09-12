@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 import io
 from streamlit_autorefresh import st_autorefresh
@@ -481,20 +482,16 @@ else:
     # doesn't have that restriction, but it ignores document flow entirely and
     # always renders at the same screen coordinate -- which is why the matching
     # spacer at the very top of this file (before the title) has to exist, to
-    # keep it from covering anything.
+    # keep it from covering anything. left/width aren't set here in CSS -- a
+    # small script below sets them directly, since CSS alone can't reliably
+    # track the sidebar's live width or open/closed state (a "static position"
+    # CSS-only approach was tried first but produced a shrink-to-fit width that
+    # cut off content once the sidebar was open).
     st.markdown("""
         <style>
         div[class*="st-key-sticky_top_bar"] {
             position: fixed !important;
             top: 3.7rem;
-            /* Deliberately no left/right here -- leaving both unset makes the
-               browser use the element's own "static position" (wherever it
-               naturally sits in the main content column) instead of forcing
-               it to the literal edges of the browser window. That keeps it
-               clear of the sidebar automatically, whether it's open, closed,
-               or resized, without hardcoding a sidebar width that could
-               change (Streamlit itself changed its default sidebar width in
-               a past release). */
             z-index: 9999;
             padding: 10px 20px 4px 20px;
             border-bottom: 2px solid var(--secondary-background-color, #333);
@@ -520,6 +517,34 @@ else:
         }
         </style>
     """, unsafe_allow_html=True)
+
+    # Keeps the sticky bar's left edge and width matched to the actual visible
+    # content area (i.e., clear of the sidebar), and re-syncs continuously so it
+    # adjusts the moment the sidebar opens, closes, or gets resized -- which is
+    # also why the "games selected" ticker re-centers correctly either way: it's
+    # centered within this same box, so once the box is sized right, so is it.
+    components.html("""
+        <script>
+        function syncStickyBarToSidebar() {
+            const doc = window.parent.document;
+            const bar = doc.querySelector('div[class*="st-key-sticky_top_bar"]');
+            if (!bar) return;
+            const sidebar = doc.querySelector('[data-testid="stSidebar"]');
+            let leftEdge = 0;
+            if (sidebar) {
+                const expanded = sidebar.getAttribute('aria-expanded');
+                if (expanded === 'true') {
+                    leftEdge = sidebar.getBoundingClientRect().right;
+                }
+            }
+            bar.style.left = leftEdge + 'px';
+            bar.style.width = (window.parent.innerWidth - leftEdge) + 'px';
+        }
+        syncStickyBarToSidebar();
+        setInterval(syncStickyBarToSidebar, 400);
+        window.parent.addEventListener('resize', syncStickyBarToSidebar);
+        </script>
+    """, height=0)
 
     with st.container(key="sticky_top_bar"):
         st.markdown(f"""
