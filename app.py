@@ -214,16 +214,19 @@ st.markdown('<div style="margin-top: 10.5rem;"></div>', unsafe_allow_html=True)
 
 st.title("🏈 Pick 7 Against The Spread")
 
-# Password recovery landing. Supabase's reset link puts the tokens after a "#"
-# in the URL (a "hash fragment"), which browsers NEVER send to the server --
-# Python can't see it at all, only client-side JavaScript can. So first, if we
-# don't already have the tokens as normal query params, run a tiny script that
-# reads the hash and reloads the page with those same values moved into the
-# query string instead, where st.query_params can actually read them.
-access_token_param = st.query_params.get("access_token")
-recovery_type_param = st.query_params.get("type")
+# Password recovery landing. There are two different link formats to handle here:
+#  1. The RAW link straight from the email itself: a supabase.co/auth/v1/verify
+#     URL with a "token" query param. This one is easy -- it's a normal query
+#     param (not a hash fragment), so Python can read it directly, and it can
+#     be verified server-side via verify_otp(), no JavaScript needed at all.
+#  2. The link Supabase redirects the browser TO after verifying #1: the app's
+#     own URL with the tokens after a "#" (a "hash fragment"), which browsers
+#     NEVER send to the server -- Python can't see this one at all without a
+#     small script to move it into the query string first.
+recovery_access_token = st.session_state.get("_recovery_access_token") or st.query_params.get("access_token")
+recovery_refresh_token = st.session_state.get("_recovery_refresh_token") or st.query_params.get("refresh_token", "")
 
-if not access_token_param and not st.session_state.get("user"):
+if not recovery_access_token and not st.session_state.get("user"):
     components.html("""
         <script>
         (function() {
@@ -245,22 +248,31 @@ if not access_token_param and not st.session_state.get("user"):
     """, height=0)
 
     # Guaranteed-to-work fallback in case the automatic redirect above doesn't
-    # fire (e.g. due to how many iframe layers deep the app happens to be
-    # embedded on a given deployment) -- this works entirely server-side, no
-    # JavaScript required, since it's just reading text the person pastes in.
-    with st.expander("Just clicked a password reset link and landed on the normal login page? Click here"):
-        pasted_link = st.text_input("Paste the full link from your email here:", key="pasted_reset_link")
+    # fire -- works entirely server-side. Handles EITHER link format: the raw
+    # email link, or the post-redirect one, whichever got pasted.
+    with st.expander("Having trouble with a password reset link? Click here"):
+        pasted_link = st.text_input("Paste the full link -- either from your email or your browser's address bar:", key="pasted_reset_link")
         if pasted_link:
-            fragment_part = ""
-            if "#" in pasted_link:
-                fragment_part = pasted_link.split("#", 1)[1]
-            elif "?" in pasted_link:
-                fragment_part = pasted_link.split("?", 1)[1]
-            parsed = parse_qs(fragment_part)
-            pasted_access_token = parsed.get("access_token", [None])[0]
-            pasted_refresh_token = parsed.get("refresh_token", [None])[0]
-            pasted_type = parsed.get("type", [None])[0]
-            if pasted_access_token and pasted_type == "recovery":
+            query_part = pasted_link.split("?", 1)[1] if "?" in pasted_link else ""
+            hash_part = pasted_link.split("#", 1)[1] if "#" in pasted_link else ""
+            query_parsed = parse_qs(query_part)
+            hash_parsed = parse_qs(hash_part)
+
+            raw_token_hash = query_parsed.get("token", [None])[0]
+            pasted_access_token = hash_parsed.get("access_token", query_parsed.get("access_token", [None]))[0]
+            pasted_refresh_token = hash_parsed.get("refresh_token", query_parsed.get("refresh_token", [None]))[0]
+            pasted_type = hash_parsed.get("type", query_parsed.get("type", [None]))[0]
+
+            if raw_token_hash and pasted_type == "recovery":
+                # The raw email link -- verify it directly, no hash/JS needed.
+                try:
+                    res = supabase.auth.verify_otp({"token_hash": raw_token_hash, "type": "recovery"})
+                    st.session_state["_recovery_access_token"] = res.session.access_token
+                    st.session_state["_recovery_refresh_token"] = res.session.refresh_token
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Couldn't verify that link: {e}")
+            elif pasted_access_token and pasted_type == "recovery":
                 st.query_params["access_token"] = pasted_access_token
                 st.query_params["refresh_token"] = pasted_refresh_token or ""
                 st.query_params["type"] = "recovery"
@@ -268,11 +280,10 @@ if not access_token_param and not st.session_state.get("user"):
             else:
                 st.error("Couldn't find a reset token in that link -- make sure you pasted the entire thing.")
 
-if access_token_param and recovery_type_param == "recovery" and not st.session_state.get("user"):
+if recovery_access_token and not st.session_state.get("user"):
     st.subheader("🔑 Set a New Password")
-    refresh_token_param = st.query_params.get("refresh_token", "")
     try:
-        supabase.auth.set_session(access_token_param, refresh_token_param)
+        supabase.auth.set_session(recovery_access_token, recovery_refresh_token)
         with st.form("set_new_password_form"):
             new_pw = st.text_input("New password", type="password", key="recovery_new_pw")
             confirm_pw = st.text_input("Confirm new password", type="password", key="recovery_confirm_pw")
@@ -285,11 +296,15 @@ if access_token_param and recovery_type_param == "recovery" and not st.session_s
                     supabase.auth.update_user({"password": new_pw})
                     st.success("Password updated! Clear this link from your address bar, then log in with your new password below.")
                     st.query_params.clear()
+                    st.session_state.pop("_recovery_access_token", None)
+                    st.session_state.pop("_recovery_refresh_token", None)
                 except Exception as e:
                     st.error(f"Couldn't update password: {e}")
     except Exception as e:
         st.error(f"This reset link is invalid or has expired -- request a new one below. ({e})")
         st.query_params.clear()
+        st.session_state.pop("_recovery_access_token", None)
+        st.session_state.pop("_recovery_refresh_token", None)
     st.stop()
 
 # 2. Track user sessions
