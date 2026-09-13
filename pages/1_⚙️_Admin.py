@@ -1252,6 +1252,86 @@ with tab_exports:
 
                 fav_team = g.get("favorite_team", "")
                 und_team = g.get("underdog_team", "")
+                fav_team = f"{fav_team} (Home)" if g.get("favorite_team_home") else fav_team
+                und_team = f"{und_team} (Home)" if g.get("underdog_team_home") else und_team
+                spread_number = (g.get("spread_value") or "").rsplit(" ", 1)[-1]
+
+                kickoff_display = g.get("kickoff_time", "") or ""
+                try:
+                    kickoff_dt = datetime.fromisoformat(kickoff_display.replace("Z", "+00:00")).astimezone(ZoneInfo("America/New_York"))
+                    kickoff_display = kickoff_dt.strftime("%a %m/%d %I:%M %p ET").replace(" 0", " ")
+                except (ValueError, AttributeError):
+                    pass
+
+                tv_network = g.get("tv_network", "") or ""
+
+                ws.append([fav_num, fav_team, und_num, und_team, spread_number, kickoff_display, tv_network])
+                for col_idx in range(1, len(headers) + 1):
+                    ws.cell(row=i + 2, column=col_idx).font = Font(name="Arial")
+
+            for col_idx, header in enumerate(headers, start=1):
+                col_letter = get_column_letter(col_idx)
+                longest = max(
+                    [len(str(header))] +
+                    [len(str(ws.cell(row=r, column=col_idx).value or "")) for r in range(3, ws.max_row + 1)]
+                )
+                ws.column_dimensions[col_letter].width = longest + 4
+
+            ws.freeze_panes = "A3"
+
+            buffer = io.BytesIO()
+            wb.save(buffer)
+            buffer.seek(0)
+            return buffer
+
+        excel_buffer = build_slate_workbook(export_games, export_week)
+        st.download_button(
+            "⬇️ Download Week's Slate (.xlsx)",
+            data=excel_buffer,
+            file_name=f"week_{export_week}_slate.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+    st.write("---")
+
+    # 9a. EXPORT FINAL SCORES (separate from the pre-game slate export above --
+    # deliberately not touching that one, since it goes out on WhatsApp as-is)
+    st.subheader("🏁 Export Final Scores & Spreads")
+    st.caption("For after the week wraps up -- teams, spread, and final score, with whoever covered highlighted. No kickoff times or TV.")
+
+    scores_export_week = section_week_selector("scores_export_week", active_week, "Week to export:")
+    scores_export_games = supabase.table("games").select("*").eq("week_number", scores_export_week).execute().data
+
+    if not scores_export_games:
+        st.info(f"No games found for Week {scores_export_week}.")
+    else:
+        def build_final_scores_workbook(games_rows, week_number):
+            wb = Workbook()
+            ws = wb.active
+            ws.title = f"Week {week_number} Scores"[:31]
+
+            headers = ["#", "FAVORITE", "#", "UNDERDOG", "SPREAD"]
+
+            ws.append([f"Week {week_number} Final Scores"])
+            ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
+            title_cell = ws.cell(row=1, column=1)
+            title_cell.font = Font(name="Arial", bold=True, size=14)
+            title_cell.alignment = Alignment(horizontal="center")
+
+            ws.append(headers)
+            for col_idx in range(1, len(headers) + 1):
+                cell = ws.cell(row=2, column=col_idx)
+                cell.font = Font(name="Arial", bold=True, color="FFFFFF")
+                cell.fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+                cell.alignment = Alignment(horizontal="center")
+
+            sorted_games = sorted(games_rows, key=lambda g: g.get("kickoff_time") or "")
+            for i, g in enumerate(sorted_games, start=1):
+                fav_num = 2 * i - 1
+                und_num = 2 * i
+
+                fav_team = g.get("favorite_team", "")
+                und_team = g.get("underdog_team", "")
                 fav_team_display = f"{fav_team} (Home)" if g.get("favorite_team_home") else fav_team
                 und_team_display = f"{und_team} (Home)" if g.get("underdog_team_home") else und_team
                 spread_number = (g.get("spread_value") or "").rsplit(" ", 1)[-1]
@@ -1264,21 +1344,11 @@ with tab_exports:
                     fav_team_display += f" - {fav_score}"
                     und_team_display += f" - {und_score}"
 
-                kickoff_display = g.get("kickoff_time", "") or ""
-                try:
-                    kickoff_dt = datetime.fromisoformat(kickoff_display.replace("Z", "+00:00")).astimezone(ZoneInfo("America/New_York"))
-                    kickoff_display = kickoff_dt.strftime("%a %m/%d %I:%M %p ET").replace(" 0", " ")
-                except (ValueError, AttributeError):
-                    pass
-
-                tv_network = g.get("tv_network", "") or ""
-
                 row_idx = i + 2
-                ws.append([fav_num, fav_team_display, und_num, und_team_display, spread_number, kickoff_display, tv_network])
+                ws.append([fav_num, fav_team_display, und_num, und_team_display, spread_number])
                 for col_idx in range(1, len(headers) + 1):
                     ws.cell(row=row_idx, column=col_idx).font = Font(name="Arial")
 
-                # Highlight whichever team covered, once the game is graded
                 if is_final and winning_team:
                     highlight_col = 2 if winning_team == fav_team else 4 if winning_team == und_team else None
                     if highlight_col:
@@ -1301,11 +1371,11 @@ with tab_exports:
             buffer.seek(0)
             return buffer
 
-        excel_buffer = build_slate_workbook(export_games, export_week)
+        scores_buffer = build_final_scores_workbook(scores_export_games, scores_export_week)
         st.download_button(
-            "⬇️ Download Week's Slate (.xlsx)",
-            data=excel_buffer,
-            file_name=f"week_{export_week}_slate.xlsx",
+            "⬇️ Download Final Scores (.xlsx)",
+            data=scores_buffer,
+            file_name=f"week_{scores_export_week}_final_scores.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
