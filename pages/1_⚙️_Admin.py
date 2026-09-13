@@ -1233,10 +1233,15 @@ with tab_exports:
             headers = ["#", "FAVORITE", "#", "UNDERDOG", "SPREAD", "KICKOFF (ET)", "TV"]
             thin_side = Side(style="thin", color="000000")
             thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
-            # Red (not black) specifically so it can't be mistaken for the ordinary
-            # grid lines -- "thick" alone wasn't visually distinct enough next to
-            # the zebra striping.
-            thick_bottom_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=Side(style="thick", color="FFFF0000"))
+            # Red (not black) so it can't be mistaken for the ordinary grid lines.
+            # Applied to BOTH the bottom of the last row of one league AND the top
+            # of the first row of the next -- Excel can render competing border
+            # styles between two adjacent cells inconsistently (whichever side
+            # "wins" isn't guaranteed), so reinforcing from both sides removes
+            # that ambiguity entirely.
+            red_thick_side = Side(style="thick", color="FFFF0000")
+            thick_bottom_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=red_thick_side)
+            thick_top_border = Border(left=thin_side, right=thin_side, top=red_thick_side, bottom=thin_side)
             NUMBER_COLS = (1, 3)  # the two "#" columns
 
             ws.append([f"Week {week_number}"])
@@ -1286,11 +1291,19 @@ with tab_exports:
 
                 # Mark the league changing (e.g. last CFB game before NFL games
                 # start) with a bold line across the row, so it's easy to spot
-                # where one league's games end and the other's begin.
+                # where one league's games end and the other's begin. Applied to
+                # BOTH the last row of the old league (bottom) and the first row
+                # of the new league (top) -- see the comment above where these
+                # border objects are defined.
                 next_game = sorted_games[i] if i < len(sorted_games) else None
+                prev_game = sorted_games[i - 2] if i >= 2 else None
+
                 if next_game and next_game.get("league") != g.get("league"):
                     for col_idx in range(1, len(headers) + 1):
                         ws.cell(row=row_idx, column=col_idx).border = thick_bottom_border
+                elif prev_game and prev_game.get("league") != g.get("league"):
+                    for col_idx in range(1, len(headers) + 1):
+                        ws.cell(row=row_idx, column=col_idx).border = thick_top_border
 
             for col_idx, header in enumerate(headers, start=1):
                 col_letter = get_column_letter(col_idx)
