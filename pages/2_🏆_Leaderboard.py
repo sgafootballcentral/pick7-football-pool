@@ -170,6 +170,8 @@ if is_admin:
                         supabase.table("games").update({
                             "status": "final",
                             "winning_team": winning_team,
+                            "home_score": home_score,
+                            "away_score": away_score,
                         }).eq("id", g["id"]).execute()
 
                         picks_for_game = supabase.table("picks").select("*").eq("game_id", g["game_id"]).execute().data
