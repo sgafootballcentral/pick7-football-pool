@@ -2,6 +2,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 import requests
 import io
+from urllib.parse import parse_qs
 from streamlit_autorefresh import st_autorefresh
 from supabase import create_client, Client
 from datetime import datetime, timezone
@@ -226,22 +227,46 @@ if not access_token_param and not st.session_state.get("user"):
     components.html("""
         <script>
         (function() {
-            const hash = window.parent.location.hash;
+            const hash = window.top.location.hash;
             if (hash && hash.includes('access_token') && hash.includes('type=recovery')) {
                 const params = new URLSearchParams(hash.substring(1));
                 const accessToken = params.get('access_token');
                 const refreshToken = params.get('refresh_token');
                 if (accessToken) {
-                    const newUrl = window.parent.location.pathname
+                    const newUrl = window.top.location.pathname
                         + '?access_token=' + encodeURIComponent(accessToken)
                         + '&refresh_token=' + encodeURIComponent(refreshToken || '')
                         + '&type=recovery';
-                    window.parent.location.replace(newUrl);
+                    window.top.location.replace(newUrl);
                 }
             }
         })();
         </script>
     """, height=0)
+
+    # Guaranteed-to-work fallback in case the automatic redirect above doesn't
+    # fire (e.g. due to how many iframe layers deep the app happens to be
+    # embedded on a given deployment) -- this works entirely server-side, no
+    # JavaScript required, since it's just reading text the person pastes in.
+    with st.expander("Just clicked a password reset link and landed on the normal login page? Click here"):
+        pasted_link = st.text_input("Paste the full link from your email here:", key="pasted_reset_link")
+        if pasted_link:
+            fragment_part = ""
+            if "#" in pasted_link:
+                fragment_part = pasted_link.split("#", 1)[1]
+            elif "?" in pasted_link:
+                fragment_part = pasted_link.split("?", 1)[1]
+            parsed = parse_qs(fragment_part)
+            pasted_access_token = parsed.get("access_token", [None])[0]
+            pasted_refresh_token = parsed.get("refresh_token", [None])[0]
+            pasted_type = parsed.get("type", [None])[0]
+            if pasted_access_token and pasted_type == "recovery":
+                st.query_params["access_token"] = pasted_access_token
+                st.query_params["refresh_token"] = pasted_refresh_token or ""
+                st.query_params["type"] = "recovery"
+                st.rerun()
+            else:
+                st.error("Couldn't find a reset token in that link -- make sure you pasted the entire thing.")
 
 if access_token_param and recovery_type_param == "recovery" and not st.session_state.get("user"):
     st.subheader("🔑 Set a New Password")
