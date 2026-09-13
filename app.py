@@ -247,43 +247,6 @@ if not recovery_access_token and not st.session_state.get("user"):
         </script>
     """, height=0)
 
-    # This is the actual, reliable way to complete a password reset in this
-    # app -- shown up front, not tucked away as a last resort. Clicking the
-    # email link directly doesn't work reliably here (Streamlit Cloud's iframe
-    # sandboxing blocks the script that would otherwise catch the redirect),
-    # and since the link is single-use, clicking it first would burn it before
-    # ever reaching this box anyway. Copying it without clicking sidesteps the
-    # whole problem.
-    st.info("📋 **Don't click the link in your email.** Right-click it, choose **Copy Link Address**, and paste it below instead.")
-    pasted_link = st.text_input("Paste your reset link here:", key="pasted_reset_link")
-    if pasted_link:
-        query_part = pasted_link.split("?", 1)[1] if "?" in pasted_link else ""
-        hash_part = pasted_link.split("#", 1)[1] if "#" in pasted_link else ""
-        query_parsed = parse_qs(query_part)
-        hash_parsed = parse_qs(hash_part)
-
-        raw_token_hash = query_parsed.get("token", [None])[0]
-        pasted_access_token = hash_parsed.get("access_token", query_parsed.get("access_token", [None]))[0]
-        pasted_refresh_token = hash_parsed.get("refresh_token", query_parsed.get("refresh_token", [None]))[0]
-        pasted_type = hash_parsed.get("type", query_parsed.get("type", [None]))[0]
-
-        if raw_token_hash and pasted_type == "recovery":
-            # The raw email link -- verify it directly, no hash/JS needed.
-            try:
-                res = supabase.auth.verify_otp({"token_hash": raw_token_hash, "type": "recovery"})
-                st.session_state["_recovery_access_token"] = res.session.access_token
-                st.session_state["_recovery_refresh_token"] = res.session.refresh_token
-                st.rerun()
-            except Exception as e:
-                st.error(f"That link didn't work: {e}. If you clicked it before pasting it, request a fresh one -- each link only works once.")
-        elif pasted_access_token and pasted_type == "recovery":
-            st.query_params["access_token"] = pasted_access_token
-            st.query_params["refresh_token"] = pasted_refresh_token or ""
-            st.query_params["type"] = "recovery"
-            st.rerun()
-        else:
-            st.error("Couldn't find a reset token in that link -- make sure you pasted the entire thing.")
-
 if recovery_access_token and not st.session_state.get("user"):
     st.subheader("🔑 Set a New Password")
     try:
@@ -339,13 +302,50 @@ if not st.session_state.user:
             if reset_submitted:
                 app_url = st.secrets.get("APP_URL")
                 if not app_url:
-                    st.error("APP_URL isn't set in secrets yet -- add your app's live URL there first (see setup notes).")
+                    st.error("APP_URL isn't set in secrets yet -- add your app's live URL first (see setup notes).")
                 else:
                     try:
                         supabase.auth.reset_password_for_email(reset_email, {"redirect_to": app_url})
-                        st.success("Email sent! Important: don't click the link -- right-click it, choose Copy Link Address, and paste it into the box above this login form.")
+                        st.success("Email sent! Check below for how to use the link.")
                     except Exception as e:
                         st.error(f"Couldn't send reset email: {e}")
+
+            st.divider()
+            # This is the actual, reliable way to complete a password reset in
+            # this app. Clicking the email link directly doesn't work reliably
+            # here (Streamlit Cloud's iframe sandboxing blocks the script that
+            # would otherwise catch the redirect), and since the link is
+            # single-use, clicking it first would burn it before ever reaching
+            # this box anyway. Copying it without clicking sidesteps that.
+            st.info("📋 **Don't click the link in your email.** Right-click it, choose **Copy Link Address**, and paste it below instead.")
+            pasted_link = st.text_input("Paste your reset link here:", key="pasted_reset_link")
+            if pasted_link:
+                query_part = pasted_link.split("?", 1)[1] if "?" in pasted_link else ""
+                hash_part = pasted_link.split("#", 1)[1] if "#" in pasted_link else ""
+                query_parsed = parse_qs(query_part)
+                hash_parsed = parse_qs(hash_part)
+
+                raw_token_hash = query_parsed.get("token", [None])[0]
+                pasted_access_token = hash_parsed.get("access_token", query_parsed.get("access_token", [None]))[0]
+                pasted_refresh_token = hash_parsed.get("refresh_token", query_parsed.get("refresh_token", [None]))[0]
+                pasted_type = hash_parsed.get("type", query_parsed.get("type", [None]))[0]
+
+                if raw_token_hash and pasted_type == "recovery":
+                    # The raw email link -- verify it directly, no hash/JS needed.
+                    try:
+                        res = supabase.auth.verify_otp({"token_hash": raw_token_hash, "type": "recovery"})
+                        st.session_state["_recovery_access_token"] = res.session.access_token
+                        st.session_state["_recovery_refresh_token"] = res.session.refresh_token
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"That link didn't work: {e}. If you clicked it before pasting it, request a fresh one -- each link only works once.")
+                elif pasted_access_token and pasted_type == "recovery":
+                    st.query_params["access_token"] = pasted_access_token
+                    st.query_params["refresh_token"] = pasted_refresh_token or ""
+                    st.query_params["type"] = "recovery"
+                    st.rerun()
+                else:
+                    st.error("Couldn't find a reset token in that link -- make sure you pasted the entire thing.")
     with tab2:
         with st.form("signup_form"):
             signup_email = st.text_input("Email", key="s_email")
