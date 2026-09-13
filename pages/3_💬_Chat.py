@@ -1,4 +1,5 @@
 import streamlit as st
+import uuid
 from supabase import create_client, Client
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -99,7 +100,10 @@ else:
             except (ValueError, AttributeError):
                 time_str = ""
             st.markdown(f"**{m['username']}**  ·  _{time_str}_")
-            st.write(m["message"])
+            if m.get("message"):
+                st.write(m["message"])
+            if m.get("image_url"):
+                st.image(m["image_url"])
             if is_admin:
                 if st.button("🗑️ Delete", key=f"delete_msg_{m['id']}"):
                     try:
@@ -108,14 +112,37 @@ else:
                     except Exception as e:
                         st.error(f"Database error: {e}")
 
-new_message = st.chat_input("Type a message...")
-if new_message:
-    try:
-        supabase.table("chat_messages").insert({
-            "user_id": user.id,
-            "username": username,
-            "message": new_message,
-        }).execute()
-        st.rerun()
-    except Exception as e:
-        st.error(f"Database error: {e}")
+new_prompt = st.chat_input(
+    "Type a message and/or attach an image or gif...",
+    accept_file=True,
+    file_type=["png", "jpg", "jpeg", "gif", "webp"],
+)
+if new_prompt:
+    text = (new_prompt.text or "").strip()
+    image_url = None
+
+    if new_prompt["files"]:
+        uploaded_file = new_prompt["files"][0]
+        try:
+            file_bytes = uploaded_file.getvalue()
+            file_ext = uploaded_file.name.rsplit(".", 1)[-1].lower() if "." in uploaded_file.name else "png"
+            storage_path = f"{user.id}/{uuid.uuid4().hex}.{file_ext}"
+            content_type = uploaded_file.type or "application/octet-stream"
+            supabase.storage.from_("chat-images").upload(
+                storage_path, file_bytes, {"content-type": content_type}
+            )
+            image_url = supabase.storage.from_("chat-images").get_public_url(storage_path)
+        except Exception as e:
+            st.error(f"Image upload failed: {e}")
+
+    if text or image_url:
+        try:
+            supabase.table("chat_messages").insert({
+                "user_id": user.id,
+                "username": username,
+                "message": text,
+                "image_url": image_url,
+            }).execute()
+            st.rerun()
+        except Exception as e:
+            st.error(f"Database error: {e}")
