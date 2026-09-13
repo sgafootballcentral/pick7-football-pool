@@ -213,15 +213,41 @@ st.markdown('<div style="margin-top: 10.5rem;"></div>', unsafe_allow_html=True)
 
 st.title("🏈 Pick 7 Against The Spread")
 
-# Password recovery landing: when someone clicks the reset link in their email,
-# Supabase redirects them back here with a one-time "code" in the URL. This has
-# to be checked before the normal login gate, since they aren't logged in yet
-# at this point -- they're using the code itself as temporary proof of identity.
-recovery_code = st.query_params.get("code")
-if recovery_code and not st.session_state.get("user"):
+# Password recovery landing. Supabase's reset link puts the tokens after a "#"
+# in the URL (a "hash fragment"), which browsers NEVER send to the server --
+# Python can't see it at all, only client-side JavaScript can. So first, if we
+# don't already have the tokens as normal query params, run a tiny script that
+# reads the hash and reloads the page with those same values moved into the
+# query string instead, where st.query_params can actually read them.
+access_token_param = st.query_params.get("access_token")
+recovery_type_param = st.query_params.get("type")
+
+if not access_token_param and not st.session_state.get("user"):
+    components.html("""
+        <script>
+        (function() {
+            const hash = window.parent.location.hash;
+            if (hash && hash.includes('access_token') && hash.includes('type=recovery')) {
+                const params = new URLSearchParams(hash.substring(1));
+                const accessToken = params.get('access_token');
+                const refreshToken = params.get('refresh_token');
+                if (accessToken) {
+                    const newUrl = window.parent.location.pathname
+                        + '?access_token=' + encodeURIComponent(accessToken)
+                        + '&refresh_token=' + encodeURIComponent(refreshToken || '')
+                        + '&type=recovery';
+                    window.parent.location.replace(newUrl);
+                }
+            }
+        })();
+        </script>
+    """, height=0)
+
+if access_token_param and recovery_type_param == "recovery" and not st.session_state.get("user"):
     st.subheader("🔑 Set a New Password")
+    refresh_token_param = st.query_params.get("refresh_token", "")
     try:
-        supabase.auth.exchange_code_for_session({"auth_code": recovery_code})
+        supabase.auth.set_session(access_token_param, refresh_token_param)
         with st.form("set_new_password_form"):
             new_pw = st.text_input("New password", type="password", key="recovery_new_pw")
             confirm_pw = st.text_input("Confirm new password", type="password", key="recovery_confirm_pw")
@@ -232,7 +258,7 @@ if recovery_code and not st.session_state.get("user"):
             else:
                 try:
                     supabase.auth.update_user({"password": new_pw})
-                    st.success("Password updated! You can log in with it now.")
+                    st.success("Password updated! Clear this link from your address bar, then log in with your new password below.")
                     st.query_params.clear()
                 except Exception as e:
                     st.error(f"Couldn't update password: {e}")
