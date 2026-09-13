@@ -213,6 +213,34 @@ st.markdown('<div style="margin-top: 10.5rem;"></div>', unsafe_allow_html=True)
 
 st.title("🏈 Pick 7 Against The Spread")
 
+# Password recovery landing: when someone clicks the reset link in their email,
+# Supabase redirects them back here with a one-time "code" in the URL. This has
+# to be checked before the normal login gate, since they aren't logged in yet
+# at this point -- they're using the code itself as temporary proof of identity.
+recovery_code = st.query_params.get("code")
+if recovery_code and not st.session_state.get("user"):
+    st.subheader("🔑 Set a New Password")
+    try:
+        supabase.auth.exchange_code_for_session({"auth_code": recovery_code})
+        with st.form("set_new_password_form"):
+            new_pw = st.text_input("New password", type="password", key="recovery_new_pw")
+            confirm_pw = st.text_input("Confirm new password", type="password", key="recovery_confirm_pw")
+            submitted_new_pw = st.form_submit_button("Update Password", use_container_width=True)
+        if submitted_new_pw:
+            if not new_pw or new_pw != confirm_pw:
+                st.error("Passwords must match and can't be blank.")
+            else:
+                try:
+                    supabase.auth.update_user({"password": new_pw})
+                    st.success("Password updated! You can log in with it now.")
+                    st.query_params.clear()
+                except Exception as e:
+                    st.error(f"Couldn't update password: {e}")
+    except Exception as e:
+        st.error(f"This reset link is invalid or has expired -- request a new one below. ({e})")
+        st.query_params.clear()
+    st.stop()
+
 # 2. Track user sessions
 if "user" not in st.session_state:
     st.session_state.user = None
@@ -233,6 +261,21 @@ if not st.session_state.user:
                 st.session_state.refresh_token = res.session.refresh_token
                 st.rerun()
             except Exception: st.error("Login failed. Check entries.")
+
+        with st.expander("Forgot your password?"):
+            with st.form("forgot_password_form"):
+                reset_email = st.text_input("Email", key="reset_email")
+                reset_submitted = st.form_submit_button("Send Reset Link")
+            if reset_submitted:
+                app_url = st.secrets.get("APP_URL")
+                if not app_url:
+                    st.error("APP_URL isn't set in secrets yet -- add your app's live URL there first (see setup notes).")
+                else:
+                    try:
+                        supabase.auth.reset_password_for_email(reset_email, {"redirect_to": app_url})
+                        st.success("If that email has an account, a reset link is on its way.")
+                    except Exception as e:
+                        st.error(f"Couldn't send reset email: {e}")
     with tab2:
         with st.form("signup_form"):
             signup_email = st.text_input("Email", key="s_email")
