@@ -649,6 +649,14 @@ else:
             fav_label = f"{fav_team} 🏠" if game.get("favorite_team_home") else fav_team
             und_label = f"{und_team} 🏠" if game.get("underdog_team_home") else und_team
 
+            # Once the game is graded, highlight whichever team covered.
+            winning_team = game.get("winning_team")
+            game_graded = game.get("status") == "final" and winning_team
+            if game_graded and winning_team == fav_team:
+                fav_label = f'<span style="color: #2ecc71;">✅ {fav_label}</span>'
+            elif game_graded and winning_team == und_team:
+                und_label = f'<span style="color: #2ecc71;">✅ {und_label}</span>'
+
             fav_score_text = ""
             und_score_text = ""
             status_ticker = f"`🕒 {time_str}`"
@@ -682,8 +690,8 @@ else:
                     status_ticker = f"`⏳ {live_data['clock']}`" if live_data.get("clock") else "`⏳ Delayed`"
 
             c_fav, c_und, c_spr, c_pck = st.columns(4)
-            with c_fav: st.markdown(f"**{fav_label}**{fav_score_text}  \n{status_ticker}")
-            with c_und: st.markdown(f"**{und_label}**{und_score_text}")
+            with c_fav: st.markdown(f"**{fav_label}**{fav_score_text}  \n{status_ticker}", unsafe_allow_html=True)
+            with c_und: st.markdown(f"**{und_label}**{und_score_text}", unsafe_allow_html=True)
             with c_spr: st.markdown(f"`{live_line}`")
             with c_pck:
                 if is_time_locked:
