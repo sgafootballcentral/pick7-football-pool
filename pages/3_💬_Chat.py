@@ -40,9 +40,20 @@ st.title("💬 League Chat")
 st.caption("Messages stay here for everyone to see until an admin removes them.")
 
 
+def storage_path_from_url(url):
+    """Pull the path Supabase Storage actually needs (everything after the
+    bucket name) back out of a public URL, so a delete can target the file."""
+    if not url:
+        return None
+    marker = "/chat-images/"
+    if marker in url:
+        return url.split(marker, 1)[1]
+    return None
+
+
 @st.dialog("⚠️ Clear Entire Chat?")
 def confirm_clear_chat():
-    st.write("This will permanently delete **every message** in this chat. This cannot be undone.")
+    st.write("This will permanently delete **every message** in this chat, including any uploaded images/gifs. This cannot be undone.")
     col_yes, col_no = st.columns(2)
     with col_yes:
         confirm_clicked = st.button("Yes, clear everything", type="primary", use_container_width=True)
@@ -51,6 +62,13 @@ def confirm_clear_chat():
 
     if confirm_clicked:
         try:
+            all_msgs = supabase.table("chat_messages").select("image_url").execute().data
+            image_paths = [p for p in (storage_path_from_url(m.get("image_url")) for m in all_msgs) if p]
+            if image_paths:
+                try:
+                    supabase.storage.from_("chat-images").remove(image_paths)
+                except Exception:
+                    pass  # don't let a storage hiccup block clearing the messages themselves
             supabase.table("chat_messages").delete().gte("id", 0).execute()
             st.session_state.pending_clear_chat = False
             st.rerun()
@@ -66,7 +84,7 @@ with col_refresh:
     if st.button("🔄 Refresh Now"):
         st.rerun()
 with col_auto:
-    auto_refresh_on = st.checkbox("Auto-refresh", key="chat_auto_refresh_enabled")
+    auto_refresh_on = st.checkbox("Auto-refresh", value=True, key="chat_auto_refresh_enabled")
 with col_interval:
     if auto_refresh_on:
         interval_label = st.selectbox(
@@ -107,6 +125,12 @@ else:
             if is_admin:
                 if st.button("🗑️ Delete", key=f"delete_msg_{m['id']}"):
                     try:
+                        image_path = storage_path_from_url(m.get("image_url"))
+                        if image_path:
+                            try:
+                                supabase.storage.from_("chat-images").remove([image_path])
+                            except Exception:
+                                pass
                         supabase.table("chat_messages").delete().eq("id", m["id"]).execute()
                         st.rerun()
                     except Exception as e:
