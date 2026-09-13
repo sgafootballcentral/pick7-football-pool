@@ -1233,7 +1233,11 @@ with tab_exports:
             headers = ["#", "FAVORITE", "#", "UNDERDOG", "SPREAD", "KICKOFF (ET)", "TV"]
             thin_side = Side(style="thin", color="000000")
             thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
-            thick_bottom_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=Side(style="thick", color="000000"))
+            # Red (not black) specifically so it can't be mistaken for the ordinary
+            # grid lines -- "thick" alone wasn't visually distinct enough next to
+            # the zebra striping.
+            thick_bottom_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=Side(style="thick", color="FFFF0000"))
+            NUMBER_COLS = (1, 3)  # the two "#" columns
 
             ws.append([f"Week {week_number}"])
             ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
@@ -1275,7 +1279,7 @@ with tab_exports:
                 stripe_fill = PatternFill(start_color="FFF2F2F2", end_color="FFF2F2F2", fill_type="solid") if i % 2 == 0 else None
                 for col_idx in range(1, len(headers) + 1):
                     cell = ws.cell(row=row_idx, column=col_idx)
-                    cell.font = Font(name="Arial")
+                    cell.font = Font(name="Arial", bold=(col_idx in NUMBER_COLS))
                     cell.border = thin_border
                     if stripe_fill:
                         cell.fill = stripe_fill
