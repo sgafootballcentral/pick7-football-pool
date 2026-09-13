@@ -1231,6 +1231,9 @@ with tab_exports:
             ws.title = f"Week {week_number}"[:31]
 
             headers = ["#", "FAVORITE", "#", "UNDERDOG", "SPREAD", "KICKOFF (ET)", "TV"]
+            thin_side = Side(style="thin", color="000000")
+            thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+            thick_bottom_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=Side(style="thick", color="000000"))
 
             ws.append([f"Week {week_number}"])
             ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
@@ -1244,9 +1247,9 @@ with tab_exports:
                 cell.font = Font(name="Arial", bold=True, color="FFFFFF")
                 cell.fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
                 cell.alignment = Alignment(horizontal="center")
+                cell.border = thin_border
 
             sorted_games = sorted(games_rows, key=lambda g: g.get("kickoff_time") or "")
-            thick_bottom_border = Border(bottom=Side(style="thick", color="000000"))
 
             for i, g in enumerate(sorted_games, start=1):
                 fav_num = 2 * i - 1  # favorites get odd numbers
@@ -1269,8 +1272,13 @@ with tab_exports:
 
                 row_idx = i + 2
                 ws.append([fav_num, fav_team, und_num, und_team, spread_number, kickoff_display, tv_network])
+                stripe_fill = PatternFill(start_color="FFF2F2F2", end_color="FFF2F2F2", fill_type="solid") if i % 2 == 0 else None
                 for col_idx in range(1, len(headers) + 1):
-                    ws.cell(row=row_idx, column=col_idx).font = Font(name="Arial")
+                    cell = ws.cell(row=row_idx, column=col_idx)
+                    cell.font = Font(name="Arial")
+                    cell.border = thin_border
+                    if stripe_fill:
+                        cell.fill = stripe_fill
 
                 # Mark the league changing (e.g. last CFB game before NFL games
                 # start) with a bold line across the row, so it's easy to spot
