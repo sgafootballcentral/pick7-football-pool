@@ -974,6 +974,8 @@ with tab_grading:
                     supabase.table("games").update({
                         "status": "final",
                         "winning_team": winning_team,
+                        "home_score": home_score,
+                        "away_score": away_score,
                     }).eq("id", g["id"]).execute()
 
                     # Grade each pick against the spread IT actually saw, not necessarily
@@ -1250,9 +1252,17 @@ with tab_exports:
 
                 fav_team = g.get("favorite_team", "")
                 und_team = g.get("underdog_team", "")
-                fav_team = f"{fav_team} (Home)" if g.get("favorite_team_home") else fav_team
-                und_team = f"{und_team} (Home)" if g.get("underdog_team_home") else und_team
+                fav_team_display = f"{fav_team} (Home)" if g.get("favorite_team_home") else fav_team
+                und_team_display = f"{und_team} (Home)" if g.get("underdog_team_home") else und_team
                 spread_number = (g.get("spread_value") or "").rsplit(" ", 1)[-1]
+
+                is_final = g.get("status") == "final"
+                winning_team = g.get("winning_team")
+                if is_final and g.get("home_score") is not None and g.get("away_score") is not None:
+                    fav_score = g["home_score"] if g.get("favorite_team_home") else g["away_score"]
+                    und_score = g["home_score"] if g.get("underdog_team_home") else g["away_score"]
+                    fav_team_display += f" - {fav_score}"
+                    und_team_display += f" - {und_score}"
 
                 kickoff_display = g.get("kickoff_time", "") or ""
                 try:
@@ -1263,9 +1273,18 @@ with tab_exports:
 
                 tv_network = g.get("tv_network", "") or ""
 
-                ws.append([fav_num, fav_team, und_num, und_team, spread_number, kickoff_display, tv_network])
+                row_idx = i + 2
+                ws.append([fav_num, fav_team_display, und_num, und_team_display, spread_number, kickoff_display, tv_network])
                 for col_idx in range(1, len(headers) + 1):
-                    ws.cell(row=i + 2, column=col_idx).font = Font(name="Arial")
+                    ws.cell(row=row_idx, column=col_idx).font = Font(name="Arial")
+
+                # Highlight whichever team covered, once the game is graded
+                if is_final and winning_team:
+                    highlight_col = 2 if winning_team == fav_team else 4 if winning_team == und_team else None
+                    if highlight_col:
+                        cell = ws.cell(row=row_idx, column=highlight_col)
+                        cell.font = Font(name="Arial", bold=True, color="FFFFFF")
+                        cell.fill = PatternFill(start_color="FF2E7D32", end_color="FF2E7D32", fill_type="solid")
 
             for col_idx, header in enumerate(headers, start=1):
                 col_letter = get_column_letter(col_idx)
