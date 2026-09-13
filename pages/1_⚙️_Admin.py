@@ -1246,6 +1246,8 @@ with tab_exports:
                 cell.alignment = Alignment(horizontal="center")
 
             sorted_games = sorted(games_rows, key=lambda g: g.get("kickoff_time") or "")
+            thick_bottom_border = Border(bottom=Side(style="thick", color="000000"))
+
             for i, g in enumerate(sorted_games, start=1):
                 fav_num = 2 * i - 1  # favorites get odd numbers
                 und_num = 2 * i      # underdogs get even numbers
@@ -1265,9 +1267,18 @@ with tab_exports:
 
                 tv_network = g.get("tv_network", "") or ""
 
+                row_idx = i + 2
                 ws.append([fav_num, fav_team, und_num, und_team, spread_number, kickoff_display, tv_network])
                 for col_idx in range(1, len(headers) + 1):
-                    ws.cell(row=i + 2, column=col_idx).font = Font(name="Arial")
+                    ws.cell(row=row_idx, column=col_idx).font = Font(name="Arial")
+
+                # Mark the league changing (e.g. last CFB game before NFL games
+                # start) with a bold line across the row, so it's easy to spot
+                # where one league's games end and the other's begin.
+                next_game = sorted_games[i] if i < len(sorted_games) else None
+                if next_game and next_game.get("league") != g.get("league"):
+                    for col_idx in range(1, len(headers) + 1):
+                        ws.cell(row=row_idx, column=col_idx).border = thick_bottom_border
 
             for col_idx, header in enumerate(headers, start=1):
                 col_letter = get_column_letter(col_idx)
