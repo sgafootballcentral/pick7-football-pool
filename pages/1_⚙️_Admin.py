@@ -1623,6 +1623,7 @@ with tab_exports:
                     week_rows_data.append({
                         "username": p["username"], "picks": picks_nums, "wins": win_nums,
                         "losses": loss_nums, "w": len(win_nums), "l": len(loss_nums),
+                        "paid": bool(p.get("paid")),
                     })
 
                 week_rows_data.sort(key=lambda r: (-r["w"], r["l"], r["username"]))
@@ -1633,7 +1634,11 @@ with tab_exports:
                     ])
                     row_idx = ws1.max_row
                     ws1.cell(row=row_idx, column=2).value = colored_picks_richtext(r["picks"], r["wins"], r["losses"])
-                    for col_idx in (1, 3, 4, 5, 6):
+                    name_cell = ws1.cell(row=row_idx, column=1)
+                    name_cell.font = Font(name="Arial", bold=True)
+                    paid_color = "FF00B050" if r["paid"] else "FFFF0000"
+                    name_cell.fill = PatternFill(start_color=paid_color, end_color=paid_color, fill_type="solid")
+                    for col_idx in (3, 4, 5, 6):
                         ws1.cell(row=row_idx, column=col_idx).font = Font(name="Arial")
 
                 autosize(ws1, headers1)
