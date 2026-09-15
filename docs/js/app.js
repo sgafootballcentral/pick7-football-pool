@@ -102,7 +102,13 @@ function renderChrome(innerHtml) {
     ${state.user && !state.recoveryMode ? `
       <div class="topbar">
         <div class="who">Logged in as <b>${escapeHtml(state.username)}</b></div>
-        <button class="btn btn-secondary" id="logout-btn" style="width:auto; padding:6px 12px; font-size:0.82rem;">Log Out</button>
+        <span style="display:flex; gap:6px; align-items:center;">
+          ${state.isAdmin ? `
+            <a class="btn btn-secondary" href="${escapeHtml(window.APP_CONFIG.ADMIN_URL)}" target="_blank" rel="noopener"
+               style="width:auto; padding:6px 12px; font-size:0.82rem; text-decoration:none;">Admin ↗</a>
+          ` : ""}
+          <button class="btn btn-secondary" id="logout-btn" style="width:auto; padding:6px 12px; font-size:0.82rem;">Log Out</button>
+        </span>
       </div>
     ` : ""}
     <div id="tab-content">${innerHtml}</div>
