@@ -506,7 +506,7 @@ else:
     # Sort chronologically first so the day groups come out in calendar order below
     games_chronological = sorted(all_games, key=lambda g: g["kickoff_time"])
 
-    current_picks_count = sum(1 for g in all_games if st.session_state.get(f"sel_{g['game_id']}", "-- Select --") != "-- Select --")
+    current_picks_count = sum(1 for g in all_games if st.session_state.get(f"sel_{g['game_id']}") is not None)
     ui_max_reached = current_picks_count >= 7
 
     # Computed immediately (not inside the game-row loop below) so the Lock In
@@ -514,7 +514,7 @@ else:
     chosen_picks = [
         {"game_id": g["game_id"], "selected_team": st.session_state.get(f"sel_{g['game_id']}")}
         for g in all_games
-        if st.session_state.get(f"sel_{g['game_id']}", "-- Select --") != "-- Select --"
+        if st.session_state.get(f"sel_{g['game_id']}") is not None
     ]
 
     # 🔢 PICK BY NUMBER -- fills in the same dropdowns below rather than duplicating
@@ -810,11 +810,11 @@ else:
                 if is_time_locked:
                     st.button("🔒 Locked", key=f"lock_{game['game_id']}", disabled=True, use_container_width=True)
                 else:
-                    is_current_empty = st.session_state.get(f"sel_{game['game_id']}", "-- Select --") == "-- Select --"
+                    is_current_empty = st.session_state.get(f"sel_{game['game_id']}") is None
                     should_disable = ui_max_reached and is_current_empty
-                    
-                    pick = st.selectbox(
-                        "Choose", options=["-- Select --", fav_team, und_team], 
+
+                    pick = st.radio(
+                        "Choose", options=[fav_team, und_team], index=None, horizontal=True,
                         key=f"sel_{game['game_id']}", label_visibility="collapsed", disabled=should_disable
                     )
 
