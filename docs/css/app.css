@@ -50,6 +50,14 @@ button {
   cursor: pointer;
 }
 
+/* iOS Safari auto-zooms the whole page when a focused input's text is
+   smaller than 16px. Some inputs here (the chat box, the week selector)
+   never had a font-size set and were falling back to the browser's small
+   default for form controls -- that's what triggered the zoom on tap. */
+input, select, textarea {
+  font-size: 16px;
+}
+
 .btn {
   display: inline-flex;
   align-items: center;
