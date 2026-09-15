@@ -278,6 +278,28 @@ if recovery_access_token and not st.session_state.get("user"):
 if "user" not in st.session_state:
     st.session_state.user = None
 
+# Single-sign-on handoff from the PWA's Admin shortcut: the PWA (already
+# logged in there) passes its own Supabase session tokens along as
+# admin_sso_at/admin_sso_rt so an admin doesn't have to log in a second
+# time here. Deliberately different param names from the password-recovery
+# handling above (access_token/refresh_token) so the two flows can never be
+# confused with each other or trigger the wrong one.
+sso_access_token = st.query_params.get("admin_sso_at")
+sso_refresh_token = st.query_params.get("admin_sso_rt")
+if sso_access_token and not st.session_state.user:
+    try:
+        res = supabase.auth.set_session(sso_access_token, sso_refresh_token or "")
+        st.session_state.user = res.user
+        st.session_state.access_token = res.session.access_token
+        st.session_state.refresh_token = res.session.refresh_token
+    except Exception:
+        pass  # invalid/expired handoff token -- fall through to the normal login screen
+    finally:
+        # Scrub the tokens out of the URL either way -- they've done their
+        # job (or failed to) and shouldn't linger in the address bar/history.
+        st.query_params.clear()
+        st.rerun()
+
 # 3. Secure Authentication Interface
 if not st.session_state.user:
     tab1, tab2 = st.tabs(["Log In", "Sign Up"])

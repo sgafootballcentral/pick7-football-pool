@@ -104,7 +104,7 @@ function renderChrome(innerHtml) {
         <div class="who">Logged in as <b>${escapeHtml(state.username)}</b></div>
         <span style="display:flex; gap:6px; align-items:center;">
           ${state.isAdmin ? `
-            <a class="btn btn-secondary" href="${escapeHtml(window.APP_CONFIG.ADMIN_URL)}" target="_blank" rel="noopener"
+            <a class="btn btn-secondary" href="${escapeHtml(buildAdminUrl())}" target="_blank" rel="noopener"
                style="width:auto; padding:6px 12px; font-size:0.82rem; text-decoration:none;">Admin ↗</a>
           ` : ""}
           <button class="btn btn-secondary" id="logout-btn" style="width:auto; padding:6px 12px; font-size:0.82rem;">Log Out</button>
@@ -148,6 +148,16 @@ function renderChrome(innerHtml) {
       render();
     });
   });
+}
+
+function buildAdminUrl() {
+  const base = window.APP_CONFIG.ADMIN_URL;
+  const accessToken = state.session?.access_token;
+  const refreshToken = state.session?.refresh_token;
+  if (!accessToken) return base; // no live session yet -- fall back to a plain link, Streamlit just shows its own login
+
+  const sep = base.includes("?") ? "&" : "?";
+  return `${base}${sep}admin_sso_at=${encodeURIComponent(accessToken)}&admin_sso_rt=${encodeURIComponent(refreshToken || "")}`;
 }
 
 export function escapeHtml(str) {
