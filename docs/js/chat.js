@@ -71,6 +71,10 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
     if (preserveScroll) scrollToBottom();
   }
 
+  function messagesSignature(msgs) {
+    return msgs.map((m) => m.id).join(",");
+  }
+
   function drawMessages() {
     const list = el.querySelector("#chat-list");
     if (!list) { draw(); return; } // shell not mounted yet -- fall back to a full draw
@@ -202,11 +206,19 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
     try {
       const { data, error } = await supabase.from("chat_messages").select("*").order("created_at", { ascending: true });
       if (error) throw error;
-      s.messages = data || [];
+      const newMessages = data || [];
+      const changed = messagesSignature(newMessages) !== messagesSignature(s.messages);
+      s.messages = newMessages;
       s.loading = false;
       if (backgroundOnly && el.querySelector("#chat-list")) {
-        drawMessages();
-        if (preserveScroll) scrollToBottom();
+        // Skip touching the DOM at all when nothing actually changed --
+        // rewriting the (identical) list every 5s was what caused the
+        // visible screen flash, since it forced a repaint (and reloaded
+        // any images) even with no new messages.
+        if (changed) {
+          drawMessages();
+          if (preserveScroll) scrollToBottom();
+        }
       } else {
         draw(preserveScroll);
       }
