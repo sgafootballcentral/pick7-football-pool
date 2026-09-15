@@ -29,6 +29,22 @@ export function renderAuth(el, { supabase }) {
     drawForm();
   }
 
+  function wireEnterToNextField(form) {
+    const inputs = Array.from(form.querySelectorAll("input"));
+    inputs.forEach((input, i) => {
+      const isLast = i === inputs.length - 1;
+      input.setAttribute("enterkeyhint", isLast ? "go" : "next");
+      if (!isLast) {
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            inputs[i + 1].focus();
+          }
+        });
+      }
+    });
+  }
+
   function drawForm() {
     const formSlot = document.getElementById("auth-form");
     if (mode === "login") {
@@ -42,6 +58,7 @@ export function renderAuth(el, { supabase }) {
           <button class="chat-delete" id="forgot-link" style="font-size:0.85rem;">Forgot your password?</button>
         </div>
       `;
+      wireEnterToNextField(formSlot.querySelector("#login-form"));
       formSlot.querySelector("#login-form").addEventListener("submit", onLogin);
       formSlot.querySelector("#forgot-link").addEventListener("click", () => {
         mode = "forgot"; error = ""; success = "";
@@ -56,6 +73,7 @@ export function renderAuth(el, { supabase }) {
           <button class="btn btn-primary" type="submit" ${busy ? "disabled" : ""}>${busy ? "Creating account…" : "Sign Up"}</button>
         </form>
       `;
+      wireEnterToNextField(formSlot.querySelector("#signup-form"));
       formSlot.querySelector("#signup-form").addEventListener("submit", onSignup);
     } else {
       formSlot.innerHTML = `
@@ -68,6 +86,7 @@ export function renderAuth(el, { supabase }) {
           <button class="chat-delete" id="back-link" style="font-size:0.85rem;">&larr; Back to log in</button>
         </div>
       `;
+      wireEnterToNextField(formSlot.querySelector("#forgot-form"));
       formSlot.querySelector("#forgot-form").addEventListener("submit", onForgot);
       formSlot.querySelector("#back-link").addEventListener("click", () => {
         mode = "login"; error = ""; success = "";
