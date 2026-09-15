@@ -14,7 +14,16 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
 
   function scrollToBottom() {
     const list = el.querySelector("#chat-list");
-    if (list) list.scrollTop = list.scrollHeight;
+    if (!list) return;
+    list.scrollTop = list.scrollHeight;
+    // Images load asynchronously and grow the list after the line above
+    // runs -- without this, the view lands short of the true bottom
+    // whenever the newest message (or one just above it) has an image.
+    list.querySelectorAll("img").forEach((img) => {
+      if (!img.complete) {
+        img.addEventListener("load", () => { list.scrollTop = list.scrollHeight; }, { once: true });
+      }
+    });
   }
 
   function draw(preserveScroll) {
@@ -31,7 +40,7 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
         <label class="hint" style="display:flex; align-items:center; gap:6px;">
           <input type="checkbox" id="chat-auto-toggle" ${s.autoRefresh ? "checked" : ""}> Auto-refresh (5s)
         </label>
-        ${notifButtonHtml()}
+        <span id="chat-notif-slot">${notifButtonHtml()}</span>
         ${isAdmin ? `<button class="btn btn-secondary" id="chat-clear-btn" style="width:auto; padding:8px 12px; margin-left:auto;">\u{1F5D1}️ Clear All</button>` : ""}
       </div>
       ${s.error ? `<div class="error-msg">${escapeHtml(s.error)}</div>` : ""}
@@ -104,6 +113,13 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
         ${isAdmin ? `<div><button class="chat-delete" data-delete-msg="${m.id}" data-image-url="${escapeHtml(m.image_url || "")}">\u{1F5D1}️ Delete</button></div>` : ""}
       </div>
     `;
+  }
+
+  function updateNotifButton() {
+    const slot = el.querySelector("#chat-notif-slot");
+    if (!slot) return; // full draw() hasn't happened yet -- nothing to patch
+    slot.innerHTML = notifButtonHtml();
+    slot.querySelector("#chat-notif-btn")?.addEventListener("click", onToggleNotifications);
   }
 
   function notifButtonHtml() {
@@ -236,7 +252,7 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
 
   loadMessages(true).then(setupAutoRefresh);
   if (pushSupported()) {
-    getPushState().then((st) => { s.notifState = st; draw(); });
+    getPushState().then((st) => { s.notifState = st; updateNotifButton(); });
   } else {
     s.notifState = "unsupported";
   }
