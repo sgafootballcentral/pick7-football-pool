@@ -398,6 +398,15 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     for (const row of rows) {
       await supabase.from("picks").insert(row);
     }
+    // One row per submission event (not per pick) -- a Database Webhook on
+    // this table's INSERT is what triggers the admin push notification,
+    // see supabase/functions/send-picks-push. Non-critical if it fails --
+    // the picks themselves are already saved above.
+    try {
+      await supabase.from("pick_submissions").insert({
+        user_id: user.id, username, week_number: s.week, picks_count: rows.length,
+      });
+    } catch (_) { /* non-critical */ }
     s.recap = rows.map((r) => ({
       selected_team: r.selected_team,
       matchup: `${gameLookup[r.game_id]?.favorite_team || ""} vs ${gameLookup[r.game_id]?.underdog_team || r.game_id}`,

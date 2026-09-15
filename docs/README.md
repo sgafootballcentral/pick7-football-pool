@@ -92,14 +92,53 @@ know someone posted:
   3. `docs/js/config.js`'s `VAPID_PUBLIC_KEY` is already set to match the
      keypair used above -- only change it if you generate a new keypair.
 
+## 8. Admin push notification when picks are submitted
+
+Whenever a player finishes submitting (or resubmitting) their picks for a
+week, every admin who has push notifications enabled gets a real OS
+notification naming who submitted and for which week. It reuses the exact
+same opt-in as chat -- the 🔔 button on the Chat tab -- since a browser's
+push subscription isn't tied to one feature. An admin who already turned
+on notifications for chat is automatically covered here too; nothing
+extra to enable.
+
+Setup (one-time, same pattern as chat push):
+
+1. **Database**: a `pick_submissions` table logs one row per submission
+   (not per pick -- a single submission writes 7 rows to `picks`, so this
+   table exists purely as a single-row-per-event marker to hook a webhook
+   on):
+   ```sql
+   create table if not exists pick_submissions (
+     id bigint generated always as identity primary key,
+     user_id uuid not null references auth.users(id) on delete cascade,
+     username text not null,
+     week_number int not null,
+     picks_count int not null default 7,
+     created_at timestamptz not null default now()
+   );
+   alter table pick_submissions enable row level security;
+   create policy "Users insert their own pick submissions"
+     on pick_submissions for insert
+     with check (auth.uid() = user_id);
+   create policy "Users read their own pick submissions"
+     on pick_submissions for select
+     using (auth.uid() = user_id);
+   ```
+2. **Edge Function + webhook** -- see
+   `supabase/functions/send-picks-push/README.md` for deploying the
+   function and wiring up the Database Webhook (`pick_submission_push`)
+   that fires it on every new `pick_submissions` row. No new secrets
+   needed -- it reuses the VAPID keys already set up for chat.
+
 ## What's not in v1
 
 - Admin functions (syncing the week's games/spreads, grading, exports) --
   still done from the Streamlit Admin page, same as today.
 - Realtime for picks/leaderboard/live scores -- those still poll (matching
   the Streamlit app's own auto-refresh behavior) rather than pushing
-  instantly. Chat is the exception: new messages trigger a real push
-  notification per player, see above.
+  instantly. Chat and picks-submitted admin alerts are the exception --
+  both trigger a real push notification, see above.
 
 ## Local testing before you deploy
 

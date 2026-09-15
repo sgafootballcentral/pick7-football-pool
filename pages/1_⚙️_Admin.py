@@ -151,6 +151,12 @@ def confirm_merge(info):
                 f"Week(s) {info['conflict_weeks']} already have picks under {info['to_name']} for the same "
                 "game(s) -- those weeks will be SKIPPED to avoid duplicates. You'll need to sort those out by hand."
             )
+        if info.get("carry_payment"):
+            method_label = info.get("from_payment_method") or "no method set"
+            st.info(
+                f"{info['from_name']} is marked **paid** ({method_label}) but {info['to_name']} isn't yet -- "
+                f"that payment status will carry over to {info['to_name']}."
+            )
         st.write("This cannot be undone.")
 
         col_yes, col_no = st.columns(2)
@@ -171,6 +177,13 @@ def confirm_merge(info):
                         "user_id": info["to_id"], "username": info["to_name"],
                     }).eq("id", p["id"]).execute()
                     moved += 1
+
+                if info.get("carry_payment"):
+                    supabase.table("players").update({
+                        "paid": True,
+                        "payment_method": info.get("from_payment_method"),
+                        "payment_method_other": info.get("from_payment_method_other"),
+                    }).eq("id", info["to_id"]).execute()
 
                 remaining = supabase.table("picks").select("id").eq("user_id", info["from_id"]).execute().data
                 removed_entry = False
@@ -1104,11 +1117,23 @@ with tab_players:
                 if p["game_id"] in to_game_ids_by_week.get(p["week_number"], set())
             })
 
+            # If the manual entry (FROM) was marked paid but the real account
+            # (TO) wasn't, carry that payment status/method over too --
+            # otherwise it's lost for good once the FROM entry is deleted.
+            # If TO is already marked paid, leave it alone rather than
+            # overwrite a status that may have been set more recently.
+            from_player = next((p for p in merge_players_roster if p["id"] == from_id), {})
+            to_player = next((p for p in merge_players_roster if p["id"] == to_id), {})
+            carry_payment = bool(from_player.get("paid")) and not bool(to_player.get("paid"))
+
             st.session_state.pending_merge = {
                 "from_id": from_id, "from_name": merge_from_name,
                 "to_id": to_id, "to_name": merge_to_name,
                 "from_picks_count": len(from_picks),
                 "conflict_weeks": conflict_weeks,
+                "carry_payment": carry_payment,
+                "from_payment_method": from_player.get("payment_method"),
+                "from_payment_method_other": from_player.get("payment_method_other"),
                 "completed": False,
             }
             st.rerun()

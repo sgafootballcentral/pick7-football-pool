@@ -189,6 +189,16 @@ def confirm_resubmit(existing_picks_raw, new_picks, game_lookup):
                         "game_id": p["game_id"], "selected_team": p["selected_team"],
                         "spread_at_pick": game_lookup.get(p["game_id"], {}).get("spread_value", ""),
                     }).execute()
+                # One row per submission event (not per pick) -- a Database
+                # Webhook on this table's INSERT is what triggers the admin
+                # push notification, see supabase/functions/send-picks-push.
+                try:
+                    supabase.table("pick_submissions").insert({
+                        "user_id": user.id, "username": username,
+                        "week_number": CURRENT_WEEK, "picks_count": len(new_picks),
+                    }).execute()
+                except Exception:
+                    pass  # non-critical -- picks themselves are already saved
                 st.session_state.pending_resubmit = None
                 st.rerun()
             except Exception as e:
@@ -731,6 +741,16 @@ else:
                             "game_id": p["game_id"], "selected_team": p["selected_team"],
                             "spread_at_pick": game_lookup.get(p["game_id"], {}).get("spread_value", ""),
                         }).execute()
+                    # One row per submission event (not per pick) -- a Database
+                    # Webhook on this table's INSERT is what triggers the admin
+                    # push notification, see supabase/functions/send-picks-push.
+                    try:
+                        supabase.table("pick_submissions").insert({
+                            "user_id": user.id, "username": username,
+                            "week_number": CURRENT_WEEK, "picks_count": len(chosen_picks),
+                        }).execute()
+                    except Exception:
+                        pass  # non-critical -- picks themselves are already saved
                     st.success("Boom! Your 7 picks are saved securely.")
 
                     recap_rows = [
