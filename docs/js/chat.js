@@ -15,13 +15,26 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
   function scrollToBottom() {
     const list = el.querySelector("#chat-list");
     if (!list) return;
-    list.scrollTop = list.scrollHeight;
+
+    const settle = () => {
+      list.scrollTop = list.scrollHeight;
+      // .chat-input-row sits AFTER (not inside) #chat-list, and the whole
+      // chat screen (heading, buttons, message list, input row) can be
+      // taller than the viewport -- so maxing out the inner list's own
+      // scroll isn't enough, the outer page needs to scroll down too, or
+      // the input row/newest message can stay below the fold. scrollIntoView
+      // walks up through every scrollable ancestor, not just the nearest
+      // one, so this brings both into view together.
+      el.querySelector("#chat-send-btn")?.scrollIntoView({ block: "end" });
+    };
+
+    settle();
     // Images load asynchronously and grow the list after the line above
     // runs -- without this, the view lands short of the true bottom
     // whenever the newest message (or one just above it) has an image.
     list.querySelectorAll("img").forEach((img) => {
       if (!img.complete) {
-        img.addEventListener("load", () => { list.scrollTop = list.scrollHeight; }, { once: true });
+        img.addEventListener("load", settle, { once: true });
       }
     });
   }
