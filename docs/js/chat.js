@@ -17,7 +17,10 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
     if (!list) return;
 
     const settle = () => {
-      list.scrollTop = list.scrollHeight;
+      // Overshoot on purpose -- scrollTop silently clamps to the real max,
+      // so this safely covers the max being computed a hair short
+      // (subpixel rounding, a reflow that hasn't fully settled yet).
+      list.scrollTop = list.scrollHeight + 1000;
       // .chat-input-row sits AFTER (not inside) #chat-list, and the whole
       // chat screen (heading, buttons, message list, input row) can be
       // taller than the viewport -- so maxing out the inner list's own
@@ -29,8 +32,13 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
     };
 
     settle();
-    // Images load asynchronously and grow the list after the line above
-    // runs -- without this, the view lands short of the true bottom
+    // Re-run once the browser has actually finished laying out this frame
+    // -- measuring scrollHeight right after innerHTML is set can land a
+    // hair early (e.g. before a line-height/font reflow finishes), which
+    // is what left the last line half-clipped.
+    requestAnimationFrame(() => requestAnimationFrame(settle));
+    // Images load asynchronously and grow the list after the lines above
+    // run -- without this, the view lands short of the true bottom
     // whenever the newest message (or one just above it) has an image.
     list.querySelectorAll("img").forEach((img) => {
       if (!img.complete) {
@@ -63,7 +71,7 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
       <div class="chat-input-row">
         <input type="file" id="chat-file-input" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none;">
         <button class="btn btn-secondary" id="chat-attach-btn" style="width:auto; padding:11px 12px;">\u{1F4CE}</button>
-        <input type="text" id="chat-text-input" placeholder="Type a message…">
+        <textarea id="chat-text-input" placeholder="Type a message…" rows="1"></textarea>
         <button class="btn btn-primary" id="chat-send-btn">Send</button>
       </div>
       ${s.pendingFile ? `<div class="hint" style="margin-top:4px;">Attached: ${escapeHtml(s.pendingFile.name)} <button class="chat-delete" id="chat-remove-file">remove</button></div>` : ""}
@@ -83,9 +91,23 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
     });
     el.querySelector("#chat-remove-file")?.addEventListener("click", () => { s.pendingFile = null; draw(); });
     el.querySelector("#chat-send-btn").addEventListener("click", onSend);
-    el.querySelector("#chat-text-input").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") onSend();
-    });
+    {
+      const chatTextInput = el.querySelector("#chat-text-input");
+      // Grow the box with the message instead of letting long text scroll
+      // sideways inside a fixed-height field.
+      const autoResizeChatInput = () => {
+        chatTextInput.style.height = "auto";
+        chatTextInput.style.height = Math.min(chatTextInput.scrollHeight, 120) + "px";
+      };
+      chatTextInput.addEventListener("input", autoResizeChatInput);
+      chatTextInput.addEventListener("keydown", (e) => {
+        // Enter sends; Shift+Enter inserts a newline like a normal chat app.
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          onSend();
+        }
+      });
+    }
     el.querySelectorAll("[data-delete-msg]").forEach((btn) => {
       btn.addEventListener("click", () => onDeleteMessage(btn.dataset.deleteMsg, btn.dataset.imageUrl || ""));
     });

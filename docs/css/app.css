@@ -254,7 +254,7 @@ table.standings th { color: var(--text-dim); font-weight: 600; font-size: 0.78re
 .rank-2 { color: var(--silver); font-weight: 700; }
 .rank-3 { color: var(--bronze); font-weight: 700; }
 
-.chat-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.chat-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; padding-bottom: 4px; }
 .chat-msg { max-width: 85%; }
 .chat-msg.mine { align-self: flex-end; text-align: right; }
 .chat-msg .meta { font-size: 0.72rem; color: var(--text-dim); margin-bottom: 2px; }
@@ -262,7 +262,21 @@ table.standings th { color: var(--text-dim); font-weight: 600; font-size: 0.78re
 .chat-msg.mine .bubble { background: var(--accent-dim); border-color: var(--accent); }
 .chat-msg img { max-width: 100%; border-radius: 8px; margin-top: 6px; display: block; }
 .chat-input-row { display: flex; gap: 8px; position: sticky; bottom: calc(64px + var(--safe-bottom)); background: var(--bg); padding-top: 8px; }
-.chat-input-row input[type="text"] { flex: 1; }
+.chat-input-row textarea {
+  flex: 1;
+  resize: none;
+  overflow-y: auto;
+  min-height: 44px;
+  max-height: 120px;
+  line-height: 1.35;
+  font-family: inherit;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 11px 12px;
+  box-sizing: border-box;
+}
 .chat-input-row .btn { width: auto; padding: 11px 14px; }
 .chat-delete { background: none; border: none; color: var(--text-dim); font-size: 0.72rem; margin-top: 3px; }
 
