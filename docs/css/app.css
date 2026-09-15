@@ -131,6 +131,7 @@ button {
   z-index: 100;
 }
 .bottom-nav button {
+  position: relative;
   flex: 1;
   background: none;
   border: none;
@@ -145,6 +146,16 @@ button {
 }
 .bottom-nav button .icon { font-size: 1.3rem; }
 .bottom-nav button.active { color: var(--accent); }
+.nav-badge {
+  position: absolute;
+  top: 4px;
+  right: calc(50% - 18px);
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #e5484d;
+  border: 1.5px solid var(--bg-elevated);
+}
 
 .topbar {
   display: flex;

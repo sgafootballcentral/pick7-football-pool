@@ -1,4 +1,5 @@
 import { escapeHtml } from "./app.js";
+import { pushSupported, getPushState, subscribeToPush, unsubscribeFromPush } from "./push.js";
 
 function storagePathFromUrl(url) {
   if (!url) return null;
@@ -8,7 +9,7 @@ function storagePathFromUrl(url) {
 }
 
 export function renderChat(el, { supabase, user, username, isAdmin }) {
-  const s = { loading: true, error: "", messages: [], autoRefresh: true, intervalSec: 5, pendingFile: null };
+  const s = { loading: true, error: "", messages: [], autoRefresh: true, intervalSec: 5, pendingFile: null, notifState: "checking" };
   let timer = null;
 
   function scrollToBottom() {
@@ -30,6 +31,7 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
         <label class="hint" style="display:flex; align-items:center; gap:6px;">
           <input type="checkbox" id="chat-auto-toggle" ${s.autoRefresh ? "checked" : ""}> Auto-refresh (5s)
         </label>
+        ${notifButtonHtml()}
         ${isAdmin ? `<button class="btn btn-secondary" id="chat-clear-btn" style="width:auto; padding:8px 12px; margin-left:auto;">\u{1F5D1}️ Clear All</button>` : ""}
       </div>
       ${s.error ? `<div class="error-msg">${escapeHtml(s.error)}</div>` : ""}
@@ -51,6 +53,7 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
       setupAutoRefresh();
     });
     el.querySelector("#chat-clear-btn")?.addEventListener("click", onClearAll);
+    el.querySelector("#chat-notif-btn")?.addEventListener("click", onToggleNotifications);
     el.querySelector("#chat-attach-btn").addEventListener("click", () => el.querySelector("#chat-file-input").click());
     el.querySelector("#chat-file-input").addEventListener("change", (e) => {
       s.pendingFile = e.target.files[0] || null;
@@ -86,6 +89,32 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
         ${isAdmin ? `<div><button class="chat-delete" data-delete-msg="${m.id}" data-image-url="${escapeHtml(m.image_url || "")}">\u{1F5D1}️ Delete</button></div>` : ""}
       </div>
     `;
+  }
+
+  function notifButtonHtml() {
+    if (s.notifState === "unsupported" || s.notifState === "checking") return "";
+    if (s.notifState === "denied") {
+      return `<span class="hint" style="margin-left:2px;">\u{1F515} Notifications blocked -- enable in browser settings</span>`;
+    }
+    const on = s.notifState === "subscribed";
+    return `<button class="btn btn-secondary" id="chat-notif-btn" style="width:auto; padding:8px 12px;">${on ? "\u{1F514} Notifications on" : "\u{1F515} Enable notifications"}</button>`;
+  }
+
+  async function onToggleNotifications() {
+    try {
+      if (s.notifState === "subscribed") {
+        await unsubscribeFromPush(supabase);
+        s.notifState = "unsubscribed";
+      } else {
+        await subscribeToPush(supabase, user.id);
+        s.notifState = "subscribed";
+      }
+      s.error = "";
+    } catch (e) {
+      s.error = e.message || "Couldn't update notification settings.";
+      s.notifState = await getPushState();
+    }
+    draw();
   }
 
   async function onSend() {
@@ -175,6 +204,11 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
   }
 
   loadMessages(true).then(setupAutoRefresh);
+  if (pushSupported()) {
+    getPushState().then((st) => { s.notifState = st; draw(); });
+  } else {
+    s.notifState = "unsupported";
+  }
   draw();
 
   const observer = new MutationObserver(() => {

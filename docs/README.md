@@ -49,13 +49,57 @@ still works (schedule, spreads, submitting picks, standings, chat).
   support the automatic install prompt, so the PWA shows a banner with these
   instructions instead.
 
+## 6. Admin shortcut
+
+If you're an admin, the top bar shows an **Admin ↗** link straight to the
+Streamlit Admin app, and it carries your PWA session over so you don't have
+to log in a second time (see `admin_sso_at`/`admin_sso_rt` handling in
+`app.py`). If the handoff ever fails for some reason, it just falls back to
+Streamlit's normal login screen -- nothing breaks.
+
+## 7. Chat: unread badge + push notifications
+
+Two pieces work together so players don't have to keep the Chat tab open to
+know someone posted:
+
+- **In-app badge** -- a small red dot on the bottom-nav Chat button,
+  entirely client-side. No setup needed.
+- **Real OS notifications** -- opt-in per device via the 🔔 button on the
+  Chat tab. One-time setup:
+
+  1. **Database** (SQL Editor, run once against your Supabase project):
+     ```sql
+     create table if not exists push_subscriptions (
+       id bigint generated always as identity primary key,
+       user_id uuid not null references auth.users(id) on delete cascade,
+       endpoint text not null unique,
+       p256dh text not null,
+       auth text not null,
+       created_at timestamptz not null default now()
+     );
+     alter table push_subscriptions enable row level security;
+     drop policy if exists "Users manage their own push subscriptions" on push_subscriptions;
+     create policy "Users manage their own push subscriptions"
+       on push_subscriptions for all
+       using (auth.uid() = user_id)
+       with check (auth.uid() = user_id);
+     alter table players add column if not exists last_chat_read_at timestamptz;
+     ```
+  2. **Edge Function + webhook** -- see
+     `supabase/functions/send-chat-push/README.md` for deploying the
+     function, setting the VAPID secrets, and wiring up the Database
+     Webhook that fires it on every new chat message.
+  3. `docs/js/config.js`'s `VAPID_PUBLIC_KEY` is already set to match the
+     keypair used above -- only change it if you generate a new keypair.
+
 ## What's not in v1
 
 - Admin functions (syncing the week's games/spreads, grading, exports) --
   still done from the Streamlit Admin page, same as today.
-- Realtime push for chat/scores -- this polls (matching the Streamlit app's
-  own auto-refresh behavior) rather than pushing instantly, to avoid
-  needing extra Supabase Realtime configuration.
+- Realtime for picks/leaderboard/live scores -- those still poll (matching
+  the Streamlit app's own auto-refresh behavior) rather than pushing
+  instantly. Chat is the exception: new messages trigger a real push
+  notification per player, see above.
 
 ## Local testing before you deploy
 

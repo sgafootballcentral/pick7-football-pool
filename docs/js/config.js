@@ -17,4 +17,9 @@ window.APP_CONFIG = {
   // sync, grading, exports, player management) still live. Admins see a
   // shortcut to this in the PWA's top bar.
   ADMIN_URL: "https://pick7-football-pool-akxf5scobqjcmpbjbfai9d.streamlit.app/",
+
+  // Public VAPID key for Web Push (chat notifications). Safe to ship
+  // client-side -- it's the public half of the keypair; the private half
+  // lives only as a Supabase Edge Function secret, never here.
+  VAPID_PUBLIC_KEY: "BJswhXemsT6r6OKeTKhs5pal1y0PhBlnpbOHx47rtI7He4do5Wcp7Hzz957s7nx8fT9wj7Hj0w7vdQjLtmY0ajE",
 };

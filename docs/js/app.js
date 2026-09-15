@@ -16,6 +16,8 @@ const state = {
   deferredInstallPrompt: null,
   installBannerDismissed: sessionStorage.getItem("installBannerDismissed") === "1",
   recoveryMode: false,
+  lastChatReadAt: null,
+  hasUnreadChat: false,
 };
 
 function isStandalone() {
@@ -60,6 +62,51 @@ async function refreshIdentity() {
   } catch (_) {
     state.isAdmin = false;
   }
+
+  try {
+    const { data } = await supabase.from("players").select("last_chat_read_at").eq("id", state.user.id).single();
+    state.lastChatReadAt = data?.last_chat_read_at || null;
+  } catch (_) {
+    state.lastChatReadAt = null;
+  }
+}
+
+// Lightweight poll for new chat activity -- independent of whether the Chat
+// tab is mounted, so the bottom-nav badge stays accurate no matter which
+// tab a player is looking at. Never counts a player's own messages as
+// "unread", and never flags unread while the Chat tab is already open.
+async function checkUnreadChat() {
+  if (!state.user) return;
+  try {
+    const { data } = await supabase
+      .from("chat_messages")
+      .select("created_at,user_id")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+    if (!data) return;
+    const isMine = data.user_id === state.user.id;
+    const isNew = !state.lastChatReadAt || new Date(data.created_at) > new Date(state.lastChatReadAt);
+    const nowUnread = !isMine && isNew && state.activeTab !== "chat";
+    if (nowUnread !== state.hasUnreadChat) {
+      state.hasUnreadChat = nowUnread;
+      render();
+    }
+  } catch (_) {
+    /* non-critical */
+  }
+}
+
+async function markChatRead() {
+  if (!state.user) return;
+  state.hasUnreadChat = false;
+  const nowIso = new Date().toISOString();
+  state.lastChatReadAt = nowIso;
+  try {
+    await supabase.from("players").update({ last_chat_read_at: nowIso }).eq("id", state.user.id);
+  } catch (_) {
+    /* non-critical */
+  }
 }
 
 supabase.auth.onAuthStateChange((event, session) => {
@@ -71,8 +118,10 @@ supabase.auth.onAuthStateChange((event, session) => {
   state.session = session;
   state.user = session?.user ?? null;
   if (state.user && !state.recoveryMode) {
-    refreshIdentity().then(render);
+    refreshIdentity().then(() => { render(); checkUnreadChat(); });
   } else if (!state.user) {
+    state.hasUnreadChat = false;
+    state.lastChatReadAt = null;
     state.username = null;
     state.isAdmin = false;
     render();
@@ -122,6 +171,7 @@ function renderChrome(innerHtml) {
         </button>
         <button data-tab="chat" class="${state.activeTab === "chat" ? "active" : ""}">
           <span class="icon">\u{1F4AC}</span>Chat
+          ${state.hasUnreadChat ? `<span class="nav-badge"></span>` : ""}
         </button>
       </nav>
     ` : ""}
@@ -145,6 +195,7 @@ function renderChrome(innerHtml) {
   root.querySelectorAll(".bottom-nav [data-tab]").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.activeTab = btn.dataset.tab;
+      if (state.activeTab === "chat") markChatRead();
       render();
     });
   });
@@ -201,4 +252,6 @@ export function render() {
 (async function boot() {
   await refreshIdentity();
   render();
+  checkUnreadChat();
+  setInterval(checkUnreadChat, 20000);
 })();
