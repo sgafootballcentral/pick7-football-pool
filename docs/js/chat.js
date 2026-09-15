@@ -71,6 +71,17 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
     if (preserveScroll) scrollToBottom();
   }
 
+  function drawMessages() {
+    const list = el.querySelector("#chat-list");
+    if (!list) { draw(); return; } // shell not mounted yet -- fall back to a full draw
+    list.innerHTML = s.messages.length
+      ? s.messages.map((m) => chatMsgHtml(m)).join("")
+      : `<div class="hint">No messages yet -- be the first to say something.</div>`;
+    list.querySelectorAll("[data-delete-msg]").forEach((btn) => {
+      btn.addEventListener("click", () => onDeleteMessage(btn.dataset.deleteMsg, btn.dataset.imageUrl || ""));
+    });
+  }
+
   function chatMsgHtml(m) {
     const mine = m.user_id === user.id;
     let timeStr = "";
@@ -184,13 +195,18 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
     }
   }
 
-  async function loadMessages(preserveScroll) {
+  async function loadMessages(preserveScroll, backgroundOnly) {
     try {
       const { data, error } = await supabase.from("chat_messages").select("*").order("created_at", { ascending: true });
       if (error) throw error;
       s.messages = data || [];
       s.loading = false;
-      draw(preserveScroll);
+      if (backgroundOnly && el.querySelector("#chat-list")) {
+        drawMessages();
+        if (preserveScroll) scrollToBottom();
+      } else {
+        draw(preserveScroll);
+      }
     } catch (e) {
       s.loading = false;
       s.error = e.message || "Couldn't load chat.";
@@ -200,7 +216,7 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
 
   function setupAutoRefresh() {
     if (timer) clearInterval(timer);
-    if (s.autoRefresh) timer = setInterval(() => loadMessages(false), s.intervalSec * 1000);
+    if (s.autoRefresh) timer = setInterval(() => loadMessages(false, true), s.intervalSec * 1000);
   }
 
   loadMessages(true).then(setupAutoRefresh);
