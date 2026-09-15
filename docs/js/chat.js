@@ -153,7 +153,10 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
     if (!text && !imageUrl) return;
 
     const { error } = await supabase.from("chat_messages").insert({
-      user_id: user.id, username, message: text || null, image_url: imageUrl,
+      // message is NOT NULL in the database (the Streamlit app relies on
+      // this too) -- an image-only message must still send an empty string,
+      // never null, or the insert is rejected.
+      user_id: user.id, username, message: text, image_url: imageUrl,
     });
     if (error) { s.error = "Database error: " + error.message; draw(); return; }
 
