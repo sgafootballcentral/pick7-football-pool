@@ -1,5 +1,5 @@
 // Bump this on every deploy so clients pick up new files instead of a stale cache.
-const CACHE_VERSION = "pick7-v2";
+const CACHE_VERSION = "pick7-v3";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -44,7 +44,11 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
 
   event.respondWith(
-    fetch(event.request)
+    // cache: "no-store" bypasses the browser's own HTTP disk cache, not just
+    // our Cache Storage -- otherwise a "network-first" fetch can still come
+    // back with a stale cached response instead of actually hitting the
+    // network, and app updates (like this one) never reach installed PWAs.
+    fetch(event.request, { cache: "no-store" })
       .then((resp) => {
         const copy = resp.clone();
         caches.open(CACHE_VERSION).then((cache) => cache.put(event.request, copy));
