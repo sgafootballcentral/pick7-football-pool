@@ -48,13 +48,23 @@ async function refreshIdentity() {
     return;
   }
 
-  state.username = state.user.user_metadata?.username || state.user.email;
+  const signupUsername = state.user.user_metadata?.username || state.user.email;
 
-  // Mirror the Streamlit app's own behavior: upsert a players row on login,
-  // non-critical if it fails.
+  // Mirror the Streamlit app's own behavior, and its fix for the same bug:
+  // don't blindly overwrite an existing players row on every login, or a
+  // rename an admin made would get reverted back to the signup-time name
+  // the very next time this player logs in.
   try {
-    await supabase.from("players").upsert({ id: state.user.id, username: state.username });
-  } catch (_) { /* non-critical */ }
+    const { data: existingPlayerRows } = await supabase.from("players").select("username").eq("id", state.user.id);
+    if (existingPlayerRows && existingPlayerRows.length) {
+      state.username = existingPlayerRows[0].username || signupUsername;
+    } else {
+      state.username = signupUsername;
+      await supabase.from("players").insert({ id: state.user.id, username: state.username });
+    }
+  } catch (_) {
+    state.username = signupUsername; // non-critical -- don't block the session over this
+  }
 
   try {
     const { data } = await supabase.from("league_users").select("role").eq("id", state.user.id).single();

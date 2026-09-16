@@ -409,11 +409,19 @@ if st.session_state.get("access_token"):
         st.session_state.user = None
         st.session_state.access_token = None
         st.rerun()
-username = user.user_metadata.get("username", user.email)
+signup_username = user.user_metadata.get("username", user.email)
 try:
-    supabase.table("players").upsert({"id": user.id, "username": username}).execute()
+    existing_player_row = supabase.table("players").select("username").eq("id", user.id).execute().data
+    if existing_player_row:
+        # Already on file -- use whatever name is there (an admin may have
+        # renamed them since signup) instead of overwriting it back to the
+        # name chosen at signup every time they log in.
+        username = existing_player_row[0].get("username") or signup_username
+    else:
+        username = signup_username
+        supabase.table("players").insert({"id": user.id, "username": username}).execute()
 except Exception:
-    pass  # non-critical -- don't block the session over this
+    username = signup_username  # non-critical -- don't block the session over this
 st.sidebar.write(f"Logged in as: **{username}**")
 if st.sidebar.button("Log Out", use_container_width=True):
     supabase.auth.sign_out()

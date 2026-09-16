@@ -1143,6 +1143,51 @@ with tab_players:
 
     st.write("---")
 
+    # RENAME A PLAYER
+    st.subheader("🔤 Rename a Player")
+    st.caption("Updates their display name everywhere -- the players list, their pick history, and future picks. "
+               "If they have a real login, this sticks even after they log in again.")
+
+    rename_players_roster = supabase.table("players").select("*").order("username").execute().data
+    if not rename_players_roster:
+        st.info("No players yet.")
+    else:
+        rename_options = {p["username"]: p["id"] for p in rename_players_roster}
+        rename_from_name = st.selectbox(
+            "Player to rename:", ["— Select a player —"] + sorted(rename_options.keys()), key="rename_from_select"
+        )
+        if rename_from_name == "— Select a player —":
+            st.info("Select a player above to rename them.")
+        else:
+            new_name_input = st.text_input("New display name:", key="rename_new_name")
+            if st.button("Rename Player", type="primary", key="rename_player_btn"):
+                new_name = new_name_input.strip()
+                if not new_name:
+                    st.error("Enter a new name.")
+                elif new_name == rename_from_name:
+                    st.info("That's already their name.")
+                elif new_name in rename_options:
+                    st.error(f"'{new_name}' is already in use by another player.")
+                else:
+                    try:
+                        rename_id = rename_options[rename_from_name]
+                        supabase.table("players").update({"username": new_name}).eq("id", rename_id).execute()
+                        # Keep denormalized username columns in sync so past weeks
+                        # (leaderboard, exports) show the new name too, not just
+                        # picks made from here on -- same reason the merge feature
+                        # above rewrites username on every moved pick.
+                        supabase.table("picks").update({"username": new_name}).eq("user_id", rename_id).execute()
+                        try:
+                            supabase.table("pick_submissions").update({"username": new_name}).eq("user_id", rename_id).execute()
+                        except Exception:
+                            pass  # non-critical -- just an audit log for push notifications
+                        st.success(f"Renamed {rename_from_name} to {new_name}.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Database error: {e}")
+
+    st.write("---")
+
     # 14. PLAYER PAYMENT STATUS
     st.subheader("💰 Player Payment Status")
 
