@@ -160,10 +160,23 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     el.querySelector("#preview-numbers-btn").addEventListener("click", onPreviewNumbers);
 
     el.querySelectorAll("[data-pick-game]").forEach((input) => {
-      input.addEventListener("change", (e) => {
+      // "click" (not "change") on purpose -- clicking an already-checked
+      // radio never fires "change" (its checked state doesn't move), so
+      // there was no way to back out of a game once picked short of
+      // immediately choosing the other team in it. Treat a click on the
+      // currently-selected option as "clear this pick" instead.
+      input.addEventListener("click", (e) => {
         const gid = e.target.dataset.pickGame;
         const team = e.target.value;
-        if (count >= 7 && !(gid in s.selected)) return; // capped client-side too
+        if (s.selected[gid] === team) {
+          delete s.selected[gid];
+          draw();
+          return;
+        }
+        if (count >= 7 && !(gid in s.selected)) {
+          e.preventDefault();
+          return; // capped client-side too
+        }
         s.selected[gid] = team;
         draw();
       });

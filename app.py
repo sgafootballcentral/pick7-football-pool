@@ -855,6 +855,16 @@ else:
                     is_current_empty = st.session_state.get(f"sel_{game['game_id']}") is None
                     should_disable = ui_max_reached and is_current_empty
 
+                    # A radio group has no built-in way to click your way back
+                    # to "nothing selected" -- clicking the already-chosen
+                    # option again is simply a no-op. This is the only way to
+                    # back out of a game once picked, short of the widget
+                    # itself supporting it.
+                    if not is_current_empty:
+                        if st.button("✖ Clear", key=f"clear_{game['game_id']}", use_container_width=True):
+                            st.session_state[f"sel_{game['game_id']}"] = None
+                            st.rerun()
+
                     pick = st.radio(
                         "Choose", options=[fav_team, und_team], index=None, horizontal=True,
                         key=f"sel_{game['game_id']}", label_visibility="collapsed", disabled=should_disable
