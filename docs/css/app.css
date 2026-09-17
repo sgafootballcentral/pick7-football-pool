@@ -236,6 +236,9 @@ input, select, textarea {
   font-size: 0.8rem;
   padding: 7px 0;
 }
+.pick-locked.has-pick { color: var(--text); font-size: 0.85rem; }
+.pick-result.win { color: var(--win); font-weight: 700; }
+.pick-result.loss { color: var(--loss); font-weight: 700; }
 
 .sticky-bar {
   position: sticky;

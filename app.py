@@ -546,6 +546,20 @@ else:
     # Sort chronologically first so the day groups come out in calendar order below
     games_chronological = sorted(all_games, key=lambda g: g["kickoff_time"])
 
+    # Each pick's radio (key=f"sel_{game_id}") starts with nothing selected
+    # and never looks at the database on its own -- without this, switching
+    # to a week you've already picked (including just reloading the page)
+    # would show every game as unpicked. Only seed a key the very first
+    # time it shows up in this session, so it never overwrites an edit
+    # already in progress this session (e.g. mid-resubmit).
+    existing_picks = supabase.table("picks").select("*").eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute().data
+    pick_results_by_game = {}
+    for _p in existing_picks:
+        _sel_key = f"sel_{_p['game_id']}"
+        if _sel_key not in st.session_state:
+            st.session_state[_sel_key] = _p["selected_team"]
+        pick_results_by_game[_p["game_id"]] = _p.get("result")
+
     current_picks_count = sum(1 for g in all_games if st.session_state.get(f"sel_{g['game_id']}") is not None)
     ui_max_reached = current_picks_count >= 7
 
@@ -710,8 +724,7 @@ else:
         """, unsafe_allow_html=True)
 
         game_lookup = {g["game_id"]: g for g in all_games}
-        existing_picks = supabase.table("picks").select("*").eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute().data
-        already_submitted = bool(existing_picks)
+        already_submitted = bool(existing_picks)  # fetched above, before the game rows render
 
         col_lock, col_refresh_btn, col_auto_toggle, col_auto_interval = st.columns([2, 1, 1, 1])
         with col_lock:
@@ -826,7 +839,17 @@ else:
             live_line = game.get("spread_value", "0.0")
 
             live_data = espn_scores.get(game["game_id"])
-            if live_data:
+            if not live_data and game_graded and game.get("home_score") is not None and game.get("away_score") is not None:
+                # ESPN's live feed only really covers today's/this week's
+                # games -- looking back at an old, already-graded week falls
+                # back to the final score the admin's grading step saved
+                # directly on this game, instead of showing a blank score.
+                _fav_score = game["home_score"] if game.get("favorite_team_home") else game["away_score"]
+                _und_score = game["home_score"] if game.get("underdog_team_home") else game["away_score"]
+                fav_score_text = f"  \n**Score: {_fav_score}**"
+                und_score_text = f"  \n**Score: {_und_score}**"
+                status_ticker = "`🏁 FINAL`"
+            elif live_data:
                 # Update spreads dynamically from the live internet wire if present
                 if live_data.get("line") and live_data["line"] != "0.0":
                     live_line = live_data["line"]
@@ -858,7 +881,13 @@ else:
             with c_spr: st.markdown(f"`{live_line}`")
             with c_pck:
                 if is_time_locked:
-                    st.button("🔒 Locked", key=f"lock_{game['game_id']}", disabled=True, use_container_width=True)
+                    locked_team = st.session_state.get(f"sel_{game['game_id']}")
+                    if locked_team:
+                        _result = pick_results_by_game.get(game["game_id"])
+                        _badge = " \u2705 Win" if _result == "win" else (" \u274C Loss" if _result == "loss" else "")
+                        st.markdown(f"\U0001F512 You picked:  \n**{locked_team}**{_badge}")
+                    else:
+                        st.caption("\U0001F512 Locked -- no pick made")
                 else:
                     is_current_empty = st.session_state.get(f"sel_{game['game_id']}") is None
                     should_disable = ui_max_reached and is_current_empty

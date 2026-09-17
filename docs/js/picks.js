@@ -67,6 +67,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     scores: {},
     existingPicks: [],
     selected: {}, // game_id -> team name
+    pickResults: {}, // game_id -> "win" | "loss" | null (graded result of that pick, once the admin grades it)
     autoRefresh: false,
     numberInput: "",
     numberError: "",
@@ -191,6 +192,14 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     if (s.recap && !modalAlreadyOpen) drawRecapModal();
   }
 
+  function lockedPickHtml(selectedTeam, result) {
+    if (!selectedTeam) return `<div class="pick-locked">\u{1F512} Locked -- no pick made</div>`;
+    let resultBadge = "";
+    if (result === "win") resultBadge = ` <span class="pick-result win">\u2705 Win</span>`;
+    else if (result === "loss") resultBadge = ` <span class="pick-result loss">\u274C Loss</span>`;
+    return `<div class="pick-locked has-pick">\u{1F512} You picked <b>${escapeHtml(selectedTeam)}</b>${resultBadge}</div>`;
+  }
+
   function gameRowHtml(g, s, numbersMap) {
     const { timeStr } = formatKickoff(g.kickoff_time);
     const now = new Date();
@@ -222,6 +231,16 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
       } else if (/DELAY|POSTPON|SUSPEND|CANCEL/.test(live.status_name || "")) {
         statusHtml = `<span class="status">⏳ ${escapeHtml(live.clock || "Delayed")}</span>`;
       }
+    } else if (g.status === "final" && g.home_score != null && g.away_score != null) {
+      // The live ESPN feed only really has today's/this week's games --
+      // looking back at an old, already-graded week falls back to the
+      // final score the admin's grading step saved directly on this game,
+      // so past weeks don't just show a blank score.
+      const favScore = favHome ? g.home_score : g.away_score;
+      const undScore = undHome ? g.home_score : g.away_score;
+      favScoreHtml = `<span class="score"> ${favScore}</span>`;
+      undScoreHtml = `<span class="score"> ${undScore}</span>`;
+      statusHtml = `<span class="status">\u{1F3C1} FINAL</span>`;
     }
 
     const graded = g.status === "final" && g.winning_team;
@@ -243,7 +262,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
           ${statusHtml}
         </div>
         <div class="pick-choices">
-          ${isLocked ? `<div class="pick-locked">\u{1F512} Locked</div>` : `
+          ${isLocked ? lockedPickHtml(selectedTeam, s.pickResults[g.game_id]) : `
             <label class="pick-choice ${selectedTeam === favTeam ? "selected" : ""}">
               <input type="radio" name="pick_${g.game_id}" data-pick-game="${g.game_id}" value="${escapeHtml(favTeam)}"
                 ${selectedTeam === favTeam ? "checked" : ""} ${disable && selectedTeam !== favTeam ? "disabled" : ""}>
@@ -427,6 +446,8 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     }));
     const { data } = await supabase.from("picks").select("*").eq("user_id", user.id).eq("week_number", s.week);
     s.existingPicks = data || [];
+    s.pickResults = {};
+    for (const p of s.existingPicks) s.pickResults[p.game_id] = p.result;
     draw();
   }
 
@@ -465,7 +486,11 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
 
       const { data: picks } = await supabase.from("picks").select("*").eq("user_id", user.id).eq("week_number", s.week);
       s.existingPicks = picks || [];
-      for (const p of s.existingPicks) s.selected[p.game_id] = p.selected_team;
+      s.pickResults = {};
+      for (const p of s.existingPicks) {
+        s.selected[p.game_id] = p.selected_team;
+        s.pickResults[p.game_id] = p.result;
+      }
 
       s.scores = await fetchLiveScores(s.games);
       s.loading = false;
