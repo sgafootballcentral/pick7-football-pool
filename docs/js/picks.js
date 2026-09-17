@@ -1,7 +1,7 @@
 import { escapeHtml } from "./app.js";
+import { getSharedWeek, setSharedWeek } from "./weekState.js";
 
 const EASTERN_TZ = "America/New_York";
-let weekCache = null; // persists the selected week across tab switches in one session
 
 function computeGameNumbers(games) {
   const sorted = [...games].sort((a, b) => (a.kickoff_time || "").localeCompare(b.kickoff_time || ""));
@@ -62,7 +62,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     loading: true,
     error: "",
     weeks: [],
-    week: weekCache,
+    week: getSharedWeek(),
     games: [],
     scores: {},
     existingPicks: [],
@@ -148,7 +148,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
 
     el.querySelector("#week-select").addEventListener("change", (e) => {
       s.week = Number(e.target.value);
-      weekCache = s.week;
+      setSharedWeek(s.week);
       loadWeek();
     });
     el.querySelector("#refresh-btn").addEventListener("click", () => loadScoresOnly());
@@ -510,7 +510,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
       s.weeks = weeks;
       if (!weeks.length) { s.loading = false; draw(); return; }
       s.week = weeks.includes(s.week) ? s.week : weeks[0];
-      weekCache = s.week;
+      setSharedWeek(s.week);
       await loadWeek();
     } catch (e) {
       s.loading = false;

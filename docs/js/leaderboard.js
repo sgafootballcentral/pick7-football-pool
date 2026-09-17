@@ -1,9 +1,11 @@
 import { escapeHtml } from "./app.js";
-
-let weekViewCache = 1;
+import { getSharedWeek, setSharedWeek } from "./weekState.js";
 
 export function renderLeaderboard(el, { supabase }) {
-  const s = { loading: true, error: "", picksData: [], selectedWeek: weekViewCache };
+  // Falls back to Week 1 only if the Picks tab hasn't set a week yet this
+  // session (Picks is the default tab, so in practice this almost always
+  // already reflects whatever week the player was just looking at there).
+  const s = { loading: true, error: "", picksData: [], selectedWeek: getSharedWeek() || 1 };
 
   function draw() {
     if (s.loading) {
@@ -87,7 +89,7 @@ export function renderLeaderboard(el, { supabase }) {
 
     el.querySelector("#lb-week-select").addEventListener("change", (e) => {
       s.selectedWeek = Number(e.target.value);
-      weekViewCache = s.selectedWeek;
+      setSharedWeek(s.selectedWeek);
       draw();
     });
   }
