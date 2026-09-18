@@ -1148,43 +1148,69 @@ with tab_players:
     st.caption("Updates their display name everywhere -- the players list, their pick history, and future picks. "
                "If they have a real login, this sticks even after they log in again.")
 
-    rename_players_roster = supabase.table("players").select("*").order("username").execute().data
-    if not rename_players_roster:
-        st.info("No players yet.")
+    if st.session_state.get("rename_done"):
+        # Shown on the rerun AFTER a successful rename, same pattern as the merge
+        # feature above -- a success message followed immediately by st.rerun()
+        # gets wiped out before it's ever seen, which is what made a working
+        # rename look like "nothing happened."
+        _done = st.session_state.rename_done
+        st.success(f"Renamed {_done['from']} to {_done['to']}.")
+        if st.button("OK", key="rename_done_ok"):
+            st.session_state.rename_done = None
+            st.rerun()
     else:
-        rename_options = {p["username"]: p["id"] for p in rename_players_roster}
-        rename_from_name = st.selectbox(
-            "Player to rename:", ["— Select a player —"] + sorted(rename_options.keys()), key="rename_from_select"
-        )
-        if rename_from_name == "— Select a player —":
-            st.info("Select a player above to rename them.")
+        rename_players_roster = supabase.table("players").select("*").order("username").execute().data
+        if not rename_players_roster:
+            st.info("No players yet.")
         else:
-            new_name_input = st.text_input("New display name:", key="rename_new_name")
-            if st.button("Rename Player", type="primary", key="rename_player_btn"):
-                new_name = new_name_input.strip()
-                if not new_name:
-                    st.error("Enter a new name.")
-                elif new_name == rename_from_name:
-                    st.info("That's already their name.")
-                elif new_name in rename_options:
-                    st.error(f"'{new_name}' is already in use by another player.")
-                else:
-                    try:
-                        rename_id = rename_options[rename_from_name]
-                        supabase.table("players").update({"username": new_name}).eq("id", rename_id).execute()
-                        # Keep denormalized username columns in sync so past weeks
-                        # (leaderboard, exports) show the new name too, not just
-                        # picks made from here on -- same reason the merge feature
-                        # above rewrites username on every moved pick.
-                        supabase.table("picks").update({"username": new_name}).eq("user_id", rename_id).execute()
+            rename_options = {p["username"]: p["id"] for p in rename_players_roster}
+            rename_from_name = st.selectbox(
+                "Player to rename:", ["— Select a player —"] + sorted(rename_options.keys()), key="rename_from_select"
+            )
+            if rename_from_name == "— Select a player —":
+                st.info("Select a player above to rename them.")
+            else:
+                # A form (instead of a bare text_input + button) so pressing Enter
+                # in the name field submits it -- with a bare button, Enter looked
+                # like it did nothing because it never actually clicked the button.
+                with st.form(key="rename_form", clear_on_submit=True):
+                    new_name_input = st.text_input("New display name:", key="rename_new_name")
+                    rename_submitted = st.form_submit_button("Rename Player", type="primary")
+                if rename_submitted:
+                    new_name = new_name_input.strip()
+                    if not new_name:
+                        st.error("Enter a new name.")
+                    elif new_name == rename_from_name:
+                        st.info("That's already their name.")
+                    elif new_name in rename_options:
+                        st.error(f"'{new_name}' is already in use by another player.")
+                    else:
                         try:
-                            supabase.table("pick_submissions").update({"username": new_name}).eq("user_id", rename_id).execute()
-                        except Exception:
-                            pass  # non-critical -- just an audit log for push notifications
-                        st.success(f"Renamed {rename_from_name} to {new_name}.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Database error: {e}")
+                            rename_id = rename_options[rename_from_name]
+                            rename_result = supabase.table("players").update({"username": new_name}).eq("id", rename_id).execute()
+                            if not rename_result.data:
+                                # The update ran with no error but matched/changed
+                                # nothing -- most likely a permissions (RLS) issue.
+                                # Say so plainly instead of claiming success.
+                                st.error(
+                                    f"Supabase didn't confirm the rename went through for {rename_from_name} -- "
+                                    "no rows were updated. Nothing else was changed. Try logging out and back "
+                                    "in, then try again -- if it keeps failing, your admin session may need a refresh."
+                                )
+                            else:
+                                # Keep denormalized username columns in sync so past weeks
+                                # (leaderboard, exports) show the new name too, not just
+                                # picks made from here on -- same reason the merge feature
+                                # above rewrites username on every moved pick.
+                                supabase.table("picks").update({"username": new_name}).eq("user_id", rename_id).execute()
+                                try:
+                                    supabase.table("pick_submissions").update({"username": new_name}).eq("user_id", rename_id).execute()
+                                except Exception:
+                                    pass  # non-critical -- just an audit log for push notifications
+                                st.session_state.rename_done = {"from": rename_from_name, "to": new_name}
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"Database error: {e}")
 
     st.write("---")
 
