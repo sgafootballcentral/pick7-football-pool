@@ -68,6 +68,8 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     existingPicks: [],
     selected: {}, // game_id -> team name
     pickResults: {}, // game_id -> "win" | "loss" | null (graded result of that pick, once the admin grades it)
+    weekPicksByUsername: {}, // everyone's picks this week, grouped by username -- powers the view-scope selector below
+    viewScope: "all", // "all" | "mine" | a specific other player's username
     autoRefresh: false,
     numberInput: "",
     numberError: "",
@@ -96,8 +98,31 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     const pct = Math.min((count / 7) * 100, 100);
     const numbersMap = computeGameNumbers(s.games);
 
+    // Which games to actually show below: the full slate, just the games
+    // you've picked, or -- read-only, and only once a game has kicked off,
+    // so nobody can scout a still-editable pick -- another player's picks.
+    // otherPlayersSubmitted can only ever list players who've submitted at
+    // least one pick this week, so there's no way to pick someone with
+    // nothing submitted yet.
+    const otherPlayersSubmitted = Object.keys(s.weekPicksByUsername).filter((u) => u !== username).sort();
+    let visibleGames = s.games;
+    let viewingOtherPlayer = null;
+    let otherPicksByGame = {};
+    let scopeEmptyMessage = "";
+    if (s.viewScope === "mine") {
+      const myGameIds = new Set(s.existingPicks.map((p) => p.game_id));
+      visibleGames = s.games.filter((g) => myGameIds.has(g.game_id));
+      if (!visibleGames.length) scopeEmptyMessage = "You haven't made any picks yet for this week.";
+    } else if (s.viewScope !== "all") {
+      viewingOtherPlayer = s.viewScope;
+      const otherPicks = s.weekPicksByUsername[viewingOtherPlayer] || [];
+      otherPicksByGame = Object.fromEntries(otherPicks.map((p) => [p.game_id, p]));
+      visibleGames = s.games.filter((g) => g.game_id in otherPicksByGame);
+      if (!visibleGames.length) scopeEmptyMessage = `${viewingOtherPlayer} hasn't picked any games yet for this week.`;
+    }
+
     const grouped = {};
-    for (const g of [...s.games].sort((a, b) => a.kickoff_time.localeCompare(b.kickoff_time))) {
+    for (const g of [...visibleGames].sort((a, b) => a.kickoff_time.localeCompare(b.kickoff_time))) {
       const { dateStr } = formatKickoff(g.kickoff_time);
       (grouped[dateStr] ||= []).push(g);
     }
@@ -136,10 +161,20 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
         </div>
       </details>
 
-      ${Object.entries(grouped).map(([dateStr, dayGames]) => `
+      <div class="field" style="margin: 14px 0 10px;">
+        <label>\u{1F440} Which games would you like to view?</label>
+        <select id="view-scope-select">
+          <option value="all" ${s.viewScope === "all" ? "selected" : ""}>All games</option>
+          <option value="mine" ${s.viewScope === "mine" ? "selected" : ""}>My picks</option>
+          ${otherPlayersSubmitted.map((p) => `<option value="${escapeHtml(p)}" ${s.viewScope === p ? "selected" : ""}>${escapeHtml(p)}'s picks</option>`).join("")}
+        </select>
+      </div>
+      ${viewingOtherPlayer ? `<div class="hint" style="margin-bottom:10px;">\u{1F464} Showing ${escapeHtml(viewingOtherPlayer)}'s picks -- revealed only for games that have already kicked off.</div>` : ""}
+
+      ${scopeEmptyMessage ? `<div class="card">${escapeHtml(scopeEmptyMessage)}</div>` : Object.entries(grouped).map(([dateStr, dayGames]) => `
         <div class="day-group">
           <h3>\u{1F4C5} ${dateStr}</h3>
-          ${dayGames.map((g) => gameRowHtml(g, s, numbersMap)).join("")}
+          ${dayGames.map((g) => gameRowHtml(g, s, numbersMap, viewingOtherPlayer, otherPicksByGame)).join("")}
         </div>
       `).join("")}
 
@@ -156,6 +191,10 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     el.querySelector("#auto-refresh-toggle").addEventListener("change", (e) => {
       s.autoRefresh = e.target.checked;
       setupAutoRefresh();
+    });
+    el.querySelector("#view-scope-select").addEventListener("change", (e) => {
+      s.viewScope = e.target.value;
+      draw();
     });
     el.querySelector("#number-input").addEventListener("input", (e) => { s.numberInput = e.target.value; });
     el.querySelector("#preview-numbers-btn").addEventListener("click", onPreviewNumbers);
@@ -200,7 +239,23 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     return `<div class="pick-locked has-pick">\u{1F512} You picked <b>${escapeHtml(selectedTeam)}</b>${resultBadge}</div>`;
   }
 
-  function gameRowHtml(g, s, numbersMap) {
+  function otherPlayerPickHtml(g, viewingOtherPlayer, otherPicksByGame, isLocked) {
+    // Read-only, and only for games that have actually kicked off -- never
+    // reveal another player's still-editable pick, only what they had
+    // locked in once it's too late to change anyway.
+    if (!isLocked) {
+      return `<div class="pick-locked">\u{1F512} Locks at kickoff -- check back after this game starts.</div>`;
+    }
+    const otherPick = otherPicksByGame[g.game_id];
+    const otherTeam = otherPick && otherPick.selected_team;
+    if (!otherTeam) return `<div class="pick-locked">No pick found for this game.</div>`;
+    let resultBadge = "";
+    if (otherPick.result === "win") resultBadge = ` <span class="pick-result win">\u2705 Win</span>`;
+    else if (otherPick.result === "loss") resultBadge = ` <span class="pick-result loss">\u274C Loss</span>`;
+    return `<div class="pick-locked has-pick">\u{1F464} ${escapeHtml(viewingOtherPlayer)} picked <b>${escapeHtml(otherTeam)}</b>${resultBadge}</div>`;
+  }
+
+  function gameRowHtml(g, s, numbersMap, viewingOtherPlayer, otherPicksByGame) {
     const { timeStr } = formatKickoff(g.kickoff_time);
     const now = new Date();
     const kickoff = new Date(g.kickoff_time);
@@ -262,7 +317,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
           ${statusHtml}
         </div>
         <div class="pick-choices">
-          ${isLocked ? lockedPickHtml(selectedTeam, s.pickResults[g.game_id]) : `
+          ${viewingOtherPlayer ? otherPlayerPickHtml(g, viewingOtherPlayer, otherPicksByGame, isLocked) : (isLocked ? lockedPickHtml(selectedTeam, s.pickResults[g.game_id]) : `
             <label class="pick-choice ${selectedTeam === favTeam ? "selected" : ""}">
               <input type="radio" name="pick_${g.game_id}" data-pick-game="${g.game_id}" value="${escapeHtml(favTeam)}"
                 ${selectedTeam === favTeam ? "checked" : ""} ${disable && selectedTeam !== favTeam ? "disabled" : ""}>
@@ -273,7 +328,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
                 ${selectedTeam === undTeam ? "checked" : ""} ${disable && selectedTeam !== undTeam ? "disabled" : ""}>
               ${escapeHtml(undTeam)}
             </label>
-          `}
+          `)}
         </div>
       </div>
     `;
@@ -484,13 +539,23 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
       s.games = games || [];
       s.selected = {};
 
-      const { data: picks } = await supabase.from("picks").select("*").eq("user_id", user.id).eq("week_number", s.week);
-      s.existingPicks = picks || [];
+      // One query for everyone's picks this week, same idea as the Streamlit
+      // app -- existingPicks (mine) is filtered out of it below, and the
+      // rest powers the "view someone else's picks" selector.
+      const { data: weekPicks } = await supabase.from("picks").select("*").eq("week_number", s.week);
+      const weekPicksAll = weekPicks || [];
+      s.existingPicks = weekPicksAll.filter((p) => p.user_id === user.id);
       s.pickResults = {};
       for (const p of s.existingPicks) {
         s.selected[p.game_id] = p.selected_team;
         s.pickResults[p.game_id] = p.result;
       }
+      s.weekPicksByUsername = {};
+      for (const p of weekPicksAll) {
+        const uname = p.username || "Unknown";
+        (s.weekPicksByUsername[uname] ||= []).push(p);
+      }
+      s.viewScope = "all"; // reset on every week switch/reload, same as the Streamlit app
 
       s.scores = await fetchLiveScores(s.games);
       s.loading = false;
