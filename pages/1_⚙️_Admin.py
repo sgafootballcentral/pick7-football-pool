@@ -26,6 +26,81 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 st.title("⚙️ League Admin Panel")
 
 
+@st.cache_data(ttl=60)
+def fetch_live_scores_for_picks(games):
+    """Same ESPN live/final score lookup as app.py's fetch_live_scores(), for
+    the Admin > Picks tab's Score column -- only ever called for games this
+    project's own `games.status` still has as not-final, so it's cheap (a
+    fully graded week makes zero ESPN calls) and cached 60s like the main
+    app page."""
+    scores = {}
+    if not games:
+        return scores
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": "https://www.espn.com/",
+        "Accept": "application/json",
+    }
+    league_url_map = {
+        "NFL": "https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
+        "CFB": "https://site.web.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard",
+    }
+
+    games_by_league = {}
+    for g in games:
+        games_by_league.setdefault(g.get("league"), []).append(g)
+
+    for league_name, league_games in games_by_league.items():
+        url = league_url_map.get(league_name)
+        if not url:
+            continue
+
+        kickoff_dates = []
+        for g in league_games:
+            try:
+                kickoff_dates.append(datetime.fromisoformat(g["kickoff_time"].replace("Z", "+00:00")))
+            except (ValueError, AttributeError, TypeError):
+                pass
+        if not kickoff_dates:
+            continue
+
+        unique_dates = sorted({d.strftime("%Y%m%d") for d in kickoff_dates})
+
+        for date_str in unique_dates:
+            params = {"limit": 500, "dates": date_str}
+            if league_name == "CFB":
+                params["groups"] = 80
+
+            try:
+                resp = requests.get(url, params=params, headers=headers, timeout=15)
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
+            except Exception:
+                continue
+
+            for event in data.get("events", []):
+                g_id = f"espn_{event.get('id')}"
+                status_type = event.get("status", {}).get("type", {})
+                state = status_type.get("state", "pre")
+                completed = bool(status_type.get("completed", False))
+                detail_clock = status_type.get("shortDetail") or status_type.get("detail", "")
+
+                competitions = event.get("competitions", [{}])[0]
+                competitors = competitions.get("competitors", [])
+                home_node = next((c for c in competitors if c.get("homeAway") == "home"), {})
+                away_node = next((c for c in competitors if c.get("homeAway") == "away"), {})
+
+                scores[g_id] = {
+                    "home_score": home_node.get("score", "0"),
+                    "away_score": away_node.get("score", "0"),
+                    "state": state,
+                    "completed": completed,
+                    "clock": detail_clock,
+                }
+    return scores
+
+
 def nudge_off_whole_number(odds_string: str) -> str:
     """'PHI -6' -> 'PHI -5.5' -- shifts a whole-number spread half a point toward
     zero so a final margin can never land exactly on the spread (no pushes)."""
@@ -606,10 +681,34 @@ with tab_picks:
     view_week = section_week_selector("view_week_picks", active_week, "Week to view picks for:")
 
     picks_rows = supabase.table("picks").select("*").eq("week_number", view_week).execute().data
-    games_rows = supabase.table("games").select("game_id, display_text, favorite_team, underdog_team, spread_value, kickoff_time") \
-        .eq("week_number", view_week).execute().data
+    games_rows = supabase.table("games").select(
+        "game_id, display_text, favorite_team, underdog_team, favorite_team_home, "
+        "underdog_team_home, spread_value, kickoff_time, league, status, home_score, away_score"
+    ).eq("week_number", view_week).execute().data
     game_lookup = {g["game_id"]: g for g in games_rows}
     pick_numbers_map = compute_game_numbers(games_rows)
+
+    # Score column: games already graded use the score grading saved on the
+    # game row (no ESPN call needed); anything still not-final gets looked up
+    # live, same source app.py's picks page uses, so an in-progress game shows
+    # the current score here too.
+    _pending_score_games = [g for g in games_rows if g.get("status") != "final"]
+    _live_scores_for_picks = fetch_live_scores_for_picks(_pending_score_games)
+
+    def _score_label_for_game(g):
+        gid = g.get("game_id")
+        live = _live_scores_for_picks.get(gid)
+        if live and live.get("state") in ("in", "post"):
+            h, a = live["home_score"], live["away_score"]
+            if live.get("completed") or live.get("state") == "post":
+                return f"{a}-{h} (FINAL)"
+            clock = live.get("clock") or ""
+            return f"{a}-{h}" + (f" ({clock})" if clock else " (LIVE)")
+        if g.get("status") == "final" and g.get("home_score") is not None and g.get("away_score") is not None:
+            return f"{g['away_score']}-{g['home_score']} (FINAL)"
+        return "—"
+
+    score_label_map = {g["game_id"]: _score_label_for_game(g) for g in games_rows}
 
     all_players_rows = supabase.table("players").select("username").execute().data
     total_players = len(all_players_rows)
@@ -668,6 +767,7 @@ with tab_picks:
                 "Matchup": g.get("display_text", p["game_id"]),
                 "Pick": p.get("selected_team"),
                 "Spread": g.get("spread_value", ""),
+                "Score": score_label_map.get(p["game_id"], "—"),
                 "Result": result_label,
             })
         df_picks_view = pd.DataFrame(display_rows)
