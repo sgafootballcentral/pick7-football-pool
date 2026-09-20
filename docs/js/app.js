@@ -259,6 +259,17 @@ export function render() {
   else if (state.activeTab === "chat") renderChat(slot, ctx);
 }
 
+// Ask the browser to treat this origin's storage (localStorage, where the
+// Supabase session lives) as "persistent" rather than eligible for
+// automatic eviction under storage pressure. Installed home-screen PWAs on
+// iOS are already exempt from Safari's 7-day inactive-storage eviction, but
+// this is a harmless, standard defensive request for everyone else (a
+// regular browser tab, Android, desktop) -- no-op if unsupported, and never
+// blocks anything if the browser silently ignores or auto-denies it.
+if (navigator.storage && navigator.storage.persist) {
+  navigator.storage.persist().catch(() => {});
+}
+
 (async function boot() {
   await refreshIdentity();
   render();
