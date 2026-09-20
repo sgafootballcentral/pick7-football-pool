@@ -81,44 +81,52 @@ def fetch_live_scores(games_for_week):
         if not kickoff_dates:
             continue
 
-        params = {"limit": 1000, "dates": f"{min(kickoff_dates):%Y%m%d}-{max(kickoff_dates):%Y%m%d}"}
-        if league_name == "CFB":
-            params["groups"] = 80
+        # ESPN's scoreboard endpoint used to accept a "YYYYMMDD-YYYYMMDD" date
+        # range, but it now rejects any hyphenated range with an HTTP 400
+        # ("Failed to get events endpoint.") -- only a single bare date works.
+        # So instead of one request for the whole week's span, fetch each
+        # unique kickoff date separately and merge the results together.
+        unique_dates = sorted({d.strftime("%Y%m%d") for d in kickoff_dates})
 
-        try:
-            resp = requests.get(url, params=params, headers=headers, timeout=15)
-            if resp.status_code != 200:
+        for date_str in unique_dates:
+            params = {"limit": 1000, "dates": date_str}
+            if league_name == "CFB":
+                params["groups"] = 80
+
+            try:
+                resp = requests.get(url, params=params, headers=headers, timeout=15)
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
+            except Exception:
                 continue
-            data = resp.json()
-        except Exception:
-            continue
 
-        for event in data.get("events", []):
-            g_id = f"espn_{event.get('id')}"
-            status_type = event.get("status", {}).get("type", {})
-            state = status_type.get("state", "pre")
-            completed = bool(status_type.get("completed", False))
-            status_name = (status_type.get("name") or "").upper()
-            detail_clock = status_type.get("shortDetail") or status_type.get("detail", "")
+            for event in data.get("events", []):
+                g_id = f"espn_{event.get('id')}"
+                status_type = event.get("status", {}).get("type", {})
+                state = status_type.get("state", "pre")
+                completed = bool(status_type.get("completed", False))
+                status_name = (status_type.get("name") or "").upper()
+                detail_clock = status_type.get("shortDetail") or status_type.get("detail", "")
 
-            competitions = event.get("competitions", [{}])[0]
-            competitors = competitions.get("competitors", [])
-            home_node = next((c for c in competitors if c.get("homeAway") == "home"), {})
-            away_node = next((c for c in competitors if c.get("homeAway") == "away"), {})
+                competitions = event.get("competitions", [{}])[0]
+                competitors = competitions.get("competitors", [])
+                home_node = next((c for c in competitors if c.get("homeAway") == "home"), {})
+                away_node = next((c for c in competitors if c.get("homeAway") == "away"), {})
 
-            odds_node = competitions.get("odds", [])
-            odds_line = odds_node[0].get("details", "0.0") if odds_node else "0.0"
-            odds_line = nudge_off_whole_number(odds_line)
+                odds_node = competitions.get("odds", [])
+                odds_line = odds_node[0].get("details", "0.0") if odds_node else "0.0"
+                odds_line = nudge_off_whole_number(odds_line)
 
-            scores[g_id] = {
-                "home_score": home_node.get("score", "0"),
-                "away_score": away_node.get("score", "0"),
-                "state": state,
-                "completed": completed,
-                "status_name": status_name,
-                "clock": detail_clock,
-                "line": odds_line,
-            }
+                scores[g_id] = {
+                    "home_score": home_node.get("score", "0"),
+                    "away_score": away_node.get("score", "0"),
+                    "state": state,
+                    "completed": completed,
+                    "status_name": status_name,
+                    "clock": detail_clock,
+                    "line": odds_line,
+                }
     return scores
 
 

@@ -4,7 +4,7 @@ import pandas as pd
 import time as time_module
 import io
 import uuid
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 from supabase import create_client, Client
 from openpyxl import Workbook
@@ -348,19 +348,27 @@ with tab_setup:
                 # Wipe previous entries for the selected grouping week to avoid duplication
                 supabase.table("games").delete().eq("week_number", target_week).execute()
 
-                date_range = f"{start_utc_str}-{end_utc_str}"
-                leagues_to_fetch = [
-                    {
+                # ESPN's scoreboard endpoint used to accept a "YYYYMMDD-YYYYMMDD"
+                # date range, but it now rejects any hyphenated range with an HTTP
+                # 400 ("Failed to get events endpoint.") -- only a single bare date
+                # works. So instead of one request per league covering the whole
+                # window, issue one request per league PER DAY in the window.
+                num_days = (end_date - start_date).days + 1
+                window_dates = [
+                    (start_date + timedelta(days=n)).strftime("%Y%m%d") for n in range(num_days)
+                ]
+                leagues_to_fetch = []
+                for day_str in window_dates:
+                    leagues_to_fetch.append({
                         "name": "NFL",
                         "url": "https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
-                        "params": {"limit": 1000, "dates": date_range},
-                    },
-                    {
+                        "params": {"limit": 1000, "dates": day_str},
+                    })
+                    leagues_to_fetch.append({
                         "name": "CFB",
                         "url": "https://site.web.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard",
-                        "params": {"limit": 1000, "groups": 80, "dates": date_range},
-                    },
-                ]
+                        "params": {"limit": 1000, "groups": 80, "dates": day_str},
+                    })
 
                 total_games_inserted = 0
                 skipped_no_line = 0
@@ -919,39 +927,51 @@ with tab_grading:
                     if not kickoff_dates:
                         continue
 
-                    params = {
-                        "limit": 1000,
-                        "dates": f"{min(kickoff_dates):%Y%m%d}-{max(kickoff_dates):%Y%m%d}",
-                    }
-                    if league_name == "CFB":
-                        params["groups"] = 80
+                    # ESPN's scoreboard endpoint used to accept a "YYYYMMDD-YYYYMMDD"
+                    # date range, but it now rejects any hyphenated range with an
+                    # HTTP 400 ("Failed to get events endpoint.") -- only a single
+                    # bare date works. So fetch each unique kickoff date separately
+                    # and merge the results, instead of one request for the whole
+                    # week's span.
+                    unique_dates = sorted({d.strftime("%Y%m%d") for d in kickoff_dates})
+                    league_had_error = False
 
-                    try:
-                        resp = requests.get(url, params=params, headers=headers, timeout=15)
-                        if resp.status_code != 200:
-                            st.warning(f"{league_name} score refresh failed: HTTP {resp.status_code}")
-                            continue
-                        data = resp.json()
-                        time_module.sleep(2)  # same rate-limit courtesy as the sync
-                    except Exception as e:
-                        st.warning(f"{league_name} score refresh error: {e}")
-                        continue
+                    for date_str in unique_dates:
+                        params = {"limit": 1000, "dates": date_str}
+                        if league_name == "CFB":
+                            params["groups"] = 80
 
-                    for event in data.get("events", []):
-                        gid = f"espn_{event.get('id')}"
-                        state = event.get("status", {}).get("type", {}).get("state", "pre")
-
-                        competitions = event.get("competitions", [{}])[0]
-                        competitors = competitions.get("competitors", [])
-                        home_node = next((c for c in competitors if c.get("homeAway") == "home"), {})
-                        away_node = next((c for c in competitors if c.get("homeAway") == "away"), {})
                         try:
-                            home_score = int(home_node.get("score", 0))
-                            away_score = int(away_node.get("score", 0))
-                        except (TypeError, ValueError):
-                            home_score, away_score = 0, 0
+                            resp = requests.get(url, params=params, headers=headers, timeout=15)
+                            if resp.status_code != 200:
+                                st.warning(f"{league_name} score refresh failed for {date_str}: HTTP {resp.status_code}")
+                                league_had_error = True
+                                continue
+                            data = resp.json()
+                            time_module.sleep(2)  # same rate-limit courtesy as the sync
+                        except Exception as e:
+                            st.warning(f"{league_name} score refresh error for {date_str}: {e}")
+                            league_had_error = True
+                            continue
 
-                        espn_scores[gid] = {"state": state, "home_score": home_score, "away_score": away_score}
+                        for event in data.get("events", []):
+                            gid = f"espn_{event.get('id')}"
+                            state = event.get("status", {}).get("type", {}).get("state", "pre")
+
+                            competitions = event.get("competitions", [{}])[0]
+                            competitors = competitions.get("competitors", [])
+                            home_node = next((c for c in competitors if c.get("homeAway") == "home"), {})
+                            away_node = next((c for c in competitors if c.get("homeAway") == "away"), {})
+                            try:
+                                home_score = int(home_node.get("score", 0))
+                                away_score = int(away_node.get("score", 0))
+                            except (TypeError, ValueError):
+                                home_score, away_score = 0, 0
+
+                            espn_scores[gid] = {"state": state, "home_score": home_score, "away_score": away_score}
+
+                    if not league_had_error and unique_dates:
+                        st.caption(f"{league_name}: pulled scores for {', '.join(unique_dates)}.")
 
                 graded_count = 0
                 already_final_count = 0
