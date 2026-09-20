@@ -685,10 +685,13 @@ with tab_picks:
             # no extra query needed, and it stays in sync with the picks page's
             # own ✅ covered indicator automatically.
             def _highlight_pick_result(row):
+                # Pin an explicit text color alongside the background --
+                # otherwise Streamlit's dark-theme light-gray text is nearly
+                # invisible on these light backgrounds.
                 if row["Result"] == "✅ Correct":
-                    return ["background-color: #d9f2d9"] * len(row)
+                    return ["background-color: #1e6b2e; color: #ffffff"] * len(row)
                 if row["Result"] == "❌ Incorrect":
-                    return ["background-color: #f9d6d6"] * len(row)
+                    return ["background-color: #8a1f1f; color: #ffffff"] * len(row)
                 return [""] * len(row)
 
             styled_player_df = player_df.drop(columns=["Player"]).style.apply(_highlight_pick_result, axis=1)
