@@ -359,15 +359,20 @@ with tab_setup:
                 ]
                 leagues_to_fetch = []
                 for day_str in window_dates:
+                    # ESPN also silently truncates CFB results to a fraction of
+                    # the real slate when "limit" is set anywhere near/at 1000 (a
+                    # value that used to work fine) -- 500 is comfortably under
+                    # whatever their new cap is and still far more than any single
+                    # day's games.
                     leagues_to_fetch.append({
                         "name": "NFL",
                         "url": "https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
-                        "params": {"limit": 1000, "dates": day_str},
+                        "params": {"limit": 500, "dates": day_str},
                     })
                     leagues_to_fetch.append({
                         "name": "CFB",
                         "url": "https://site.web.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard",
-                        "params": {"limit": 1000, "groups": 80, "dates": day_str},
+                        "params": {"limit": 500, "groups": 80, "dates": day_str},
                     })
 
                 total_games_inserted = 0
@@ -937,7 +942,11 @@ with tab_grading:
                     league_had_error = False
 
                     for date_str in unique_dates:
-                        params = {"limit": 1000, "dates": date_str}
+                        # ESPN also silently truncates CFB results to a fraction
+                        # of the real slate when "limit" is set anywhere near/at
+                        # 1000 (a value that used to work fine) -- 500 is
+                        # comfortably under whatever their new cap is.
+                        params = {"limit": 500, "dates": date_str}
                         if league_name == "CFB":
                             params["groups"] = 80
 

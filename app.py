@@ -89,7 +89,11 @@ def fetch_live_scores(games_for_week):
         unique_dates = sorted({d.strftime("%Y%m%d") for d in kickoff_dates})
 
         for date_str in unique_dates:
-            params = {"limit": 1000, "dates": date_str}
+            # ESPN also silently truncates CFB results to a fraction of the
+            # real slate when "limit" is set anywhere near/at 1000 (a value
+            # that used to work fine) -- 500 is comfortably under whatever
+            # their new cap is and still far more than any single day's games.
+            params = {"limit": 500, "dates": date_str}
             if league_name == "CFB":
                 params["groups"] = 80
 

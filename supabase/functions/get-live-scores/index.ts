@@ -65,7 +65,7 @@ async function fetchLeague(league: "nfl" | "cfb", dateRange: string, scores: Rec
 
   await Promise.all(dates.map(async (dateStr) => {
     const url = new URL(LEAGUE_URLS[league]);
-    url.searchParams.set("limit", "1000");
+    url.searchParams.set("limit", "500");
     url.searchParams.set("dates", dateStr);
     if (league === "cfb") url.searchParams.set("groups", "80");
 
