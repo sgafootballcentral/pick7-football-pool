@@ -655,12 +655,20 @@ with tab_picks:
             nums = pick_numbers_map.get(p["game_id"], {})
             is_fav = p.get("selected_team") == g.get("favorite_team")
             pick_num = nums.get("fav_num") if is_fav else nums.get("und_num")
+            result_val = p.get("result")
+            if result_val == "win":
+                result_label = "✅ Correct"
+            elif result_val == "loss":
+                result_label = "❌ Incorrect"
+            else:
+                result_label = "⏳ Pending"
             display_rows.append({
                 "Player": p.get("username", "Unknown"),
                 "#": pick_num,
                 "Matchup": g.get("display_text", p["game_id"]),
                 "Pick": p.get("selected_team"),
                 "Spread": g.get("spread_value", ""),
+                "Result": result_label,
             })
         df_picks_view = pd.DataFrame(display_rows)
 
@@ -671,7 +679,20 @@ with tab_picks:
             st.info("Select a player above to see their picks.")
         else:
             player_df = df_picks_view[df_picks_view["Player"] == selected_player].sort_values("#")
-            st.dataframe(player_df.drop(columns=["Player"]), use_container_width=True, hide_index=True)
+
+            # Result comes straight from picks.result, which grading (manual or
+            # the grade-games cron job) already sets to "win"/"loss" per pick --
+            # no extra query needed, and it stays in sync with the picks page's
+            # own ✅ covered indicator automatically.
+            def _highlight_pick_result(row):
+                if row["Result"] == "✅ Correct":
+                    return ["background-color: #d9f2d9"] * len(row)
+                if row["Result"] == "❌ Incorrect":
+                    return ["background-color: #f9d6d6"] * len(row)
+                return [""] * len(row)
+
+            styled_player_df = player_df.drop(columns=["Player"]).style.apply(_highlight_pick_result, axis=1)
+            st.dataframe(styled_player_df, use_container_width=True, hide_index=True)
 
             user_id_by_username = {p["username"]: p["user_id"] for p in picks_rows}
 
