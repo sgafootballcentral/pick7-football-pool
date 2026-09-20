@@ -1,8 +1,8 @@
 # grade-games Edge Function
 
-Automated version of the "🔄 Refresh Scores & Grade" button on the
-Admin page's Grading tab. Runs on a schedule (see Cron Job setup below) so
-the picks page's ✅ "covered" checkmark and the leaderboard/standings stay
+Automated version of the "🔄 Refresh Scores & Grade" button on the Admin
+page's Grading tab. Runs on a schedule (see Cron Job setup below) so the
+picks page's ✅ "covered" checkmark and the leaderboard/standings stay
 current without an admin having to click the button by hand.
 
 This mirrors the Python grading logic in `pages/1_⚙️_Admin.py` exactly
@@ -12,6 +12,10 @@ manually. It does **not** touch the live score display on the picks page
 (that's a separate, always-fresh fetch done on every page load and needs no
 automation) -- this only writes `games.status` / `games.winning_team` and
 `picks.result`.
+
+Games and their picks are graded in parallel (`Promise.all`), not one at a
+time -- a typical run finishes in ~1 second, comfortably inside the 5-second
+timeout cap the Cron Jobs UI allows for an HTTP-triggered job.
 
 ## Deploy it (one-time)
 
@@ -24,52 +28,55 @@ automation) -- this only writes `games.status` / `games.winning_team` and
 
 ## Schedule it to run automatically
 
-Supabase dashboard -> **Integrations** -> **Cron Jobs** -> **Create a new
-cron job**:
-- Name: `grade-games-hourly`
-- Schedule: `0 * * * *` (every hour, on the hour, every day)
-- Type: **Supabase Edge Functions**
+The Cron integration isn't enabled by default -- check **Database ->
+Extensions** and toggle **pg_cron** on first (one-time; installs it into
+the `pg_catalog` schema) if **Integrations -> Cron** doesn't already show
+as "Installed". Skipping this step makes the "Create cron job" dialog
+appear to work but the job silently never gets saved.
+
+Then: Supabase dashboard -> **Integrations** -> **Cron** -> **Jobs** ->
+**Create job**:
+- Name: `grade-games-hourly` (cron jobs can't be renamed later, but the
+  name is just a label -- it's fine even if you pick a different interval)
+- Schedule: a cron expression, e.g. `*/30 * * * *` for every 30 minutes
+  (this pool currently runs every 30 minutes) or `0 * * * *` for hourly
+- Type: **Supabase Edge Function**
+- Method: `POST`
 - Edge Function: `grade-games`
-- HTTP Method: `POST`
-- HTTP Headers: include `Authorization: Bearer <service_role key>` (the
-  Cron Jobs UI has a built-in picker for this that pulls the key from the
-  Vault -- don't paste the raw key into the job definition yourself)
+- Timeout: `5000` ms (5000 is the max the UI allows; the function itself
+  typically finishes in ~1s)
+- HTTP Headers: add both
+  - `Authorization: Bearer <anon/publishable key>`
+  - `apikey: <anon/publishable key>`
 
-### Why hourly, every day (not just "game days")
+  (The publishable key is enough -- it satisfies this function's JWT
+  verification, and the function uses the service-role key internally for
+  the actual database writes, so nothing more privileged needs to go in
+  the cron job definition itself.)
 
-The cron schedule itself has no idea what week it is or when your games
-kick off -- it just fires on a fixed clock. But the function itself only
-ever touches games where `kickoff_time <= now()` AND `status != 'final'` --
-so outside an actual game window there's simply nothing that matches, and
-the run exits instantly with no ESPN calls and no writes. Restricting the
-cron to specific days/hours would risk missing an early Saturday game or a
-random weekday bowl game later in the season, so it's simpler and safer to
-just let it run continuously and let the function's own query do the
-filtering. At hourly cadence that's ~730 invocations/month, well under
-Supabase's free-tier 500,000/month invocation allowance.
-
-Similarly, there's no separate "wait 4-5 hours after kickoff" timer -- a
-game just keeps showing up as pending on each hourly run until ESPN itself
-reports it as `state: "post"` (actually over), at which point the very next
-hourly run grades it -- so a late West Coast game ending at 1am just gets
-picked up on the 1am or 2am run, automatically.
+That's it. Each run is cheap: if there are no ungraded, already-kicked-off
+games, it makes zero ESPN calls and returns immediately.
 
 ## Verify it works
 
-After deploying, trigger it once by hand (or wait for the first scheduled
-run) and check **Edge Functions -> grade-games -> Logs**, or call the
-function's URL directly with the anon/service key in the `apikey` header.
-The response looks like:
+After creating the job, check **Integrations -> Cron -> Jobs** to confirm
+it's listed with the right "Next run" time, or trigger the function once by
+hand and check **Edge Functions -> grade-games -> Logs**. Calling the
+function's URL directly with the publishable key in both the `apikey` and
+`Authorization: Bearer` headers returns:
 ```json
 { "graded": 2, "stillPending": 5, "gradedGames": ["..."], "datesFetched": {"CFB": ["20260920"]}, "warnings": [] }
 ```
 
 ## Adjusting the cadence
 
-Every hour was Trent's choice (he checks standings maybe 3-4 times per
-Saturday himself, so hourly already beats that). To change it, edit the
-cron job's schedule in the dashboard -- e.g. `*/30 * * * *` for every 30
-minutes, `*/15 * * * *` for every 15. No code change needed.
+Edit the cron job's schedule in the dashboard (Integrations -> Cron ->
+Jobs) -- e.g. `0 * * * *` for hourly, `*/15 * * * *` for every 15 minutes.
+No code change needed. Invocation count isn't a real constraint here --
+even every-minute is only ~43,000/month, well under Supabase's free-tier
+500,000/month Edge Function allowance -- the only reason to not go that
+aggressive is that ESPN's own data doesn't update meaningfully faster than
+every 15-30 minutes anyway.
 
 ## Notes
 - Only processes games with `kickoff_time` already in the past and

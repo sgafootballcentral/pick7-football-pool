@@ -133,9 +133,8 @@ Deno.serve(async (req) => {
       Object.assign(espnScores, leagueScores);
     }
 
-    let gradedCount = 0;
     let stillPendingCount = 0;
-    const gradedGames: string[] = [];
+    const gamesToGrade: any[] = [];
 
     for (const g of pendingGames) {
       const live = espnScores[g.game_id];
@@ -143,7 +142,15 @@ Deno.serve(async (req) => {
         stillPendingCount++;
         continue;
       }
+      gamesToGrade.push(g);
+    }
 
+    // Grade every finished game (and all of its picks) in parallel rather
+    // than one game/pick at a time -- the cron job that invokes this caps
+    // its own wait at 5s, so a busy hour with several games finishing at
+    // once needs to fan out, not queue sequentially.
+    const gradeResults = await Promise.all(gamesToGrade.map(async (g) => {
+      const live = espnScores[g.game_id];
       const { home_score, away_score } = live;
       const spreadNum = parseTrailingSpreadNumber(g.spread_value);
       const favIsHome = Boolean(g.favorite_team_home);
@@ -159,8 +166,7 @@ Deno.serve(async (req) => {
         away_score,
       }).eq("id", g.id);
       if (updateErr) {
-        warnings.push(`games update failed for ${g.game_id}: ${updateErr.message}`);
-        continue;
+        return { graded: false, warning: `games update failed for ${g.game_id}: ${updateErr.message}` };
       }
 
       // Grade each pick against the spread IT actually saw, not necessarily
@@ -169,10 +175,12 @@ Deno.serve(async (req) => {
         .from("picks")
         .select("*")
         .eq("game_id", g.game_id);
+
+      const pickWarnings: string[] = [];
       if (picksErr) {
-        warnings.push(`picks fetch failed for ${g.game_id}: ${picksErr.message}`);
+        pickWarnings.push(`picks fetch failed for ${g.game_id}: ${picksErr.message}`);
       } else {
-        for (const p of picksForGame || []) {
+        await Promise.all((picksForGame || []).map(async (p) => {
           const lockedSpreadNum = p.spread_at_pick
             ? parseTrailingSpreadNumber(p.spread_at_pick)
             : spreadNum;
@@ -184,13 +192,27 @@ Deno.serve(async (req) => {
             .update({ result: pickResult })
             .eq("id", p.id);
           if (pickUpdateErr) {
-            warnings.push(`pick update failed for pick ${p.id}: ${pickUpdateErr.message}`);
+            pickWarnings.push(`pick update failed for pick ${p.id}: ${pickUpdateErr.message}`);
           }
-        }
+        }));
       }
 
-      gradedCount++;
-      gradedGames.push(`${g.favorite_team} vs ${g.underdog_team} (Week ${g.week_number})`);
+      return {
+        graded: true,
+        gameLabel: `${g.favorite_team} vs ${g.underdog_team} (Week ${g.week_number})`,
+        warnings: pickWarnings,
+      };
+    }));
+
+    let gradedCount = 0;
+    const gradedGames: string[] = [];
+    for (const r of gradeResults) {
+      if (r.warning) warnings.push(r.warning);
+      if (r.warnings) warnings.push(...r.warnings);
+      if (r.graded) {
+        gradedCount++;
+        gradedGames.push(r.gameLabel!);
+      }
     }
 
     return new Response(JSON.stringify({
