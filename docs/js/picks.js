@@ -541,8 +541,13 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
 
       // One query for everyone's picks this week, same idea as the Streamlit
       // app -- existingPicks (mine) is filtered out of it below, and the
-      // rest powers the "view someone else's picks" selector.
-      const { data: weekPicks } = await supabase.from("picks").select("*").eq("week_number", s.week);
+      // rest powers the "view someone else's picks" selector. This used to
+      // silently swallow a query error (a failed/empty result looked
+      // identical to "nobody's picked yet"), which made a real problem here
+      // look exactly like normal, empty data -- log it now so it's visible
+      // in the console instead of just quietly showing nothing.
+      const { data: weekPicks, error: pErr } = await supabase.from("picks").select("*").eq("week_number", s.week);
+      if (pErr) console.error("Couldn't load this week's picks:", pErr);
       const weekPicksAll = weekPicks || [];
       s.existingPicks = weekPicksAll.filter((p) => p.user_id === user.id);
       s.pickResults = {};
