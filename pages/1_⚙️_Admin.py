@@ -1,8 +1,10 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 import pandas as pd
 import time as time_module
 import io
+import json
 import uuid
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -22,6 +24,35 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     st.stop()
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# Same "remember me" browser storage keys/helpers as app.py -- this page
+# doesn't drive its own login (app.py does), but a successful refresh here
+# needs to update the same saved tokens app.py's restore logic reads on the
+# next visit, or they'd go stale even though the session is still good.
+REMEMBER_AT_KEY = "pick7_remember_at"
+REMEMBER_RT_KEY = "pick7_remember_rt"
+
+
+def remember_session_in_browser(access_token, refresh_token):
+    components.html(f"""
+        <script>
+        try {{
+            localStorage.setItem({json.dumps(REMEMBER_AT_KEY)}, {json.dumps(access_token)});
+            localStorage.setItem({json.dumps(REMEMBER_RT_KEY)}, {json.dumps(refresh_token)});
+        }} catch (e) {{}}
+        </script>
+    """, height=0)
+
+
+def forget_session_in_browser():
+    components.html(f"""
+        <script>
+        try {{
+            localStorage.removeItem({json.dumps(REMEMBER_AT_KEY)});
+            localStorage.removeItem({json.dumps(REMEMBER_RT_KEY)});
+        }} catch (e) {{}}
+        </script>
+    """, height=0)
 
 st.title("⚙️ League Admin Panel")
 
@@ -352,10 +383,24 @@ if st.session_state.get("access_token"):
     try:
         supabase.auth.set_session(st.session_state.access_token, st.session_state.refresh_token)
     except Exception:
-        st.session_state.user = None
-        st.session_state.access_token = None
-        st.warning("Your session expired -- please log in again on the home page.")
-        st.stop()
+        # Same fix as app.py: set_session() should silently refresh an
+        # expired access token on its own, but supabase-py has had real
+        # bugs where a refresh that actually succeeds still surfaces as a
+        # failure -- so try one explicit refresh before treating this as a
+        # genuine logout.
+        try:
+            refreshed = supabase.auth.refresh_session(st.session_state.refresh_token)
+            st.session_state.access_token = refreshed.session.access_token
+            st.session_state.refresh_token = refreshed.session.refresh_token
+            remember_session_in_browser(refreshed.session.access_token, refreshed.session.refresh_token)
+        except Exception:
+            st.session_state.user = None
+            st.session_state.access_token = None
+            st.session_state.refresh_token = None
+            forget_session_in_browser()
+            st.session_state["_just_logged_out"] = True
+            st.warning("Your session expired -- please log in again on the home page.")
+            st.stop()
 
 user_id = st.session_state.user.id
 is_admin = False

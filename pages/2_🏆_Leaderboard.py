@@ -1,7 +1,9 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import io
 import requests
+import json
 import time as time_module
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
@@ -14,11 +16,56 @@ SUPABASE_URL = st.secrets.get("SUPABASE_URL")
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# Same "remember me" browser storage keys/helpers as app.py -- see there for
+# the full explanation.
+REMEMBER_AT_KEY = "pick7_remember_at"
+REMEMBER_RT_KEY = "pick7_remember_rt"
+
+
+def remember_session_in_browser(access_token, refresh_token):
+    components.html(f"""
+        <script>
+        try {{
+            localStorage.setItem({json.dumps(REMEMBER_AT_KEY)}, {json.dumps(access_token)});
+            localStorage.setItem({json.dumps(REMEMBER_RT_KEY)}, {json.dumps(refresh_token)});
+        }} catch (e) {{}}
+        </script>
+    """, height=0)
+
+
+def forget_session_in_browser():
+    components.html(f"""
+        <script>
+        try {{
+            localStorage.removeItem({json.dumps(REMEMBER_AT_KEY)});
+            localStorage.removeItem({json.dumps(REMEMBER_RT_KEY)});
+        }} catch (e) {{}}
+        </script>
+    """, height=0)
+
+
 if st.session_state.get("access_token"):
     try:
         supabase.auth.set_session(st.session_state.access_token, st.session_state.refresh_token)
     except Exception:
-        pass
+        # Same fix as app.py: try one explicit refresh before giving up --
+        # keeps this page's queries authenticated instead of silently
+        # falling back to an anon-level session.
+        try:
+            refreshed = supabase.auth.refresh_session(st.session_state.refresh_token)
+            st.session_state.access_token = refreshed.session.access_token
+            st.session_state.refresh_token = refreshed.session.refresh_token
+            remember_session_in_browser(refreshed.session.access_token, refreshed.session.refresh_token)
+        except Exception:
+            # Genuinely dead -- clear it out (quietly, matching this page's
+            # existing behavior) rather than leaving a broken session
+            # sitting in session_state; app.py will show the login screen
+            # again on the next visit there.
+            st.session_state.user = None
+            st.session_state.access_token = None
+            st.session_state.refresh_token = None
+            forget_session_in_browser()
+            st.session_state["_just_logged_out"] = True
 
 is_admin = False
 if st.session_state.get("user"):

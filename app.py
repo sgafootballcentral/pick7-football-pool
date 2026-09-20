@@ -2,6 +2,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 import requests
 import io
+import json
 from urllib.parse import parse_qs
 from streamlit_autorefresh import st_autorefresh
 from supabase import create_client, Client
@@ -20,6 +21,43 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     st.stop()
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# "Remember me" persistence -- keeps a logged-in session across a full
+# close-and-reopen of the tab/PWA, not just within one still-open browser
+# tab. Streamlit's own session_state only lives as long as that one tab's
+# live connection to the server, so without this, closing the tab, the
+# app going idle, or reopening later always meant a fresh login even
+# though the underlying Supabase refresh token was still perfectly valid.
+# Uses the exact same components.html() + window.top.location redirect
+# trick already used above for the password-recovery link and the PWA's
+# admin SSO handoff -- localStorage lives in the real page's origin, not
+# the sandboxed iframe components.html() renders into, so the only way to
+# get a value from there back into Python is to round-trip it through the
+# URL like those other two flows already do.
+REMEMBER_AT_KEY = "pick7_remember_at"
+REMEMBER_RT_KEY = "pick7_remember_rt"
+
+
+def remember_session_in_browser(access_token, refresh_token):
+    components.html(f"""
+        <script>
+        try {{
+            localStorage.setItem({json.dumps(REMEMBER_AT_KEY)}, {json.dumps(access_token)});
+            localStorage.setItem({json.dumps(REMEMBER_RT_KEY)}, {json.dumps(refresh_token)});
+        }} catch (e) {{}}
+        </script>
+    """, height=0)
+
+
+def forget_session_in_browser():
+    components.html(f"""
+        <script>
+        try {{
+            localStorage.removeItem({json.dumps(REMEMBER_AT_KEY)});
+            localStorage.removeItem({json.dumps(REMEMBER_RT_KEY)});
+        }} catch (e) {{}}
+        </script>
+    """, height=0)
 
 
 def nudge_off_whole_number(odds_string: str) -> str:
@@ -314,6 +352,7 @@ if sso_access_token and not st.session_state.user:
         st.session_state.user = res.user
         st.session_state.access_token = res.session.access_token
         st.session_state.refresh_token = res.session.refresh_token
+        remember_session_in_browser(res.session.access_token, res.session.refresh_token)
     except Exception:
         pass  # invalid/expired handoff token -- fall through to the normal login screen
     finally:
@@ -321,6 +360,61 @@ if sso_access_token and not st.session_state.user:
         # job (or failed to) and shouldn't linger in the address bar/history.
         st.query_params.clear()
         st.rerun()
+
+# "Remember me" restore, step 2: the redirect the localStorage-check script
+# below sends the browser to lands back here with the saved tokens in the
+# query string, the same way the SSO handoff above works.
+remembered_at = st.query_params.get(REMEMBER_AT_KEY)
+remembered_rt = st.query_params.get(REMEMBER_RT_KEY)
+if remembered_at and not st.session_state.user:
+    try:
+        res = supabase.auth.set_session(remembered_at, remembered_rt or "")
+        st.session_state.user = res.user
+        st.session_state.access_token = res.session.access_token
+        st.session_state.refresh_token = res.session.refresh_token
+        # set_session() may have handed back a freshly-refreshed access
+        # token rather than the one that was saved -- keep localStorage
+        # current so the next restore doesn't start from a stale one.
+        remember_session_in_browser(res.session.access_token, res.session.refresh_token)
+    except Exception:
+        # Saved tokens are no longer any good (revoked, refresh token
+        # used up, etc.) -- clear them so this doesn't loop forever
+        # retrying the same dead tokens on every future visit.
+        forget_session_in_browser()
+    finally:
+        st.query_params.clear()
+        st.rerun()
+
+# "Remember me" restore, step 1: nobody's logged in yet on this fresh
+# session_state (new tab, reopened PWA, app woke back up, etc.) and we're
+# not already mid-recovery, mid-SSO-handoff, or immediately after an
+# intentional Log Out -- check whether the browser has a saved session and,
+# if so, kick off step 2 above.
+just_logged_out = st.session_state.pop("_just_logged_out", False)
+if (
+    not st.session_state.user
+    and not recovery_access_token
+    and not sso_access_token
+    and not just_logged_out
+):
+    components.html(f"""
+        <script>
+        (function() {{
+            try {{
+                const at = localStorage.getItem({json.dumps(REMEMBER_AT_KEY)});
+                const rt = localStorage.getItem({json.dumps(REMEMBER_RT_KEY)});
+                if (at && rt) {{
+                    const url = new URL(window.top.location.href);
+                    if (!url.searchParams.has({json.dumps(REMEMBER_AT_KEY)})) {{
+                        url.searchParams.set({json.dumps(REMEMBER_AT_KEY)}, at);
+                        url.searchParams.set({json.dumps(REMEMBER_RT_KEY)}, rt);
+                        window.top.location.replace(url.toString());
+                    }}
+                }}
+            }} catch (e) {{}}
+        }})();
+        </script>
+    """, height=0)
 
 # 3. Secure Authentication Interface
 if not st.session_state.user:
@@ -336,6 +430,7 @@ if not st.session_state.user:
                 st.session_state.user = res.user
                 st.session_state.access_token = res.session.access_token
                 st.session_state.refresh_token = res.session.refresh_token
+                remember_session_in_browser(res.session.access_token, res.session.refresh_token)
                 st.rerun()
             except Exception: st.error("Login failed. Check entries.")
 
@@ -417,10 +512,29 @@ if st.session_state.get("access_token"):
     try:
         supabase.auth.set_session(st.session_state.access_token, st.session_state.refresh_token)
     except Exception:
-        # token expired or invalid -- force a fresh login
-        st.session_state.user = None
-        st.session_state.access_token = None
-        st.rerun()
+        # set_session() is supposed to silently refresh an expired access
+        # token using the refresh token -- but supabase-py's client has had
+        # real bugs where a refresh that actually succeeds still gets
+        # treated as a failure (e.g. supabase-py#1646), which would log
+        # someone out mid-session for no real reason. So before accepting
+        # this as a genuine "you're logged out", try one explicit refresh
+        # using the refresh token directly. Only if that ALSO fails is the
+        # session actually gone.
+        try:
+            refreshed = supabase.auth.refresh_session(st.session_state.refresh_token)
+            st.session_state.access_token = refreshed.session.access_token
+            st.session_state.refresh_token = refreshed.session.refresh_token
+            remember_session_in_browser(refreshed.session.access_token, refreshed.session.refresh_token)
+        except Exception:
+            # Genuinely expired/invalid (or truly logged out elsewhere) --
+            # force a fresh login, and don't leave a dead session behind
+            # for the "remember me" restore to keep retrying.
+            st.session_state.user = None
+            st.session_state.access_token = None
+            st.session_state.refresh_token = None
+            forget_session_in_browser()
+            st.session_state["_just_logged_out"] = True
+            st.rerun()
 signup_username = user.user_metadata.get("username", user.email)
 try:
     existing_player_row = supabase.table("players").select("username").eq("id", user.id).execute().data
@@ -438,6 +552,10 @@ st.sidebar.write(f"Logged in as: **{username}**")
 if st.sidebar.button("Log Out", use_container_width=True):
     supabase.auth.sign_out()
     st.session_state.user = None
+    st.session_state.access_token = None
+    st.session_state.refresh_token = None
+    forget_session_in_browser()
+    st.session_state["_just_logged_out"] = True
     st.rerun()
 
 available_week_rows = supabase.table("games").select("week_number").execute().data

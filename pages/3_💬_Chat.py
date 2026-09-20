@@ -1,5 +1,7 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import uuid
+import json
 from supabase import create_client, Client
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -14,12 +16,53 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# Same "remember me" browser storage keys/helpers as app.py -- see there for
+# the full explanation. This page doesn't drive its own login, but a
+# successful refresh here still needs to update the saved tokens app.py's
+# restore logic reads on the next visit.
+REMEMBER_AT_KEY = "pick7_remember_at"
+REMEMBER_RT_KEY = "pick7_remember_rt"
+
+
+def remember_session_in_browser(access_token, refresh_token):
+    components.html(f"""
+        <script>
+        try {{
+            localStorage.setItem({json.dumps(REMEMBER_AT_KEY)}, {json.dumps(access_token)});
+            localStorage.setItem({json.dumps(REMEMBER_RT_KEY)}, {json.dumps(refresh_token)});
+        }} catch (e) {{}}
+        </script>
+    """, height=0)
+
+
+def forget_session_in_browser():
+    components.html(f"""
+        <script>
+        try {{
+            localStorage.removeItem({json.dumps(REMEMBER_AT_KEY)});
+            localStorage.removeItem({json.dumps(REMEMBER_RT_KEY)});
+        }} catch (e) {{}}
+        </script>
+    """, height=0)
+
+
 if st.session_state.get("access_token"):
     try:
         supabase.auth.set_session(st.session_state.access_token, st.session_state.refresh_token)
     except Exception:
-        st.session_state.user = None
-        st.session_state.access_token = None
+        # Same fix as app.py/Admin.py: try one explicit refresh before
+        # treating a set_session() failure as a genuine logout.
+        try:
+            refreshed = supabase.auth.refresh_session(st.session_state.refresh_token)
+            st.session_state.access_token = refreshed.session.access_token
+            st.session_state.refresh_token = refreshed.session.refresh_token
+            remember_session_in_browser(refreshed.session.access_token, refreshed.session.refresh_token)
+        except Exception:
+            st.session_state.user = None
+            st.session_state.access_token = None
+            st.session_state.refresh_token = None
+            forget_session_in_browser()
+            st.session_state["_just_logged_out"] = True
 
 if "user" not in st.session_state or not st.session_state.user:
     st.warning("Please log in on the home page first.")
