@@ -564,13 +564,24 @@ else:
     # would show every game as unpicked. Only seed a key the very first
     # time it shows up in this session, so it never overwrites an edit
     # already in progress this session (e.g. mid-resubmit).
-    existing_picks = supabase.table("picks").select("*").eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute().data
+    # One query for everyone's picks this week -- existing_picks (mine) is
+    # filtered out of it below, and the rest powers the "view someone else's
+    # picks" selector further down. Reading other players' own picks table
+    # rows is already how the Leaderboard page works for every logged-in
+    # user, not just admins, so this doesn't open up anything new.
+    week_picks_all = supabase.table("picks").select("*").eq("week_number", CURRENT_WEEK).execute().data
+    existing_picks = [p for p in week_picks_all if p["user_id"] == user.id]
     pick_results_by_game = {}
     for _p in existing_picks:
         _sel_key = f"sel_{_p['game_id']}"
         if _sel_key not in st.session_state:
             st.session_state[_sel_key] = _p["selected_team"]
         pick_results_by_game[_p["game_id"]] = _p.get("result")
+
+    picks_by_username_this_week = {}
+    for _p in week_picks_all:
+        picks_by_username_this_week.setdefault(_p.get("username", "Unknown"), []).append(_p)
+    other_players_submitted = sorted(u for u in picks_by_username_this_week if u != username)
 
     current_picks_count = sum(1 for g in all_games if st.session_state.get(f"sel_{g['game_id']}") is not None)
     ui_max_reached = current_picks_count >= 7
@@ -807,6 +818,36 @@ else:
                 st.session_state.pending_resubmit["game_lookup"],
             )
 
+    # Which games to actually show below: the full slate, just the games
+    # you've picked, or -- read-only, and only once a game has kicked off,
+    # so nobody can scout a still-editable pick -- another player's picks.
+    # The selector can only ever offer players who've submitted at least
+    # one pick this week (other_players_submitted, built above from the
+    # week's picks rows), so there's no way to pick someone with nothing
+    # submitted yet.
+    st.write("---")
+    view_scope_options = ["All games", "My picks"] + [f"{p}'s picks" for p in other_players_submitted]
+    selected_view_scope = st.selectbox(
+        "👀 Which games would you like to view?",
+        view_scope_options,
+        key=f"picks_view_scope_{CURRENT_WEEK}",
+    )
+
+    viewing_other_player = None
+    other_picks_by_game = {}
+    if selected_view_scope == "My picks":
+        my_game_ids = {p["game_id"] for p in existing_picks}
+        games_chronological = [g for g in games_chronological if g["game_id"] in my_game_ids]
+        if not games_chronological:
+            st.info("You haven't made any picks yet for this week.")
+    elif selected_view_scope != "All games":
+        viewing_other_player = selected_view_scope[: -len("'s picks")]
+        other_picks_this_week = picks_by_username_this_week.get(viewing_other_player, [])
+        other_picks_by_game = {p["game_id"]: p for p in other_picks_this_week}
+        games_chronological = [g for g in games_chronological if g["game_id"] in other_picks_by_game]
+        if not games_chronological:
+            st.info(f"{viewing_other_player} hasn't picked any games yet for this week.")
+
     grouped_by_date = {}
     for game in games_chronological:
         kickoff_utc = datetime.fromisoformat(game['kickoff_time'].replace('Z', '+00:00'))
@@ -824,7 +865,8 @@ else:
         with hdr_fav: st.markdown("**FAVORITE**")
         with hdr_und: st.markdown("**UNDERDOG**")
         with hdr_spr: st.markdown("**SPREAD**")
-        with hdr_pck: st.markdown("**YOUR SELECTION**")
+        with hdr_pck:
+            st.markdown(f"**{viewing_other_player.upper()}'S PICK**" if viewing_other_player else "**YOUR SELECTION**")
         st.divider()
 
         for game, kickoff_est, kickoff_utc in games_in_day:
@@ -892,7 +934,23 @@ else:
             with c_und: st.markdown(f"**{und_label}**{und_score_text}", unsafe_allow_html=True)
             with c_spr: st.markdown(f"`{live_line}`")
             with c_pck:
-                if is_time_locked:
+                if viewing_other_player:
+                    # Read-only, and only for games that have actually kicked
+                    # off -- never reveal another player's still-editable
+                    # pick, only what they had locked in once it's too late
+                    # to change anyway.
+                    if is_time_locked:
+                        other_pick = other_picks_by_game.get(game["game_id"], {})
+                        other_team = other_pick.get("selected_team")
+                        if other_team:
+                            _result = other_pick.get("result")
+                            _badge = " \u2705 Win" if _result == "win" else (" \u274C Loss" if _result == "loss" else "")
+                            st.markdown(f"\U0001F464 {viewing_other_player} picked:  \n**{other_team}**{_badge}")
+                        else:
+                            st.caption("No pick found for this game.")
+                    else:
+                        st.caption("\U0001F512 Locks at kickoff -- check back after this game starts.")
+                elif is_time_locked:
                     locked_team = st.session_state.get(f"sel_{game['game_id']}")
                     if locked_team:
                         _result = pick_results_by_game.get(game["game_id"])
