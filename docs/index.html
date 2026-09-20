@@ -27,7 +27,22 @@
 <script>
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {
-      navigator.serviceWorker.register("sw.js").catch((e) => console.warn("SW registration failed", e));
+      navigator.serviceWorker.register("sw.js").then((reg) => {
+        // Registering alone doesn't reliably notice a newer sw.js promptly on
+        // every platform -- installed iOS home-screen PWAs in particular can
+        // sit on a stale cached app shell for a while otherwise. Force a
+        // check on every launch, and once a new service worker actually
+        // takes over (skipWaiting + clients.claim in sw.js), reload once so
+        // this specific page load picks up the new JS immediately instead of
+        // needing a second relaunch to notice anything changed.
+        reg.update().catch(() => {});
+        let reloaded = false;
+        navigator.serviceWorker.addEventListener("controllerchange", () => {
+          if (reloaded) return;
+          reloaded = true;
+          window.location.reload();
+        });
+      }).catch((e) => console.warn("SW registration failed", e));
     });
   }
 </script>
