@@ -2047,7 +2047,8 @@ with tab_requests:
 
 
     def _duration_to_closes_at(duration_label):
-        """Returns (auto_close, closes_at) for a duration selectbox label."""
+        """Returns (auto_close, closes_at) for a preset duration selectbox
+        label. Custom date/time is handled separately in _poll_options_form."""
         now = datetime.now(timezone.utc)
         mapping = {
             "1 hour": timedelta(hours=1),
@@ -2075,9 +2076,19 @@ with tab_requests:
         )
         duration_label = st.selectbox(
             "How long should voting stay open?",
-            ["1 hour", "6 hours", "1 day", "2 days", "3 days", "1 week", "No time limit (close manually)"],
+            ["1 hour", "6 hours", "1 day", "2 days", "3 days", "1 week", "Custom date & time", "No time limit (close manually)"],
             index=2, key=f"{key_prefix}_duration",
         )
+
+        custom_date, custom_time = None, None
+        if duration_label == "Custom date & time":
+            default_dt = datetime.now(ZoneInfo("America/New_York")) + timedelta(days=1)
+            col_date, col_time = st.columns(2)
+            with col_date:
+                custom_date = st.date_input("Close date", value=default_dt.date(), key=f"{key_prefix}_custom_date")
+            with col_time:
+                custom_time = st.time_input("Close time", value=default_dt.time().replace(second=0, microsecond=0), key=f"{key_prefix}_custom_time")
+            st.caption("Eastern time")
 
         if st.button("🗳️ Push out for a vote", key=f"{key_prefix}_submit", type="primary"):
             options = [line.strip() for line in options_text.splitlines() if line.strip()]
@@ -2087,7 +2098,15 @@ with tab_requests:
             if len(options) < 2:
                 st.warning("Add at least 2 answer options (one per line).")
                 return None
-            auto_close, closes_at = _duration_to_closes_at(duration_label)
+            if duration_label == "Custom date & time":
+                closes_local = datetime.combine(custom_date, custom_time).replace(tzinfo=ZoneInfo("America/New_York"))
+                closes_utc = closes_local.astimezone(timezone.utc)
+                if closes_utc <= datetime.now(timezone.utc):
+                    st.warning("Pick a close date/time in the future.")
+                    return None
+                auto_close, closes_at = True, closes_utc.isoformat()
+            else:
+                auto_close, closes_at = _duration_to_closes_at(duration_label)
             return title.strip(), description.strip(), options, auto_close, closes_at
         return None
 
