@@ -443,8 +443,8 @@ if active_week != st.session_state["global_week"]:
     st.session_state["global_week"] = active_week
 
 
-tab_setup, tab_picks, tab_grading, tab_players, tab_exports = st.tabs([
-    "🗓️ Weekly Setup", "📋 Picks", "🏁 Grading", "👥 Players", "📤 Exports",
+tab_setup, tab_picks, tab_grading, tab_players, tab_exports, tab_requests = st.tabs([
+    "🗓️ Weekly Setup", "📋 Picks", "🏁 Grading", "👥 Players", "📤 Exports", "🗳️ Requests & Votes",
 ])
 
 with tab_setup:
@@ -2026,3 +2026,233 @@ with tab_exports:
                 file_name=f"week_{int(results_week)}_and_season_results.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
+
+with tab_requests:
+
+    def _players_username_map():
+        """id -> username for every player, used to show who requested/created
+        something without a join query per row."""
+        rows = supabase.table("players").select("id, username").execute().data or []
+        return {r["id"]: r.get("username", "Unknown") for r in rows}
+
+
+    def _tally_votes(poll_id):
+        """option_id -> vote count for a poll, from a single query."""
+        rows = supabase.table("poll_votes").select("option_id").eq("poll_id", poll_id).execute().data or []
+        counts = {}
+        for r in rows:
+            oid = r["option_id"]
+            counts[oid] = counts.get(oid, 0) + 1
+        return counts
+
+
+    def _duration_to_closes_at(duration_label):
+        """Returns (auto_close, closes_at) for a duration selectbox label."""
+        now = datetime.now(timezone.utc)
+        mapping = {
+            "1 hour": timedelta(hours=1),
+            "6 hours": timedelta(hours=6),
+            "1 day": timedelta(days=1),
+            "2 days": timedelta(days=2),
+            "3 days": timedelta(days=3),
+            "1 week": timedelta(weeks=1),
+        }
+        if duration_label == "No time limit (close manually)":
+            return False, None
+        return True, (now + mapping[duration_label]).isoformat()
+
+
+    def _poll_options_form(key_prefix, default_title="", default_description=""):
+        """Shared title/description/options/duration inputs for both the
+        accept-a-request flow and the create-a-vote-directly flow. Returns
+        (title, description, options_list, auto_close, closes_at) or None if
+        the form hasn't been submitted (or was submitted invalid)."""
+        title = st.text_input("Vote title", value=default_title, key=f"{key_prefix}_title")
+        description = st.text_area("Description (optional)", value=default_description, key=f"{key_prefix}_desc", height=80)
+        options_text = st.text_area(
+            "Answer options (one per line)", key=f"{key_prefix}_options", height=100,
+            placeholder="Winner takes all\n90% winner / 10% 2nd place\n80% winner / 15% 2nd / 5% 3rd",
+        )
+        duration_label = st.selectbox(
+            "How long should voting stay open?",
+            ["1 hour", "6 hours", "1 day", "2 days", "3 days", "1 week", "No time limit (close manually)"],
+            index=2, key=f"{key_prefix}_duration",
+        )
+
+        if st.button("🗳️ Push out for a vote", key=f"{key_prefix}_submit", type="primary"):
+            options = [line.strip() for line in options_text.splitlines() if line.strip()]
+            if not title.strip():
+                st.warning("Give the vote a title first.")
+                return None
+            if len(options) < 2:
+                st.warning("Add at least 2 answer options (one per line).")
+                return None
+            auto_close, closes_at = _duration_to_closes_at(duration_label)
+            return title.strip(), description.strip(), options, auto_close, closes_at
+        return None
+
+
+    st.subheader("💡 Pending Feature Requests")
+    pending_requests = (
+        supabase.table("feature_requests").select("*").eq("status", "pending")
+        .order("created_at", desc=True).execute().data or []
+    )
+    players_map = _players_username_map()
+
+    if not pending_requests:
+        st.caption("No pending requests -- you're all caught up.")
+    else:
+        for req in pending_requests:
+            requester_name = players_map.get(req["requester_id"], "Unknown")
+            with st.container(border=True):
+                st.markdown(f"**{req['title']}** — submitted by {requester_name}")
+                if req.get("description"):
+                    st.write(req["description"])
+                st.caption(f"Submitted {req['created_at'][:16].replace('T', ' ')} UTC")
+
+                col_deny, col_accept = st.columns([1, 2])
+                with col_deny:
+                    if st.button("❌ Deny", key=f"deny_{req['id']}"):
+                        supabase.table("feature_requests").update({
+                            "status": "denied",
+                            "reviewed_by": user_id,
+                            "reviewed_at": datetime.now(timezone.utc).isoformat(),
+                        }).eq("id", req["id"]).execute()
+                        st.rerun()
+                with col_accept:
+                    accept_open_key = f"accepting_{req['id']}"
+                    if st.button("✅ Accept & set up a vote", key=f"accept_{req['id']}"):
+                        st.session_state[accept_open_key] = True
+
+                if st.session_state.get(f"accepting_{req['id']}"):
+                    st.write("---")
+                    result = _poll_options_form(
+                        f"accept_form_{req['id']}",
+                        default_title=req["title"],
+                        default_description=req.get("description") or "",
+                    )
+                    if result:
+                        title, description, options, auto_close, closes_at = result
+                        poll_row = supabase.table("polls").insert({
+                            "title": title,
+                            "description": description,
+                            "request_id": req["id"],
+                            "created_by": user_id,
+                            "auto_close": auto_close,
+                            "closes_at": closes_at,
+                        }).execute().data[0]
+                        supabase.table("poll_options").insert([
+                            {"poll_id": poll_row["id"], "label": opt, "sort_order": i}
+                            for i, opt in enumerate(options)
+                        ]).execute()
+                        supabase.table("feature_requests").update({
+                            "status": "accepted",
+                            "reviewed_by": user_id,
+                            "reviewed_at": datetime.now(timezone.utc).isoformat(),
+                            "poll_id": poll_row["id"],
+                        }).eq("id", req["id"]).execute()
+                        st.session_state[accept_open_key] = False
+                        st.success("Vote is live.")
+                        st.rerun()
+
+    st.write("---")
+    st.subheader("➕ Create a New Vote")
+    st.caption("Not tied to a player's request -- use this for things like payout split decisions.")
+    new_vote_result = _poll_options_form("new_vote")
+    if new_vote_result:
+        title, description, options, auto_close, closes_at = new_vote_result
+        poll_row = supabase.table("polls").insert({
+            "title": title,
+            "description": description,
+            "request_id": None,
+            "created_by": user_id,
+            "auto_close": auto_close,
+            "closes_at": closes_at,
+        }).execute().data[0]
+        supabase.table("poll_options").insert([
+            {"poll_id": poll_row["id"], "label": opt, "sort_order": i}
+            for i, opt in enumerate(options)
+        ]).execute()
+        st.success("Vote is live.")
+        st.rerun()
+
+    st.write("---")
+    st.subheader("🗳️ Open Votes")
+    open_polls = supabase.table("polls").select("*").eq("status", "open").order("created_at", desc=True).execute().data or []
+
+    if not open_polls:
+        st.caption("No votes are currently open.")
+    else:
+        for poll in open_polls:
+            options = (
+                supabase.table("poll_options").select("*").eq("poll_id", poll["id"])
+                .order("sort_order").execute().data or []
+            )
+            tally = _tally_votes(poll["id"])
+            total_votes = sum(tally.values())
+
+            with st.container(border=True):
+                st.markdown(f"**{poll['title']}**")
+                if poll.get("description"):
+                    st.caption(poll["description"])
+                if poll["auto_close"] and poll.get("closes_at"):
+                    closes_dt = datetime.fromisoformat(poll["closes_at"]).astimezone(ZoneInfo("America/New_York"))
+                    st.caption(f"Closes automatically {closes_dt:%b %d, %Y %I:%M %p %Z}")
+                else:
+                    st.caption("Closes manually -- no time limit set")
+
+                for opt in options:
+                    count = tally.get(opt["id"], 0)
+                    pct = (count / total_votes * 100) if total_votes else 0
+                    st.write(f"{opt['label']} — {count} vote(s)")
+                    st.progress(pct / 100)
+
+                st.caption(f"{total_votes} total vote(s) so far")
+
+                if st.button("🏁 Close Now", key=f"close_confirm_{poll['id']}"):
+                    st.session_state[f"confirm_close_{poll['id']}"] = True
+
+                if st.session_state.get(f"confirm_close_{poll['id']}"):
+                    st.warning("This ends voting immediately and can't be undone. Close this vote now?")
+                    col_yes, col_no = st.columns(2)
+                    with col_yes:
+                        if st.button("Yes, close it", key=f"close_yes_{poll['id']}", type="primary"):
+                            winner_option_id = None
+                            if tally:
+                                winner_option_id = max(tally.items(), key=lambda kv: kv[1])[0]
+                            supabase.table("polls").update({
+                                "status": "closed",
+                                "closed_at": datetime.now(timezone.utc).isoformat(),
+                                "result_option_id": winner_option_id,
+                            }).eq("id", poll["id"]).execute()
+                            st.session_state[f"confirm_close_{poll['id']}"] = False
+                            st.rerun()
+                    with col_no:
+                        if st.button("Cancel", key=f"close_no_{poll['id']}"):
+                            st.session_state[f"confirm_close_{poll['id']}"] = False
+                            st.rerun()
+
+    st.write("---")
+    st.subheader("📜 Past Votes")
+    closed_polls = supabase.table("polls").select("*").eq("status", "closed").order("closed_at", desc=True).limit(20).execute().data or []
+
+    if not closed_polls:
+        st.caption("No votes have closed yet.")
+    else:
+        for poll in closed_polls:
+            options = (
+                supabase.table("poll_options").select("*").eq("poll_id", poll["id"])
+                .order("sort_order").execute().data or []
+            )
+            tally = _tally_votes(poll["id"])
+            winning_label = "No votes were cast"
+            for opt in options:
+                if opt["id"] == poll.get("result_option_id"):
+                    winning_label = opt["label"]
+                    break
+
+            with st.expander(f"{poll['title']} — winner: {winning_label}"):
+                for opt in options:
+                    count = tally.get(opt["id"], 0)
+                    marker = "🏆 " if opt["id"] == poll.get("result_option_id") else ""
+                    st.write(f"{marker}{opt['label']} — {count} vote(s)")

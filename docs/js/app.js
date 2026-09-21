@@ -3,6 +3,7 @@ import { renderAuth } from "./auth.js";
 import { renderPicks } from "./picks.js";
 import { renderLeaderboard } from "./leaderboard.js";
 import { renderChat } from "./chat.js";
+import { renderRequestsVotes } from "./requestsVotes.js";
 import { renderSetNewPassword } from "./recovery.js";
 
 const root = document.getElementById("app");
@@ -183,6 +184,9 @@ function renderChrome(innerHtml) {
           <span class="icon">\u{1F4AC}</span>Chat
           ${state.hasUnreadChat ? `<span class="nav-badge"></span>` : ""}
         </button>
+        <button data-tab="requests" class="${state.activeTab === "requests" ? "active" : ""}">
+          <span class="icon">\u{1F5F3}\uFE0F</span>Requests
+        </button>
       </nav>
     ` : ""}
   `;
@@ -257,6 +261,7 @@ export function render() {
   if (state.activeTab === "picks") renderPicks(slot, ctx);
   else if (state.activeTab === "leaderboard") renderLeaderboard(slot, ctx);
   else if (state.activeTab === "chat") renderChat(slot, ctx);
+  else if (state.activeTab === "requests") renderRequestsVotes(slot, ctx);
 }
 
 // Ask the browser to treat this origin's storage (localStorage, where the

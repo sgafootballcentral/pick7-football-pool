@@ -1,5 +1,5 @@
 // Bump this on every deploy so clients pick up new files instead of a stale cache.
-const CACHE_VERSION = "pick7-v7";
+const CACHE_VERSION = "pick7-v8";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -12,6 +12,7 @@ const APP_SHELL = [
   "./js/picks.js",
   "./js/leaderboard.js",
   "./js/chat.js",
+  "./js/requestsVotes.js",
   "./js/push.js",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
