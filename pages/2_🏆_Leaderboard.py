@@ -151,39 +151,49 @@ if is_admin:
                         if not kickoff_dates:
                             continue
 
-                        params = {
-                            "limit": 1000,
-                            "dates": f"{min(kickoff_dates):%Y%m%d}-{max(kickoff_dates):%Y%m%d}",
-                        }
-                        if league_name == "CFB":
-                            params["groups"] = 80
+                        # ESPN's scoreboard endpoint used to accept a "YYYYMMDD-YYYYMMDD"
+                        # date range, but it now rejects any hyphenated range with an
+                        # HTTP 400 ("Failed to get events endpoint.") -- only a single
+                        # bare date works. So fetch each unique kickoff date separately
+                        # and merge the results, instead of one request for the whole
+                        # week's span.
+                        unique_dates = sorted({d.strftime("%Y%m%d") for d in kickoff_dates})
 
-                        try:
-                            resp = requests.get(url, params=params, headers=headers, timeout=15)
-                            if resp.status_code != 200:
-                                st.warning(f"{league_name} score refresh failed: HTTP {resp.status_code}")
-                                continue
-                            data = resp.json()
-                            time_module.sleep(2)
-                        except Exception as e:
-                            st.warning(f"{league_name} score refresh error: {e}")
-                            continue
+                        for date_str in unique_dates:
+                            # ESPN also silently truncates CFB results to a fraction
+                            # of the real slate when "limit" is set anywhere near/at
+                            # 1000 (a value that used to work fine) -- 500 is
+                            # comfortably under whatever their new cap is.
+                            params = {"limit": 500, "dates": date_str}
+                            if league_name == "CFB":
+                                params["groups"] = 80
 
-                        for event in data.get("events", []):
-                            gid = f"espn_{event.get('id')}"
-                            state = event.get("status", {}).get("type", {}).get("state", "pre")
-
-                            competitions = event.get("competitions", [{}])[0]
-                            competitors = competitions.get("competitors", [])
-                            home_node = next((c for c in competitors if c.get("homeAway") == "home"), {})
-                            away_node = next((c for c in competitors if c.get("homeAway") == "away"), {})
                             try:
-                                home_score = int(home_node.get("score", 0))
-                                away_score = int(away_node.get("score", 0))
-                            except (TypeError, ValueError):
-                                home_score, away_score = 0, 0
+                                resp = requests.get(url, params=params, headers=headers, timeout=15)
+                                if resp.status_code != 200:
+                                    st.warning(f"{league_name} score refresh failed for {date_str}: HTTP {resp.status_code}")
+                                    continue
+                                data = resp.json()
+                                time_module.sleep(2)
+                            except Exception as e:
+                                st.warning(f"{league_name} score refresh error for {date_str}: {e}")
+                                continue
 
-                            espn_scores[gid] = {"state": state, "home_score": home_score, "away_score": away_score}
+                            for event in data.get("events", []):
+                                gid = f"espn_{event.get('id')}"
+                                state = event.get("status", {}).get("type", {}).get("state", "pre")
+
+                                competitions = event.get("competitions", [{}])[0]
+                                competitors = competitions.get("competitors", [])
+                                home_node = next((c for c in competitors if c.get("homeAway") == "home"), {})
+                                away_node = next((c for c in competitors if c.get("homeAway") == "away"), {})
+                                try:
+                                    home_score = int(home_node.get("score", 0))
+                                    away_score = int(away_node.get("score", 0))
+                                except (TypeError, ValueError):
+                                    home_score, away_score = 0, 0
+
+                                espn_scores[gid] = {"state": state, "home_score": home_score, "away_score": away_score}
 
                     graded_count = 0
                     already_final_count = 0
