@@ -218,3 +218,5 @@ with tab_request:
                             st.caption("🗳️ It's open for a vote now -- check the Vote tab.")
                         else:
                             st.caption("📜 Voting has closed -- check Past Results in the Vote tab.")
+                elif req["status"] == "denied" and req.get("denial_reason"):
+                    st.caption(f"Admin note: {req['denial_reason']}")

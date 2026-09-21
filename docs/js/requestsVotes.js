@@ -105,6 +105,8 @@ export function renderRequestsVotes(el, { supabase, user }) {
           ? `<div class="hint" style="margin-top:6px;">\u{1F5F3}️ It's open for a vote now -- check the Vote tab.</div>`
           : `<div class="hint" style="margin-top:6px;">\u{1F4DC} Voting has closed -- check Past Results in the Vote tab.</div>`;
       }
+    } else if (req.status === "denied" && req.denial_reason) {
+      followUp = `<div class="hint" style="margin-top:6px;">Admin note: ${escapeHtml(req.denial_reason)}</div>`;
     }
     return `
       <div class="card">

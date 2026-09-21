@@ -2132,16 +2132,34 @@ with tab_requests:
                 col_deny, col_accept = st.columns([1, 2])
                 with col_deny:
                     if st.button("❌ Deny", key=f"deny_{req['id']}"):
-                        supabase.table("feature_requests").update({
-                            "status": "denied",
-                            "reviewed_by": user_id,
-                            "reviewed_at": datetime.now(timezone.utc).isoformat(),
-                        }).eq("id", req["id"]).execute()
-                        st.rerun()
+                        st.session_state[f"denying_{req['id']}"] = True
                 with col_accept:
                     accept_open_key = f"accepting_{req['id']}"
                     if st.button("✅ Accept & set up a vote", key=f"accept_{req['id']}"):
                         st.session_state[accept_open_key] = True
+
+                if st.session_state.get(f"denying_{req['id']}"):
+                    st.write("---")
+                    denial_reason = st.text_area(
+                        "Reason (optional) -- shown to the player who submitted this",
+                        key=f"deny_reason_{req['id']}", height=80,
+                    )
+                    col_deny_confirm, col_deny_cancel = st.columns(2)
+                    with col_deny_confirm:
+                        if st.button("Confirm Deny", key=f"deny_confirm_{req['id']}", type="primary"):
+                            supabase.table("feature_requests").update({
+                                "status": "denied",
+                                "reviewed_by": user_id,
+                                "reviewed_at": datetime.now(timezone.utc).isoformat(),
+                                "denial_reason": denial_reason.strip() or None,
+                            }).eq("id", req["id"]).execute()
+                            st.session_state[f"denying_{req['id']}"] = False
+                            st.success("Request denied -- the player has been notified.")
+                            st.rerun()
+                    with col_deny_cancel:
+                        if st.button("Cancel", key=f"deny_cancel_{req['id']}"):
+                            st.session_state[f"denying_{req['id']}"] = False
+                            st.rerun()
 
                 if st.session_state.get(f"accepting_{req['id']}"):
                     st.write("---")
