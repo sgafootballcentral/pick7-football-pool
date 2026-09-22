@@ -493,7 +493,6 @@ if not st.session_state.user:
             signup_email = st.text_input("Email", key="s_email")
             signup_pass = st.text_input("Password", type="password", key="s_pass")
             signup_full_name = st.text_input("Your name", key="s_full_name")
-            st.caption("Just for the commissioner, so they know who you are -- not shown to other players.")
             signup_username = st.text_input("Display name", key="s_username")
             st.caption("This is what other players will see on picks, the leaderboard, and chat.")
             signup_submitted = st.form_submit_button("Sign Up", use_container_width=True)

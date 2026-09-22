@@ -70,7 +70,6 @@ export function renderAuth(el, { supabase }) {
           <div class="field">
             <label>Your name</label>
             <input type="text" name="full_name" required autocomplete="name">
-            <div class="hint" style="margin-top:4px;">Just for the commissioner, so they know who you are -- not shown to other players.</div>
           </div>
           <div class="field">
             <label>Display name</label>
