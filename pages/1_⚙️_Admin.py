@@ -630,7 +630,8 @@ with tab_setup:
     st.write("---")
 
     # 5. ADD A GAME MANUALLY
-    with st.expander("➕ Add a Game Manually"):
+    st.subheader("➕ Add a Game Manually")
+    with st.expander("Show / Hide"):
         st.caption("For games ESPN doesn't have, or a line you want to set yourself.")
 
         manual_week = section_week_selector("manual_week", active_week, "Week number:")
@@ -695,6 +696,91 @@ with tab_setup:
                     st.rerun()
                 except Exception as e:
                     st.error(f"Database error: {e}")
+
+    st.write("---")
+
+    # 5a. EDIT A GAME'S SPREAD
+    st.subheader("✏️ Edit a Game's Spread")
+    with st.expander("Show / Hide"):
+        st.caption(
+            "Correct a line ESPN has wrong, or update it after a late move. "
+            "Anyone who already picked keeps grading against the spread they actually saw."
+        )
+
+        edit_spread_week = section_week_selector("edit_spread_week", active_week, "Week number:")
+        week_games_for_edit = supabase.table("games").select("*").eq("week_number", edit_spread_week).execute().data
+
+        if not week_games_for_edit:
+            st.info(f"No games loaded for Week {edit_spread_week} yet.")
+        else:
+            numbers_map_edit = compute_game_numbers(week_games_for_edit)
+            games_by_id_edit = {g["game_id"]: g for g in week_games_for_edit}
+
+            # Two ways to pull up the game -- by team name or by its pick
+            # number (same odd/even numbering used everywhere else in the
+            # app) -- whichever's faster depends on what's in front of you.
+            find_by = st.radio("Find the game by:", ["Team", "Game number"], horizontal=True, key="edit_spread_find_by")
+
+            team_to_game_id = {}
+            number_to_game_id = {}
+            for g in week_games_for_edit:
+                team_to_game_id[g.get("favorite_team", "")] = g["game_id"]
+                team_to_game_id[g.get("underdog_team", "")] = g["game_id"]
+                nums = numbers_map_edit.get(g["game_id"], {})
+                number_to_game_id[nums["fav_num"]] = g["game_id"]
+                number_to_game_id[nums["und_num"]] = g["game_id"]
+
+            selected_edit_game_id = None
+            if find_by == "Team":
+                selected_edit_team = st.selectbox(
+                    "Team:", ["— Select a team —"] + sorted(team_to_game_id.keys()), key="edit_spread_team_select"
+                )
+                if selected_edit_team != "— Select a team —":
+                    selected_edit_game_id = team_to_game_id[selected_edit_team]
+            else:
+                selected_edit_number = st.selectbox(
+                    "Game number:", ["— Select a number —"] + sorted(number_to_game_id.keys()), key="edit_spread_number_select"
+                )
+                if selected_edit_number != "— Select a number —":
+                    selected_edit_game_id = number_to_game_id[selected_edit_number]
+
+            if not selected_edit_game_id:
+                st.info("Select a team or a game number above to pull up that game.")
+            else:
+                edit_game = games_by_id_edit[selected_edit_game_id]
+                edit_fav_t = edit_game.get("favorite_team", "")
+                edit_und_t = edit_game.get("underdog_team", "")
+                current_spread_value = edit_game.get("spread_value") or ""
+                current_spread_num_str = current_spread_value.rsplit(" ", 1)[-1] if " " in current_spread_value else "0.0"
+                try:
+                    current_spread_num = float(current_spread_num_str)
+                except ValueError:
+                    current_spread_num = 0.0
+
+                st.write(f"**{edit_game.get('display_text') or f'{edit_und_t} at {edit_fav_t}'}**")
+                st.caption(f"Currently: {edit_fav_t} {current_spread_num:+.1f}")
+
+                new_spread_num = st.number_input(
+                    f"New spread ({edit_fav_t}'s number, e.g. -6.5):",
+                    value=current_spread_num, step=0.5, format="%.1f", key=f"edit_spread_value_{selected_edit_game_id}",
+                )
+
+                if st.button("Update Spread", type="primary", key=f"save_edit_spread_{selected_edit_game_id}"):
+                    # Keep whatever team token was already in spread_value (ESPN
+                    # stores an abbreviation there, a manually-added game stores
+                    # the full name) -- nothing downstream reads it, only the
+                    # trailing number, so there's no need to reconstruct it.
+                    team_token = current_spread_value.rsplit(" ", 1)[0] if " " in current_spread_value else edit_fav_t
+                    if new_spread_num == 0:
+                        new_spread_str = f"{team_token} -0.5"
+                    else:
+                        new_spread_str = nudge_off_whole_number(f"{team_token} {new_spread_num:.1f}")
+                    try:
+                        supabase.table("games").update({"spread_value": new_spread_str}).eq("id", edit_game["id"]).execute()
+                        st.success(f"Updated {edit_fav_t} vs {edit_und_t} to {edit_fav_t} {new_spread_num:+.1f}.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Database error: {e}")
 
     st.write("---")
 
