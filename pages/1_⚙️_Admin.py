@@ -1321,18 +1321,46 @@ with tab_players:
     # 10a. PLAYER ROSTER -- username is what everyone sees on picks, the
     # leaderboard, and chat; full_name is collected at signup just so the
     # commissioner knows who's actually behind each display name. Players
-    # added manually, or who signed up before this existed, may not have one.
+    # added manually, or who signed up before this existed, may not have one
+    # on file -- editable right here so you can fill those in.
     st.subheader("📇 Player Roster")
     st.caption("Real names, for your reference only -- players only ever see each other's display names.")
 
-    roster_rows = supabase.table("players").select("username, full_name").order("username").execute().data or []
+    roster_rows = supabase.table("players").select("id, username, full_name").order("username").execute().data or []
     if not roster_rows:
         st.info("No players yet.")
     else:
-        st.dataframe(
-            [{"Display Name": p["username"], "Real Name": p.get("full_name") or "—"} for p in roster_rows],
-            use_container_width=True, hide_index=True,
-        )
+        col_rh1, col_rh2 = st.columns([2, 2])
+        col_rh1.markdown("**Display Name**")
+        col_rh2.markdown("**Real Name**")
+
+        for p in roster_rows:
+            pid = p["id"]
+            col_r1, col_r2 = st.columns([2, 2])
+            with col_r1:
+                st.write(p["username"])
+            with col_r2:
+                st.text_input(
+                    "Real name", value=p.get("full_name") or "", key=f"full_name_{pid}",
+                    label_visibility="collapsed", placeholder="Not on file",
+                )
+
+        if st.button("Save Real Names", key="save_full_names"):
+            updated = 0
+            try:
+                for p in roster_rows:
+                    pid = p["id"]
+                    new_value = st.session_state.get(f"full_name_{pid}", "").strip()
+                    if new_value != (p.get("full_name") or ""):
+                        supabase.table("players").update({"full_name": new_value or None}).eq("id", pid).execute()
+                        updated += 1
+                if updated:
+                    st.success(f"Updated {updated} name(s).")
+                    st.rerun()
+                else:
+                    st.info("No changes to save.")
+            except Exception as e:
+                st.error(f"Database error: {e}")
 
     st.write("---")
 
