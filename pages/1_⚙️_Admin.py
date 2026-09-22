@@ -1318,57 +1318,126 @@ with tab_grading:
 
 
 with tab_players:
-    # 10a. PLAYER ROSTER -- username is what everyone sees on picks, the
-    # leaderboard, and chat; full_name is collected at signup just so the
-    # commissioner knows who's actually behind each display name. Players
-    # added manually, or who signed up before this existed, may not have one
-    # on file -- editable right here so you can fill those in.
+    # 10a. PLAYER ROSTER -- Display Name is what everyone sees on picks, the
+    # leaderboard, and chat; Real Name is collected at signup just so the
+    # commissioner knows who's actually behind each display name (players
+    # added manually, or who signed up before that existed, may not have one
+    # on file). Folds in what used to be the separate "Rename a Player"
+    # section -- table view by default, and an edit view where either field
+    # can be fixed for any number of players at once, saved together.
     st.subheader("📇 Player Roster")
-    st.caption("Real names, for your reference only -- players only ever see each other's display names.")
+    st.caption("Display Name is what other players see everywhere; Real Name is for your reference only.")
 
-    roster_rows = supabase.table("players").select("id, username, full_name").order("username").execute().data or []
-    if not roster_rows:
-        st.info("No players yet.")
+    if st.session_state.get("roster_edit_done"):
+        # Shown on the rerun AFTER a successful save, same pattern used
+        # elsewhere on this page -- a success message followed immediately by
+        # st.rerun() gets wiped out before it's ever seen otherwise.
+        st.success(st.session_state.roster_edit_done)
+        if st.button("OK", key="roster_edit_done_ok"):
+            st.session_state.roster_edit_done = None
+            st.rerun()
     else:
-        edit_roster = st.checkbox("✏️ Edit real names", key="edit_roster_names")
-
-        if not edit_roster:
-            st.dataframe(
-                [{"Display Name": p["username"], "Real Name": p.get("full_name") or "—"} for p in roster_rows],
-                use_container_width=True, hide_index=True,
-            )
+        roster_rows = supabase.table("players").select("id, username, full_name").order("username").execute().data or []
+        if not roster_rows:
+            st.info("No players yet.")
         else:
-            col_rh1, col_rh2 = st.columns([2, 2])
-            col_rh1.markdown("**Display Name**")
-            col_rh2.markdown("**Real Name**")
+            edit_roster = st.checkbox("✏️ Edit players", key="edit_roster_names")
 
-            for p in roster_rows:
-                pid = p["id"]
-                col_r1, col_r2 = st.columns([2, 2])
-                with col_r1:
-                    st.write(p["username"])
-                with col_r2:
-                    st.text_input(
-                        "Real name", value=p.get("full_name") or "", key=f"full_name_{pid}",
-                        label_visibility="collapsed", placeholder="Not on file",
-                    )
+            if not edit_roster:
+                st.dataframe(
+                    [{"Display Name": p["username"], "Real Name": p.get("full_name") or "—"} for p in roster_rows],
+                    use_container_width=True, hide_index=True,
+                )
+            else:
+                st.caption("Change a Display Name and/or Real Name below, then Save. Display names must stay unique.")
+                col_rh1, col_rh2 = st.columns([2, 2])
+                col_rh1.markdown("**Display Name**")
+                col_rh2.markdown("**Real Name**")
 
-            if st.button("Save Real Names", key="save_full_names"):
-                updated = 0
-                try:
+                for p in roster_rows:
+                    pid = p["id"]
+                    col_r1, col_r2 = st.columns([2, 2])
+                    with col_r1:
+                        st.text_input(
+                            "Display name", value=p["username"], key=f"username_{pid}",
+                            label_visibility="collapsed",
+                        )
+                    with col_r2:
+                        st.text_input(
+                            "Real name", value=p.get("full_name") or "", key=f"full_name_{pid}",
+                            label_visibility="collapsed", placeholder="Not on file",
+                        )
+
+                if st.button("Save Changes", key="save_roster_changes", type="primary"):
+                    # Validate every display name first (blank + duplicates,
+                    # including collisions with players not being renamed) so
+                    # a bad rename can't leave the save half-applied.
+                    new_usernames = {}
+                    errors = []
                     for p in roster_rows:
                         pid = p["id"]
-                        new_value = st.session_state.get(f"full_name_{pid}", "").strip()
-                        if new_value != (p.get("full_name") or ""):
-                            supabase.table("players").update({"full_name": new_value or None}).eq("id", pid).execute()
-                            updated += 1
-                    if updated:
-                        st.success(f"Updated {updated} name(s).")
-                        st.rerun()
+                        new_username = st.session_state.get(f"username_{pid}", "").strip()
+                        if not new_username:
+                            errors.append(f"Display name for {p['username']} can't be blank.")
+                        else:
+                            new_usernames[pid] = new_username
+
+                    seen_usernames = {}
+                    for pid, uname in new_usernames.items():
+                        if uname in seen_usernames and seen_usernames[uname] != pid:
+                            errors.append(f"'{uname}' would be used by more than one player.")
+                        seen_usernames[uname] = pid
+
+                    if errors:
+                        for err_msg in errors:
+                            st.error(err_msg)
                     else:
-                        st.info("No changes to save.")
-                except Exception as e:
-                    st.error(f"Database error: {e}")
+                        renamed_summary = []
+                        full_name_updates = 0
+                        try:
+                            for p in roster_rows:
+                                pid = p["id"]
+                                old_username = p["username"]
+                                new_username = new_usernames[pid]
+                                if new_username != old_username:
+                                    rename_result = supabase.table("players").update({"username": new_username}).eq("id", pid).execute()
+                                    if not rename_result.data:
+                                        # The update ran with no error but matched/changed
+                                        # nothing -- most likely a permissions (RLS) issue.
+                                        # Say so plainly instead of claiming success.
+                                        st.error(
+                                            f"Supabase didn't confirm the rename went through for {old_username} -- "
+                                            "no rows were updated. Try logging out and back in, then try again."
+                                        )
+                                        continue
+                                    # Keep denormalized username columns in sync so past weeks
+                                    # (leaderboard, exports) show the new name too, not just
+                                    # picks made from here on -- same reason the merge feature
+                                    # above rewrites username on every moved pick.
+                                    supabase.table("picks").update({"username": new_username}).eq("user_id", pid).execute()
+                                    try:
+                                        supabase.table("pick_submissions").update({"username": new_username}).eq("user_id", pid).execute()
+                                    except Exception:
+                                        pass  # non-critical -- just an audit log for push notifications
+                                    renamed_summary.append(f"{old_username} → {new_username}")
+
+                                new_full_name = st.session_state.get(f"full_name_{pid}", "").strip()
+                                if new_full_name != (p.get("full_name") or ""):
+                                    supabase.table("players").update({"full_name": new_full_name or None}).eq("id", pid).execute()
+                                    full_name_updates += 1
+
+                            if renamed_summary or full_name_updates:
+                                parts = []
+                                if renamed_summary:
+                                    parts.append(f"renamed {len(renamed_summary)} player(s) ({', '.join(renamed_summary)})")
+                                if full_name_updates:
+                                    parts.append(f"updated {full_name_updates} real name(s)")
+                                st.session_state.roster_edit_done = "Saved -- " + " and ".join(parts) + "."
+                                st.rerun()
+                            else:
+                                st.info("No changes to save.")
+                        except Exception as e:
+                            st.error(f"Database error: {e}")
 
     st.write("---")
 
@@ -1494,77 +1563,6 @@ with tab_players:
 
     if st.session_state.get("pending_merge"):
         confirm_merge(st.session_state.pending_merge)
-
-    st.write("---")
-
-    # RENAME A PLAYER
-    st.subheader("🔤 Rename a Player")
-    st.caption("Updates their display name everywhere -- the players list, their pick history, and future picks. "
-               "If they have a real login, this sticks even after they log in again.")
-
-    if st.session_state.get("rename_done"):
-        # Shown on the rerun AFTER a successful rename, same pattern as the merge
-        # feature above -- a success message followed immediately by st.rerun()
-        # gets wiped out before it's ever seen, which is what made a working
-        # rename look like "nothing happened."
-        _done = st.session_state.rename_done
-        st.success(f"Renamed {_done['from']} to {_done['to']}.")
-        if st.button("OK", key="rename_done_ok"):
-            st.session_state.rename_done = None
-            st.rerun()
-    else:
-        rename_players_roster = supabase.table("players").select("*").order("username").execute().data
-        if not rename_players_roster:
-            st.info("No players yet.")
-        else:
-            rename_options = {p["username"]: p["id"] for p in rename_players_roster}
-            rename_from_name = st.selectbox(
-                "Player to rename:", ["— Select a player —"] + sorted(rename_options.keys()), key="rename_from_select"
-            )
-            if rename_from_name == "— Select a player —":
-                st.info("Select a player above to rename them.")
-            else:
-                # A form (instead of a bare text_input + button) so pressing Enter
-                # in the name field submits it -- with a bare button, Enter looked
-                # like it did nothing because it never actually clicked the button.
-                with st.form(key="rename_form", clear_on_submit=True):
-                    new_name_input = st.text_input("New display name:", key="rename_new_name")
-                    rename_submitted = st.form_submit_button("Rename Player", type="primary")
-                if rename_submitted:
-                    new_name = new_name_input.strip()
-                    if not new_name:
-                        st.error("Enter a new name.")
-                    elif new_name == rename_from_name:
-                        st.info("That's already their name.")
-                    elif new_name in rename_options:
-                        st.error(f"'{new_name}' is already in use by another player.")
-                    else:
-                        try:
-                            rename_id = rename_options[rename_from_name]
-                            rename_result = supabase.table("players").update({"username": new_name}).eq("id", rename_id).execute()
-                            if not rename_result.data:
-                                # The update ran with no error but matched/changed
-                                # nothing -- most likely a permissions (RLS) issue.
-                                # Say so plainly instead of claiming success.
-                                st.error(
-                                    f"Supabase didn't confirm the rename went through for {rename_from_name} -- "
-                                    "no rows were updated. Nothing else was changed. Try logging out and back "
-                                    "in, then try again -- if it keeps failing, your admin session may need a refresh."
-                                )
-                            else:
-                                # Keep denormalized username columns in sync so past weeks
-                                # (leaderboard, exports) show the new name too, not just
-                                # picks made from here on -- same reason the merge feature
-                                # above rewrites username on every moved pick.
-                                supabase.table("picks").update({"username": new_name}).eq("user_id", rename_id).execute()
-                                try:
-                                    supabase.table("pick_submissions").update({"username": new_name}).eq("user_id", rename_id).execute()
-                                except Exception:
-                                    pass  # non-critical -- just an audit log for push notifications
-                                st.session_state.rename_done = {"from": rename_from_name, "to": new_name}
-                                st.rerun()
-                        except Exception as e:
-                            st.error(f"Database error: {e}")
 
     st.write("---")
 
