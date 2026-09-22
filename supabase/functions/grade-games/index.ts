@@ -80,6 +80,19 @@ async function fetchLeagueScores(league: "NFL" | "CFB", dates: string[]): Promis
   return scores;
 }
 
+// ESPN's scoreboard "dates" param buckets a game by its Eastern calendar
+// date, not its raw UTC date -- a night game (e.g. an 8:15pm ET kickoff,
+// already past midnight UTC) needs to be queried under the Eastern date, or
+// it's silently never found (no error, no warning -- it just never shows up
+// in the response, so the game sits "stillPending" forever). en-CA gives
+// YYYY-MM-DD ordering directly.
+const EASTERN_DATE_FMT = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+});
+function toEasternDateStr(isoTimestamp: string): string {
+  return EASTERN_DATE_FMT.format(new Date(isoTimestamp)).replace(/-/g, "");
+}
+
 function parseTrailingSpreadNumber(spreadStr: string | null | undefined): number {
   if (!spreadStr) return 0.0;
   const parts = spreadStr.trim().split(" ");
@@ -124,7 +137,7 @@ Deno.serve(async (req) => {
     for (const [league, leagueGames] of Object.entries(gamesByLeague)) {
       if (!LEAGUE_URLS[league]) continue;
       const uniqueDates = Array.from(new Set(
-        leagueGames.map((g) => new Date(g.kickoff_time).toISOString().slice(0, 10).replace(/-/g, "")),
+        leagueGames.map((g) => toEasternDateStr(g.kickoff_time)),
       )).sort();
       if (uniqueDates.length === 0) continue;
 

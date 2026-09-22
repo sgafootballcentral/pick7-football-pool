@@ -3,6 +3,17 @@ import { getSharedWeek, setSharedWeek } from "./weekState.js";
 
 const EASTERN_TZ = "America/New_York";
 
+// ESPN's scoreboard "dates" param buckets a game by its Eastern calendar
+// date, not its raw UTC date -- a night game (e.g. an 8:15pm ET kickoff,
+// already past midnight UTC) needs to be queried under the Eastern date, or
+// it's silently never found. en-CA gives YYYY-MM-DD ordering directly.
+const easternDateFmt = new Intl.DateTimeFormat("en-CA", {
+  timeZone: EASTERN_TZ, year: "numeric", month: "2-digit", day: "2-digit",
+});
+function toEasternDateStr(isoTimestamp) {
+  return easternDateFmt.format(new Date(isoTimestamp)).replace(/-/g, "");
+}
+
 function computeGameNumbers(games) {
   const sorted = [...games].sort((a, b) => (a.kickoff_time || "").localeCompare(b.kickoff_time || ""));
   const numbers = {};
@@ -27,7 +38,7 @@ async function fetchLiveScores(games) {
     const dates = list
       .map((g) => g.kickoff_time)
       .filter(Boolean)
-      .map((t) => t.slice(0, 10).replace(/-/g, ""));
+      .map(toEasternDateStr);
     if (!dates.length) continue;
     const min = dates.reduce((a, b) => (a < b ? a : b));
     const max = dates.reduce((a, b) => (a > b ? a : b));

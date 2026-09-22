@@ -124,7 +124,12 @@ def fetch_live_scores(games_for_week):
         # ("Failed to get events endpoint.") -- only a single bare date works.
         # So instead of one request for the whole week's span, fetch each
         # unique kickoff date separately and merge the results together.
-        unique_dates = sorted({d.strftime("%Y%m%d") for d in kickoff_dates})
+        # IMPORTANT: bucket by the game's Eastern calendar date, not its raw
+        # UTC date -- ESPN's own "dates" param buckets a night game (e.g. an
+        # 8:15pm ET kickoff, which is already past midnight UTC) under the
+        # Eastern date, so a bare .strftime() on a UTC-aware datetime lands
+        # one day late and silently never finds primetime games at all.
+        unique_dates = sorted({d.astimezone(ZoneInfo("America/New_York")).strftime("%Y%m%d") for d in kickoff_dates})
 
         for date_str in unique_dates:
             # ESPN also silently truncates CFB results to a fraction of the
