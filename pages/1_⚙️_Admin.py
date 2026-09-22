@@ -1330,37 +1330,45 @@ with tab_players:
     if not roster_rows:
         st.info("No players yet.")
     else:
-        col_rh1, col_rh2 = st.columns([2, 2])
-        col_rh1.markdown("**Display Name**")
-        col_rh2.markdown("**Real Name**")
+        edit_roster = st.checkbox("✏️ Edit real names", key="edit_roster_names")
 
-        for p in roster_rows:
-            pid = p["id"]
-            col_r1, col_r2 = st.columns([2, 2])
-            with col_r1:
-                st.write(p["username"])
-            with col_r2:
-                st.text_input(
-                    "Real name", value=p.get("full_name") or "", key=f"full_name_{pid}",
-                    label_visibility="collapsed", placeholder="Not on file",
-                )
+        if not edit_roster:
+            st.dataframe(
+                [{"Display Name": p["username"], "Real Name": p.get("full_name") or "—"} for p in roster_rows],
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            col_rh1, col_rh2 = st.columns([2, 2])
+            col_rh1.markdown("**Display Name**")
+            col_rh2.markdown("**Real Name**")
 
-        if st.button("Save Real Names", key="save_full_names"):
-            updated = 0
-            try:
-                for p in roster_rows:
-                    pid = p["id"]
-                    new_value = st.session_state.get(f"full_name_{pid}", "").strip()
-                    if new_value != (p.get("full_name") or ""):
-                        supabase.table("players").update({"full_name": new_value or None}).eq("id", pid).execute()
-                        updated += 1
-                if updated:
-                    st.success(f"Updated {updated} name(s).")
-                    st.rerun()
-                else:
-                    st.info("No changes to save.")
-            except Exception as e:
-                st.error(f"Database error: {e}")
+            for p in roster_rows:
+                pid = p["id"]
+                col_r1, col_r2 = st.columns([2, 2])
+                with col_r1:
+                    st.write(p["username"])
+                with col_r2:
+                    st.text_input(
+                        "Real name", value=p.get("full_name") or "", key=f"full_name_{pid}",
+                        label_visibility="collapsed", placeholder="Not on file",
+                    )
+
+            if st.button("Save Real Names", key="save_full_names"):
+                updated = 0
+                try:
+                    for p in roster_rows:
+                        pid = p["id"]
+                        new_value = st.session_state.get(f"full_name_{pid}", "").strip()
+                        if new_value != (p.get("full_name") or ""):
+                            supabase.table("players").update({"full_name": new_value or None}).eq("id", pid).execute()
+                            updated += 1
+                    if updated:
+                        st.success(f"Updated {updated} name(s).")
+                        st.rerun()
+                    else:
+                        st.info("No changes to save.")
+                except Exception as e:
+                    st.error(f"Database error: {e}")
 
     st.write("---")
 
