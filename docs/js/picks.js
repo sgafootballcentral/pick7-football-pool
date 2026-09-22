@@ -70,6 +70,9 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     pickResults: {}, // game_id -> "win" | "loss" | null (graded result of that pick, once the admin grades it)
     weekPicksByUsername: {}, // everyone's picks this week, grouped by username -- powers the view-scope selector below
     viewScope: "all", // "all" | "mine" | a specific other player's username
+    weekLock: null, // the week_pick_locks row for s.week, or null if no lock is set
+    myExceptions: [], // my pick_lock_exceptions rows for s.week, newest first
+    exceptionReason: "",
     autoRefresh: false,
     numberInput: "",
     numberError: "",
@@ -97,6 +100,19 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     const count = Object.keys(s.selected).length;
     const pct = Math.min((count / 7) * 100, 100);
     const numbersMap = computeGameNumbers(s.games);
+
+    // \u{1F512} ADMIN PICK LOCK -- mirrors app.py: an admin can freeze all pick
+    // submissions/changes for a week starting at a specific time (Admin tab),
+    // independent of each game's own kickoff-time lock further below. A
+    // player who's locked out can request an exception; once an admin
+    // approves it, that player can submit/change picks same as if it weren't
+    // locked. isWeekLocked/isEffectivelyLocked below are the source of truth
+    // (also used by onLockIn and the resubmit modal); these locals just
+    // mirror them for rendering.
+    const weekLocked = isWeekLocked();
+    const latestException = s.myExceptions[0] || null;
+    const hasApprovedException = !!(latestException && latestException.status === "approved");
+    const effectivelyLocked = weekLocked && !hasApprovedException;
 
     // Which games to actually show below: the full slate, just the games
     // you've picked, or -- read-only, and only once a game has kicked off,
@@ -127,6 +143,45 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
       (grouped[dateStr] ||= []).push(g);
     }
 
+    function weekLockBannerHtml() {
+      if (!weekLocked) return "";
+      const lockAtEst = new Date(s.weekLock.lock_at).toLocaleString("en-US", {
+        timeZone: "America/New_York", weekday: "short", month: "numeric", day: "numeric",
+        hour: "numeric", minute: "2-digit", hour12: true,
+      });
+      if (hasApprovedException) {
+        return `<div class="card" style="border-left:4px solid #2e7d32; margin-bottom:12px;">
+          \u{1F513} Picks for Week ${s.week} locked as of ${escapeHtml(lockAtEst)} ET -- but an admin approved an exception for you, so you can still submit or change picks.
+        </div>`;
+      }
+      let extra = "";
+      if (latestException && latestException.status === "pending") {
+        extra = `<div class="hint" style="margin-top:8px;">⏳ Your exception request is pending admin review.</div>`;
+      } else {
+        if (latestException && latestException.status === "denied") {
+          extra += latestException.denial_reason
+            ? `<div class="hint" style="margin-top:8px;">Your last request was denied -- admin note: ${escapeHtml(latestException.denial_reason)}</div>`
+            : `<div class="hint" style="margin-top:8px;">Your last request was denied.</div>`;
+        }
+        extra += `
+          <details style="margin-top:8px;">
+            <summary class="hint" style="cursor:pointer;">Request an exception</summary>
+            <div class="card" style="margin-top:8px;">
+              <div class="field">
+                <label>Why do you need to submit/change picks after the lock? (optional)</label>
+                <textarea id="exception-reason-input" rows="3">${escapeHtml(s.exceptionReason)}</textarea>
+              </div>
+              <button class="btn btn-secondary" id="request-exception-btn">Request an exception</button>
+            </div>
+          </details>
+        `;
+      }
+      return `<div class="card" style="border-left:4px solid #c62828; margin-bottom:12px;">
+        \u{1F512} Picks for Week ${s.week} are locked as of ${escapeHtml(lockAtEst)} ET. You can't submit or change picks unless an admin approves an exception.
+        ${extra}
+      </div>`;
+    }
+
     el.innerHTML = `
       <div class="week-select-row">
         <label class="hint" style="white-space:nowrap;">Week:</label>
@@ -135,13 +190,15 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
         </select>
       </div>
 
+      ${weekLockBannerHtml()}
+
       <div class="sticky-bar">
         <div style="text-align:center; font-weight:600;">
           \u{1F3C8} ${count} of 7 games selected
           <div class="progress-track"><div class="progress-fill" style="width:${pct}%;"></div></div>
         </div>
         <div class="btn-row" style="margin-top:8px;">
-          <button class="btn btn-primary" id="lock-btn">Lock In Weekly Picks</button>
+          <button class="btn btn-primary" id="lock-btn" ${effectivelyLocked ? "disabled" : ""}>Lock In Weekly Picks</button>
           <button class="btn btn-secondary" id="refresh-btn" style="flex:0 0 auto; width:auto; padding:11px 14px;">\u{1F504}</button>
         </div>
         <label class="hint" style="display:flex; align-items:center; gap:6px; margin-top:6px; justify-content:center;">
@@ -198,6 +255,8 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     });
     el.querySelector("#number-input").addEventListener("input", (e) => { s.numberInput = e.target.value; });
     el.querySelector("#preview-numbers-btn").addEventListener("click", onPreviewNumbers);
+    el.querySelector("#exception-reason-input")?.addEventListener("input", (e) => { s.exceptionReason = e.target.value; });
+    el.querySelector("#request-exception-btn")?.addEventListener("click", onRequestException);
 
     el.querySelectorAll("[data-pick-game]").forEach((input) => {
       // "click" (not "change") on purpose -- clicking an already-checked
@@ -397,6 +456,10 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     `;
     document.body.appendChild(wrap);
     wrap.querySelector("#confirm-resubmit-btn").addEventListener("click", async () => {
+      if (isEffectivelyLocked()) {
+        alert("\u{1F512} Picks for this week are locked. Request an exception if you need to submit or change your picks.");
+        return;
+      }
       await submitPicks();
       s.resubmit = null;
       wrap.remove();
@@ -506,7 +569,34 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     draw();
   }
 
+  function isWeekLocked() {
+    if (!s.weekLock?.lock_at) return false;
+    return new Date() >= new Date(s.weekLock.lock_at);
+  }
+
+  function isEffectivelyLocked() {
+    if (!isWeekLocked()) return false;
+    const latest = s.myExceptions[0];
+    return !(latest && latest.status === "approved");
+  }
+
+  async function onRequestException() {
+    await supabase.from("pick_lock_exceptions").insert({
+      week_number: s.week, user_id: user.id, username,
+      reason: s.exceptionReason.trim() || null,
+    });
+    s.exceptionReason = "";
+    const { data } = await supabase.from("pick_lock_exceptions").select("*")
+      .eq("week_number", s.week).eq("user_id", user.id).order("requested_at", { ascending: false });
+    s.myExceptions = data || [];
+    draw();
+  }
+
   async function onLockIn() {
+    if (isEffectivelyLocked()) {
+      alert("\u{1F512} Picks for this week are locked. Request an exception if you need to submit or change your picks.");
+      return;
+    }
     const count = Object.keys(s.selected).length;
     if (count !== 7) {
       s.error = "";
@@ -561,6 +651,22 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
         (s.weekPicksByUsername[uname] ||= []).push(p);
       }
       s.viewScope = "all"; // reset on every week switch/reload, same as the Streamlit app
+
+      // \u{1F512} Admin pick lock for this week, and my own exception requests
+      // against it (if any) -- see the ADMIN PICK LOCK block in draw().
+      try {
+        const { data: lockRow } = await supabase.from("week_pick_locks").select("*").eq("week_number", s.week).maybeSingle();
+        s.weekLock = lockRow || null;
+      } catch (_) {
+        s.weekLock = null;
+      }
+      try {
+        const { data: exceptions } = await supabase.from("pick_lock_exceptions").select("*")
+          .eq("week_number", s.week).eq("user_id", user.id).order("requested_at", { ascending: false });
+        s.myExceptions = exceptions || [];
+      } catch (_) {
+        s.myExceptions = [];
+      }
 
       s.scores = await fetchLiveScores(s.games);
       s.loading = false;

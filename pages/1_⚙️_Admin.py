@@ -721,7 +721,109 @@ with tab_setup:
 
 
 with tab_picks:
-    # 6. VIEW SUBMITTED PICKS
+    # 6a. ADMIN PICK LOCK -- freeze all pick submissions/changes for a week as
+    # of a specific time, independent of each game's own kickoff-time lock
+    # (which still always applies on top of this). A locked-out player sees a
+    # "Request an exception" option in app.py; approving/denying it here is
+    # what actually lets them back in (or not) -- see pick_lock_exceptions.
+    st.subheader("🔒 Pick Lock")
+    lock_week = section_week_selector("pick_lock", active_week, "Week to manage the lock for:")
+
+    try:
+        _lock_row = supabase.table("week_pick_locks").select("*").eq("week_number", lock_week).maybe_single().execute().data
+    except Exception:
+        _lock_row = None
+
+    if _lock_row and _lock_row.get("lock_at"):
+        _lock_at_dt = datetime.fromisoformat(_lock_row["lock_at"].replace("Z", "+00:00"))
+        _lock_at_est = _lock_at_dt.astimezone(ZoneInfo("America/New_York"))
+        _lock_at_str = _lock_at_est.strftime("%a %m/%d %I:%M %p ET").replace(" 0", " ")
+        _is_locked_now = datetime.now(timezone.utc) >= _lock_at_dt
+        if _is_locked_now:
+            st.error(f"🔒 Locked as of {_lock_at_str} -- picks are frozen for everyone except approved exceptions.")
+        else:
+            st.info(f"⏳ Scheduled to lock at {_lock_at_str} (not locked yet).")
+        if st.button("Remove lock", key=f"remove_pick_lock_{lock_week}"):
+            supabase.table("week_pick_locks").delete().eq("week_number", lock_week).execute()
+            st.success("Lock removed.")
+            st.rerun()
+    else:
+        st.caption("No lock set for this week -- picks can be submitted/changed freely (subject to each game's own kickoff time).")
+
+    with st.expander("Set / change the lock time"):
+        _default_lock_dt = datetime.now(ZoneInfo("America/New_York")) + timedelta(days=1)
+        col_lock_date, col_lock_time = st.columns(2)
+        with col_lock_date:
+            new_lock_date = st.date_input("Lock date", value=_default_lock_dt.date(), key=f"pick_lock_date_{lock_week}")
+        with col_lock_time:
+            new_lock_time = st.time_input("Lock time", value=_default_lock_dt.time().replace(second=0, microsecond=0), key=f"pick_lock_time_{lock_week}")
+        st.caption("Eastern time. Once this time passes, nobody can submit or change picks for this week unless you approve an exception below.")
+        if st.button("🔒 Set lock", key=f"set_pick_lock_{lock_week}", type="primary"):
+            lock_local = datetime.combine(new_lock_date, new_lock_time).replace(tzinfo=ZoneInfo("America/New_York"))
+            lock_utc = lock_local.astimezone(timezone.utc)
+            supabase.table("week_pick_locks").delete().eq("week_number", lock_week).execute()
+            supabase.table("week_pick_locks").insert({
+                "week_number": lock_week, "lock_at": lock_utc.isoformat(), "set_by": user_id,
+            }).execute()
+            _confirm_str = lock_utc.astimezone(ZoneInfo("America/New_York")).strftime("%a %m/%d %I:%M %p ET").replace(" 0", " ")
+            st.success(f"Picks for Week {lock_week} will lock at {_confirm_str}.")
+            st.rerun()
+
+    st.subheader("🔑 Pick Lock Exception Requests")
+    pending_exceptions = (
+        supabase.table("pick_lock_exceptions").select("*")
+        .eq("status", "pending").order("requested_at", desc=True).execute().data or []
+    )
+    if not pending_exceptions:
+        st.caption("No pending exception requests.")
+    else:
+        for exc in pending_exceptions:
+            with st.container(border=True):
+                st.markdown(f"**{exc.get('username') or 'Unknown player'}** -- Week {exc['week_number']}")
+                if exc.get("reason"):
+                    st.write(f"_{exc['reason']}_")
+                st.caption(f"Requested {exc['requested_at']}")
+
+                col_deny, col_approve = st.columns(2)
+                with col_deny:
+                    if st.button("❌ Deny", key=f"deny_exc_{exc['id']}"):
+                        st.session_state[f"denying_exc_{exc['id']}"] = True
+                with col_approve:
+                    if st.button("✅ Approve", key=f"approve_exc_{exc['id']}"):
+                        supabase.table("pick_lock_exceptions").update({
+                            "status": "approved",
+                            "reviewed_by": user_id,
+                            "reviewed_at": datetime.now(timezone.utc).isoformat(),
+                        }).eq("id", exc["id"]).execute()
+                        st.success("Approved -- the player has been notified.")
+                        st.rerun()
+
+                if st.session_state.get(f"denying_exc_{exc['id']}"):
+                    st.write("---")
+                    exc_denial_reason = st.text_area(
+                        "Reason (optional) -- shown to the player who requested this",
+                        key=f"deny_exc_reason_{exc['id']}", height=80,
+                    )
+                    col_deny_confirm, col_deny_cancel = st.columns(2)
+                    with col_deny_confirm:
+                        if st.button("Confirm Deny", key=f"deny_exc_confirm_{exc['id']}", type="primary"):
+                            supabase.table("pick_lock_exceptions").update({
+                                "status": "denied",
+                                "reviewed_by": user_id,
+                                "reviewed_at": datetime.now(timezone.utc).isoformat(),
+                                "denial_reason": exc_denial_reason.strip() or None,
+                            }).eq("id", exc["id"]).execute()
+                            st.session_state[f"denying_exc_{exc['id']}"] = False
+                            st.success("Denied -- the player has been notified.")
+                            st.rerun()
+                    with col_deny_cancel:
+                        if st.button("Cancel", key=f"deny_exc_cancel_{exc['id']}"):
+                            st.session_state[f"denying_exc_{exc['id']}"] = False
+                            st.rerun()
+
+    st.divider()
+
+    # 6b. VIEW SUBMITTED PICKS
     st.subheader("📋 Submitted Picks")
     view_week = section_week_selector("view_week_picks", active_week, "Week to view picks for:")
 
