@@ -71,13 +71,13 @@ export function renderAuth(el, { supabase }) {
             <label>Your name</label>
             <input type="text" name="full_name" required autocomplete="name">
           </div>
+          <div class="field"><label>Email</label><input type="email" name="email" required autocomplete="email"></div>
+          <div class="field"><label>Password</label><input type="password" name="password" required autocomplete="new-password" minlength="6"></div>
           <div class="field">
             <label>Display name</label>
             <input type="text" name="username" required autocomplete="nickname">
             <div class="hint" style="margin-top:4px;">This is what other players will see on picks, the leaderboard, and chat.</div>
           </div>
-          <div class="field"><label>Email</label><input type="email" name="email" required autocomplete="email"></div>
-          <div class="field"><label>Password</label><input type="password" name="password" required autocomplete="new-password" minlength="6"></div>
           <button class="btn btn-primary" type="submit" ${busy ? "disabled" : ""}>${busy ? "Creating account…" : "Sign Up"}</button>
         </form>
       `;
