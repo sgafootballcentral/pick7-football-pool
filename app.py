@@ -492,17 +492,25 @@ if not st.session_state.user:
         with st.form("signup_form"):
             signup_email = st.text_input("Email", key="s_email")
             signup_pass = st.text_input("Password", type="password", key="s_pass")
+            signup_full_name = st.text_input("Your name", key="s_full_name")
+            st.caption("Just for the commissioner, so they know who you are -- not shown to other players.")
             signup_username = st.text_input("Display name", key="s_username")
+            st.caption("This is what other players will see on picks, the leaderboard, and chat.")
             signup_submitted = st.form_submit_button("Sign Up", use_container_width=True)
         if signup_submitted:
-            if not signup_username.strip():
+            if not signup_full_name.strip():
+                st.error("Please enter your name.")
+            elif not signup_username.strip():
                 st.error("Please enter a display name.")
             else:
                 try:
                     supabase.auth.sign_up({
                         "email": signup_email,
                         "password": signup_pass,
-                        "options": {"data": {"username": signup_username.strip()}},
+                        "options": {"data": {
+                            "username": signup_username.strip(),
+                            "full_name": signup_full_name.strip(),
+                        }},
                     })
                     st.success("Account created! If your league requires email confirmation, check your inbox, then log in on the other tab.")
                 except Exception as e:
@@ -539,16 +547,26 @@ if st.session_state.get("access_token"):
             st.session_state["_just_logged_out"] = True
             st.rerun()
 signup_username = user.user_metadata.get("username", user.email)
+signup_full_name = user.user_metadata.get("full_name", "")
 try:
-    existing_player_row = supabase.table("players").select("username").eq("id", user.id).execute().data
+    existing_player_row = supabase.table("players").select("username, full_name").eq("id", user.id).execute().data
     if existing_player_row:
         # Already on file -- use whatever name is there (an admin may have
         # renamed them since signup) instead of overwriting it back to the
-        # name chosen at signup every time they log in.
+        # name chosen at signup every time they log in. Same idea for
+        # full_name -- only ever backfill it if it's missing, never stomp
+        # something the admin may have corrected.
         username = existing_player_row[0].get("username") or signup_username
+        if not existing_player_row[0].get("full_name") and signup_full_name:
+            try:
+                supabase.table("players").update({"full_name": signup_full_name}).eq("id", user.id).execute()
+            except Exception:
+                pass  # non-critical
     else:
         username = signup_username
-        supabase.table("players").insert({"id": user.id, "username": username}).execute()
+        supabase.table("players").insert({
+            "id": user.id, "username": username, "full_name": signup_full_name or None,
+        }).execute()
 except Exception:
     username = signup_username  # non-critical -- don't block the session over this
 st.sidebar.write(f"Logged in as: **{username}**")

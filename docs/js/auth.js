@@ -67,7 +67,16 @@ export function renderAuth(el, { supabase }) {
     } else if (mode === "signup") {
       formSlot.innerHTML = `
         <form id="signup-form">
-          <div class="field"><label>Display name</label><input type="text" name="username" required autocomplete="nickname"></div>
+          <div class="field">
+            <label>Your name</label>
+            <input type="text" name="full_name" required autocomplete="name">
+            <div class="hint" style="margin-top:4px;">Just for the commissioner, so they know who you are -- not shown to other players.</div>
+          </div>
+          <div class="field">
+            <label>Display name</label>
+            <input type="text" name="username" required autocomplete="nickname">
+            <div class="hint" style="margin-top:4px;">This is what other players will see on picks, the leaderboard, and chat.</div>
+          </div>
           <div class="field"><label>Email</label><input type="email" name="email" required autocomplete="email"></div>
           <div class="field"><label>Password</label><input type="password" name="password" required autocomplete="new-password" minlength="6"></div>
           <button class="btn btn-primary" type="submit" ${busy ? "disabled" : ""}>${busy ? "Creating account…" : "Sign Up"}</button>
@@ -112,14 +121,18 @@ export function renderAuth(el, { supabase }) {
     e.preventDefault();
     error = ""; success = ""; busy = true; draw();
     const fd = new FormData(e.target);
+    const fullName = String(fd.get("full_name") || "").trim();
     const username = String(fd.get("username") || "").trim();
+    if (!fullName) {
+      error = "Please enter your name."; busy = false; draw(); return;
+    }
     if (!username) {
       error = "Please enter a display name."; busy = false; draw(); return;
     }
     const { error: err } = await supabase.auth.signUp({
       email: fd.get("email"),
       password: fd.get("password"),
-      options: { data: { username } },
+      options: { data: { username, full_name: fullName } },
     });
     busy = false;
     if (err) {

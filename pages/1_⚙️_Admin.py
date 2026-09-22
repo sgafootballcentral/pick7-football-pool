@@ -1318,6 +1318,24 @@ with tab_grading:
 
 
 with tab_players:
+    # 10a. PLAYER ROSTER -- username is what everyone sees on picks, the
+    # leaderboard, and chat; full_name is collected at signup just so the
+    # commissioner knows who's actually behind each display name. Players
+    # added manually, or who signed up before this existed, may not have one.
+    st.subheader("📇 Player Roster")
+    st.caption("Real names, for your reference only -- players only ever see each other's display names.")
+
+    roster_rows = supabase.table("players").select("username, full_name").order("username").execute().data or []
+    if not roster_rows:
+        st.info("No players yet.")
+    else:
+        st.dataframe(
+            [{"Display Name": p["username"], "Real Name": p.get("full_name") or "—"} for p in roster_rows],
+            use_container_width=True, hide_index=True,
+        )
+
+    st.write("---")
+
     # 11. ADD A PLAYER WITHOUT AN ACCOUNT
     st.subheader("➕ Add a Player Without an Account")
     st.caption("For someone you're tracking who doesn't log in or have an email on file.")

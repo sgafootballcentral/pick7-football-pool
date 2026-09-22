@@ -50,18 +50,25 @@ async function refreshIdentity() {
   }
 
   const signupUsername = state.user.user_metadata?.username || state.user.email;
+  const signupFullName = state.user.user_metadata?.full_name || "";
 
   // Mirror the Streamlit app's own behavior, and its fix for the same bug:
   // don't blindly overwrite an existing players row on every login, or a
   // rename an admin made would get reverted back to the signup-time name
-  // the very next time this player logs in.
+  // the very next time this player logs in. Same idea for full_name -- only
+  // ever backfill it if it's missing, never stomp an admin correction.
   try {
-    const { data: existingPlayerRows } = await supabase.from("players").select("username").eq("id", state.user.id);
+    const { data: existingPlayerRows } = await supabase.from("players").select("username, full_name").eq("id", state.user.id);
     if (existingPlayerRows && existingPlayerRows.length) {
       state.username = existingPlayerRows[0].username || signupUsername;
+      if (!existingPlayerRows[0].full_name && signupFullName) {
+        try {
+          await supabase.from("players").update({ full_name: signupFullName }).eq("id", state.user.id);
+        } catch (_) { /* non-critical */ }
+      }
     } else {
       state.username = signupUsername;
-      await supabase.from("players").insert({ id: state.user.id, username: state.username });
+      await supabase.from("players").insert({ id: state.user.id, username: state.username, full_name: signupFullName || null });
     }
   } catch (_) {
     state.username = signupUsername; // non-critical -- don't block the session over this
