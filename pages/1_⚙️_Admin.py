@@ -948,8 +948,9 @@ with tab_picks:
 
     score_label_map = {g["game_id"]: _score_label_for_game(g) for g in games_rows}
 
-    all_players_rows = supabase.table("players").select("username").execute().data
+    all_players_rows = supabase.table("players").select("username, full_name").execute().data
     total_players = len(all_players_rows)
+    full_name_by_username = {p["username"]: p.get("full_name") for p in all_players_rows}
 
     picks_per_username = {}
     for p in picks_rows:
@@ -976,6 +977,7 @@ with tab_picks:
     roster_status = pd.DataFrame([
         {
             "Player": p["username"],
+            "Real Name": p.get("full_name") or "—",
             "Picks Submitted": picks_per_username.get(p["username"], 0),
             "Status": status_for(picks_per_username.get(p["username"], 0)),
         }
@@ -1016,6 +1018,9 @@ with tab_picks:
         if selected_player == "— Select a player —":
             st.info("Select a player above to see their picks.")
         else:
+            selected_real_name = full_name_by_username.get(selected_player)
+            st.caption(f"Real name: {selected_real_name}" if selected_real_name else "Real name: not on file")
+
             player_df = df_picks_view[df_picks_view["Player"] == selected_player].sort_values("#")
 
             # Result comes straight from picks.result, which grading (manual or
