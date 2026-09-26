@@ -371,6 +371,19 @@ def confirm_manual_picks_save(info):
                     "selected_team": item["team"],
                     "spread_at_pick": item["spread"],
                 }).execute()
+            # Log a submission event too, same as a player submitting their own
+            # picks, so this player shows a real submission time (not "not yet
+            # submitted") on the Submitted Picks tab even though an admin
+            # entered these on their behalf.
+            try:
+                supabase.table("pick_submissions").insert({
+                    "user_id": info["user_id"],
+                    "username": info["player"],
+                    "week_number": info["week"],
+                    "picks_count": len(info["resolved"]),
+                }).execute()
+            except Exception:
+                pass  # non-critical -- the picks themselves are already saved
             st.session_state.pending_manual_picks_save = None
             st.rerun()
         except Exception as e:
