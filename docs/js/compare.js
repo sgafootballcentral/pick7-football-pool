@@ -200,6 +200,17 @@ export function renderCompare(el, { supabase, username }) {
 
     const orderedGames = orderGamesByKickoff(s.games);
 
+    // The Everyone grid only makes sense for games at least one player
+    // actually picked -- a game nobody picked yet (or ever, if it's not part
+    // of anyone's 7) would just be an all-"\u2014" column. Head-to-head is left
+    // showing the full week either way, since "neither of us picked this
+    // one" is still meaningful there.
+    const pickedGameIds = new Set();
+    Object.values(s.picksByUsername).forEach((picks) => {
+      picks.forEach((p) => { if (p.selected_team) pickedGameIds.add(p.game_id); });
+    });
+    const gridGames = orderedGames.filter((g) => pickedGameIds.has(g.game_id));
+
     el.innerHTML = `
       <h2>\u{1F86A} Compare Picks</h2>
       ${weekSelectHtml()}
@@ -207,7 +218,7 @@ export function renderCompare(el, { supabase, username }) {
         <button class="btn ${s.mode === "grid" ? "btn-primary" : "btn-secondary"}" id="cmp-mode-grid">\u{1F4CA} Everyone</button>
         <button class="btn ${s.mode === "h2h" ? "btn-primary" : "btn-secondary"}" id="cmp-mode-h2h">\u{1F19A} Head-to-Head</button>
       </div>
-      ${s.mode === "grid" ? drawGrid(orderedGames) : drawH2H(orderedGames)}
+      ${s.mode === "grid" ? drawGrid(gridGames) : drawH2H(orderedGames)}
     `;
 
     el.querySelector("#cmp-week-select").addEventListener("change", (e) => {

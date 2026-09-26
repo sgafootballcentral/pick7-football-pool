@@ -155,13 +155,19 @@ LOSS_STYLE = "background-color: #8a1f1f; color: #ffffff"
 
 view_mode = st.radio("View:", ["📊 Everyone", "🆚 Head-to-Head"], horizontal=True, key="cmp_view_mode")
 
-game_cols = [f"G{i + 1}" for i in range(len(games_sorted))]
-
-with st.expander("🔢 Game legend (matchup & spread for G1-G{})".format(len(games_sorted)) if games_sorted else "🔢 Game legend"):
-    for i, g in enumerate(games_sorted):
-        st.write(f"**G{i + 1}**: {g.get('display_text') or g.get('game_id')} ({g.get('spread_value', '')})")
+# The Everyone grid only makes sense for games at least one player actually
+# picked -- a game nobody picked (or that isn't part of anyone's 7) would
+# just be an all-"—" column. Head-to-head is left showing the full week
+# either way, since "neither of us picked this one" is still meaningful there.
+picked_game_ids = {p["game_id"] for p in week_picks if p.get("selected_team")}
+grid_games = [g for g in games_sorted if g["game_id"] in picked_game_ids]
+game_cols = [f"G{i + 1}" for i in range(len(grid_games))]
 
 if view_mode == "📊 Everyone":
+    with st.expander("🔢 Game legend (matchup & spread for G1-G{})".format(len(grid_games)) if grid_games else "🔢 Game legend"):
+        for i, g in enumerate(grid_games):
+            st.write(f"**G{i + 1}**: {g.get('display_text') or g.get('game_id')} ({g.get('spread_value', '')})")
+
     players = sorted(picks_by_username.keys())
 
     display_rows = []
@@ -170,7 +176,7 @@ if view_mode == "📊 Everyone":
         picks_by_game = {pk["game_id"]: pk for pk in picks_by_username[p]}
         row = {"Player": p + (" (you)" if p == username else "")}
         wins = losses = 0
-        for col, g in zip(game_cols, games_sorted):
+        for col, g in zip(game_cols, grid_games):
             pk = picks_by_game.get(g["game_id"])
             if not pk or not pk.get("selected_team"):
                 row[col] = "—"
