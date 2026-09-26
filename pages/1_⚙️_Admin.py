@@ -952,6 +952,25 @@ with tab_picks:
     total_players = len(all_players_rows)
     full_name_by_username = {p["username"]: p.get("full_name") for p in all_players_rows}
 
+    # Submission time (admin-only, per the "when were picks submitted" request) --
+    # sourced from pick_submissions, one row per full submit/resubmit event, so
+    # a player who resubmitted has several rows and we want their latest one.
+    submission_rows = supabase.table("pick_submissions").select("username, created_at").eq("week_number", view_week).execute().data or []
+    submitted_at_by_username = {}
+    for _row in submission_rows:
+        _uname = _row.get("username")
+        _ts = _row.get("created_at")
+        if not _uname or not _ts:
+            continue
+        _dt = datetime.fromisoformat(_ts.replace("Z", "+00:00"))
+        if _uname not in submitted_at_by_username or _dt > submitted_at_by_username[_uname]:
+            submitted_at_by_username[_uname] = _dt
+
+    def _format_submitted_at(dt):
+        if not dt:
+            return None
+        return dt.astimezone(ZoneInfo("America/New_York")).strftime("%a %m/%d %I:%M %p ET").replace(" 0", " ")
+
     picks_per_username = {}
     for p in picks_rows:
         uname = p.get("username", "Unknown")
@@ -980,6 +999,7 @@ with tab_picks:
             "Real Name": p.get("full_name") or "—",
             "Picks Submitted": picks_per_username.get(p["username"], 0),
             "Status": status_for(picks_per_username.get(p["username"], 0)),
+            "Submitted At": _format_submitted_at(submitted_at_by_username.get(p["username"])) or "—",
         }
         for p in all_players_rows
     ]).sort_values("Player").reset_index(drop=True)
@@ -1019,7 +1039,12 @@ with tab_picks:
             st.info("Select a player above to see their picks.")
         else:
             selected_real_name = full_name_by_username.get(selected_player)
-            st.caption(f"Real name: {selected_real_name}" if selected_real_name else "Real name: not on file")
+            selected_submitted_at = _format_submitted_at(submitted_at_by_username.get(selected_player))
+            st.caption(
+                (f"Real name: {selected_real_name}" if selected_real_name else "Real name: not on file")
+                + " · "
+                + (f"Submitted: {selected_submitted_at}" if selected_submitted_at else "Submitted: not yet submitted")
+            )
 
             player_df = df_picks_view[df_picks_view["Player"] == selected_player].sort_values("#")
 
