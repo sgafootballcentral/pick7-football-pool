@@ -2,6 +2,7 @@ import { supabase } from "./supabaseClient.js";
 import { renderAuth } from "./auth.js";
 import { renderPicks } from "./picks.js";
 import { renderLeaderboard } from "./leaderboard.js";
+import { renderCompare } from "./compare.js";
 import { renderChat } from "./chat.js";
 import { renderRequestsVotes } from "./requestsVotes.js";
 import { renderSetNewPassword } from "./recovery.js";
@@ -187,6 +188,9 @@ function renderChrome(innerHtml) {
         <button data-tab="leaderboard" class="${state.activeTab === "leaderboard" ? "active" : ""}">
           <span class="icon">\u{1F3C6}</span>Standings
         </button>
+        <button data-tab="compare" class="${state.activeTab === "compare" ? "active" : ""}">
+          <span class="icon">\u{1F19A}</span>Compare
+        </button>
         <button data-tab="chat" class="${state.activeTab === "chat" ? "active" : ""}">
           <span class="icon">\u{1F4AC}</span>Chat
           ${state.hasUnreadChat ? `<span class="nav-badge"></span>` : ""}
@@ -267,6 +271,7 @@ export function render() {
 
   if (state.activeTab === "picks") renderPicks(slot, ctx);
   else if (state.activeTab === "leaderboard") renderLeaderboard(slot, ctx);
+  else if (state.activeTab === "compare") renderCompare(slot, ctx);
   else if (state.activeTab === "chat") renderChat(slot, ctx);
   else if (state.activeTab === "requests") renderRequestsVotes(slot, ctx);
 }

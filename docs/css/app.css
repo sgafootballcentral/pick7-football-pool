@@ -330,3 +330,18 @@ table.standings th { color: var(--text-dim); font-weight: 600; font-size: 0.78re
   .modal-backdrop { align-items: center; }
   .modal-sheet { border-radius: 16px; max-width: 480px; }
 }
+
+/* Compare Picks tab */
+table.cmp-grid { font-size: 0.82rem; }
+table.cmp-grid th { text-align: center; white-space: nowrap; cursor: default; }
+table.cmp-grid th:first-child { text-align: left; }
+.cmp-player { font-weight: 600; white-space: nowrap; }
+.cmp-cell { text-align: center; font-size: 0.78rem; }
+.cmp-empty { color: var(--text-dim); }
+.cmp-win { color: var(--win); }
+.cmp-loss { color: var(--loss); }
+.cmp-record { text-align: center; font-weight: 700; white-space: nowrap; }
+tr.cmp-me { background: var(--bg-elevated); }
+.cmp-spread { color: var(--text-dim); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; }
+.h2h-row { border-left: 3px solid transparent; }
+.h2h-row.h2h-agree { border-left: 3px solid var(--accent); }
