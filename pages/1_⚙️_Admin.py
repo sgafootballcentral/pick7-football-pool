@@ -296,6 +296,24 @@ def confirm_merge(info):
                         "payment_method_other": info.get("from_payment_method_other"),
                     }).eq("id", info["to_id"]).execute()
 
+                # Carry submission timestamps over too, so a manual entry's
+                # submission-time history (e.g. picks an admin logged for them
+                # before they had their own account) shows up under the real
+                # account after the merge instead of being orphaned. Skip the
+                # same conflict weeks the picks themselves skipped, and this is
+                # an UPDATE (not an insert), so it won't fire the "picks
+                # submitted" push notification again.
+                try:
+                    from_submissions = supabase.table("pick_submissions").select("id, week_number").eq("user_id", info["from_id"]).execute().data or []
+                    for s in from_submissions:
+                        if s["week_number"] in conflict_weeks:
+                            continue
+                        supabase.table("pick_submissions").update({
+                            "user_id": info["to_id"], "username": info["to_name"],
+                        }).eq("id", s["id"]).execute()
+                except Exception:
+                    pass  # non-critical -- the picks themselves already moved
+
                 remaining = supabase.table("picks").select("id").eq("user_id", info["from_id"]).execute().data
                 removed_entry = False
                 if not remaining:
