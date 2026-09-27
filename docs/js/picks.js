@@ -14,8 +14,19 @@ function toEasternDateStr(isoTimestamp) {
   return easternDateFmt.format(new Date(isoTimestamp)).replace(/-/g, "");
 }
 
+// Tie-broken by game_id when two or more games share the exact same kickoff
+// time (a common noon CFB slot, for instance) -- without a deterministic
+// tiebreaker, Postgres/PostgREST don't guarantee row order, so this and the
+// Streamlit app's own compute_game_numbers() could each see a different
+// tie-break order and number the same game differently.
+function gameSortKey(a, b) {
+  const t = (a.kickoff_time || "").localeCompare(b.kickoff_time || "");
+  if (t !== 0) return t;
+  return (a.game_id || "").localeCompare(b.game_id || "");
+}
+
 function computeGameNumbers(games) {
-  const sorted = [...games].sort((a, b) => (a.kickoff_time || "").localeCompare(b.kickoff_time || ""));
+  const sorted = [...games].sort(gameSortKey);
   const numbers = {};
   sorted.forEach((g, i) => {
     numbers[g.game_id] = { favNum: 2 * (i + 1) - 1, undNum: 2 * (i + 1) };
@@ -149,7 +160,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     }
 
     const grouped = {};
-    for (const g of [...visibleGames].sort((a, b) => a.kickoff_time.localeCompare(b.kickoff_time))) {
+    for (const g of [...visibleGames].sort(gameSortKey)) {
       const { dateStr } = formatKickoff(g.kickoff_time);
       (grouped[dateStr] ||= []).push(g);
     }

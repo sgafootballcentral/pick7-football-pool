@@ -101,7 +101,7 @@ if CURRENT_WEEK != st.session_state["global_week"]:
     st.session_state["global_week"] = CURRENT_WEEK
 
 games = supabase.table("games").select("*").eq("week_number", CURRENT_WEEK).execute().data or []
-games_sorted = sorted(games, key=lambda g: g.get("kickoff_time") or "")
+games_sorted = sorted(games, key=lambda g: (g.get("kickoff_time") or "", g.get("game_id") or ""))
 
 try:
     lock_row = supabase.table("week_pick_locks").select("*").eq("week_number", CURRENT_WEEK).maybe_single().execute().data

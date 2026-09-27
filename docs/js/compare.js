@@ -5,8 +5,17 @@ import { getSharedWeek, setSharedWeek } from "./weekState.js";
 // underdog=even) -- not used for the grid/head-to-head display itself
 // (those are keyed by game, not by side), but kept available in case a
 // future view wants it.
+// Same tiebreak as picks.js's computeGameNumbers -- two or more games can
+// share the exact same kickoff time (a common noon CFB slot, for instance),
+// and without a deterministic secondary key, Postgres/PostgREST don't
+// guarantee row order, so different pages could show the games in a
+// different order for the same tied group.
 function orderGamesByKickoff(games) {
-  return [...games].sort((a, b) => (a.kickoff_time || "").localeCompare(b.kickoff_time || ""));
+  return [...games].sort((a, b) => {
+    const t = (a.kickoff_time || "").localeCompare(b.kickoff_time || "");
+    if (t !== 0) return t;
+    return (a.game_id || "").localeCompare(b.game_id || "");
+  });
 }
 
 function formatLockAt(iso) {

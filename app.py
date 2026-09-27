@@ -77,8 +77,12 @@ def nudge_off_whole_number(odds_string: str) -> str:
 
 def compute_game_numbers(week_games):
     """Same odd/even numbering as the Admin exports: favorite=odd, underdog=even,
-    assigned in chronological kickoff order."""
-    sorted_games = sorted(week_games, key=lambda g: g.get("kickoff_time") or "")
+    assigned in chronological kickoff order. Tie-broken by game_id when two or
+    more games share the exact same kickoff time (a common noon CFB slot, for
+    instance) -- without a deterministic tiebreaker, Postgres/PostgREST don't
+    guarantee row order, so the Streamlit app and the PWA could each see a
+    different tie-break order and number the same game differently."""
+    sorted_games = sorted(week_games, key=lambda g: (g.get("kickoff_time") or "", g.get("game_id") or ""))
     numbers = {}
     for i, g in enumerate(sorted_games, start=1):
         numbers[g["game_id"]] = {"fav_num": 2 * i - 1, "und_num": 2 * i}
@@ -712,7 +716,7 @@ else:
                 cell.fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
                 cell.alignment = Alignment(horizontal="center")
 
-            sorted_for_export = sorted(games_rows, key=lambda g: g.get("kickoff_time") or "")
+            sorted_for_export = sorted(games_rows, key=lambda g: (g.get("kickoff_time") or "", g.get("game_id") or ""))
             for i, g in enumerate(sorted_for_export, start=1):
                 fav_num, und_num = 2 * i - 1, 2 * i
                 fav_t = g.get("favorite_team", "")
