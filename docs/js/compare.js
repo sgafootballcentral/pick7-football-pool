@@ -138,8 +138,13 @@ export function renderCompare(el, { supabase, username }) {
     const aPicks = Object.fromEntries((s.picksByUsername[s.h2hA] || []).map((p) => [p.game_id, p]));
     const bPicks = Object.fromEntries((s.picksByUsername[s.h2hB] || []).map((p) => [p.game_id, p]));
 
+    // Only show games one (or both) of these two specific players actually
+    // picked -- a game neither of them touched is just noise once you've
+    // picked two names, even though it's still shown on the full-week grid.
+    const h2hGames = orderedGames.filter((g) => aPicks[g.game_id]?.selected_team || bPicks[g.game_id]?.selected_team);
+
     let agree = 0, comparable = 0, aWins = 0, aLosses = 0, bWins = 0, bLosses = 0;
-    const gameRows = orderedGames.map((g) => {
+    const gameRows = h2hGames.map((g) => {
       const a = aPicks[g.game_id];
       const b = bPicks[g.game_id];
       if (a?.result === "win") aWins++; else if (a?.result === "loss") aLosses++;
@@ -170,7 +175,7 @@ export function renderCompare(el, { supabase, username }) {
       <div style="display:flex; justify-content:space-between; padding:0 4px;">
         <b>${escapeHtml(s.h2hA)}</b><b>${escapeHtml(s.h2hB)}</b>
       </div>
-      ${gameRows}
+      ${gameRows || `<div class="card hint">Neither ${escapeHtml(s.h2hA)} nor ${escapeHtml(s.h2hB)} has picked any games yet for Week ${s.week}.</div>`}
     `;
   }
 
@@ -211,9 +216,9 @@ export function renderCompare(el, { supabase, username }) {
 
     // The Everyone grid only makes sense for games at least one player
     // actually picked -- a game nobody picked yet (or ever, if it's not part
-    // of anyone's 7) would just be an all-"\u2014" column. Head-to-head is left
-    // showing the full week either way, since "neither of us picked this
-    // one" is still meaningful there.
+    // of anyone's 7) would just be an all-"\u2014" column. Head-to-head gets
+    // its own, narrower filter inside drawH2H() once the two players are
+    // chosen, scoped to just those two.
     const pickedGameIds = new Set();
     Object.values(s.picksByUsername).forEach((picks) => {
       picks.forEach((p) => { if (p.selected_team) pickedGameIds.add(p.game_id); });

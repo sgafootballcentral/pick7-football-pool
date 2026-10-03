@@ -226,11 +226,20 @@ else:
     a_picks_by_game = {pk["game_id"]: pk for pk in picks_by_username.get(player_a, [])}
     b_picks_by_game = {pk["game_id"]: pk for pk in picks_by_username.get(player_b, [])}
 
+    # Only compare games one (or both) of these two specific players actually
+    # picked -- a game neither of them touched is just noise once you've
+    # picked two names, even though it's still shown on the full-week grid.
+    h2h_games = [
+        g for g in games_sorted
+        if a_picks_by_game.get(g["game_id"], {}).get("selected_team")
+        or b_picks_by_game.get(g["game_id"], {}).get("selected_team")
+    ]
+
     a_wins = a_losses = b_wins = b_losses = 0
     agree = comparable = 0
     display_rows = []
     results_grid = {}
-    for row_idx, g in enumerate(games_sorted):
+    for row_idx, g in enumerate(h2h_games):
         a_pick = a_picks_by_game.get(g["game_id"])
         b_pick = b_picks_by_game.get(g["game_id"])
 
@@ -269,17 +278,20 @@ else:
     col2.metric(f"{player_b}", f"{b_wins}-{b_losses}")
     col3.metric("Agree on", f"{agree} / {comparable}")
 
-    h2h_df = pd.DataFrame(display_rows, columns=["Matchup", "Spread", player_a, player_b, "Same Pick?"])
+    if not display_rows:
+        st.info(f"Neither {player_a} nor {player_b} has picked any games yet for Week {CURRENT_WEEK}.")
+    else:
+        h2h_df = pd.DataFrame(display_rows, columns=["Matchup", "Spread", player_a, player_b, "Same Pick?"])
 
-    def _style_h2h(df):
-        styles = pd.DataFrame("", index=df.index, columns=df.columns)
-        for row_idx in df.index:
-            for col in (player_a, player_b):
-                r = results_grid.get((row_idx, col))
-                if r == "win":
-                    styles.loc[row_idx, col] = WIN_STYLE
-                elif r == "loss":
-                    styles.loc[row_idx, col] = LOSS_STYLE
-        return styles
+        def _style_h2h(df):
+            styles = pd.DataFrame("", index=df.index, columns=df.columns)
+            for row_idx in df.index:
+                for col in (player_a, player_b):
+                    r = results_grid.get((row_idx, col))
+                    if r == "win":
+                        styles.loc[row_idx, col] = WIN_STYLE
+                    elif r == "loss":
+                        styles.loc[row_idx, col] = LOSS_STYLE
+            return styles
 
-    st.dataframe(h2h_df.style.apply(_style_h2h, axis=None), use_container_width=True, hide_index=True)
+        st.dataframe(h2h_df.style.apply(_style_h2h, axis=None), use_container_width=True, hide_index=True)
