@@ -759,8 +759,12 @@ else:
         )
 
     all_games = sorted(all_games, key=lambda x: x.get("game_number") or 999)
-    # Sort chronologically first so the day groups come out in calendar order below
-    games_chronological = sorted(all_games, key=lambda g: g["kickoff_time"])
+    # Sort chronologically first so the day groups come out in calendar order below.
+    # Tie-broken by game_id (same rule as compute_game_numbers) purely so the
+    # on-screen row order is itself deterministic too -- the #N labels above
+    # already come from compute_game_numbers(), so this doesn't change any
+    # number, only which row two same-kickoff games land on first.
+    games_chronological = sorted(all_games, key=lambda g: (g.get("kickoff_time") or "", g.get("game_id") or ""))
 
     # Each pick's radio (key=f"sel_{game_id}") starts with nothing selected
     # and never looks at the database on its own -- without this, switching
