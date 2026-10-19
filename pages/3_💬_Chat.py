@@ -82,6 +82,45 @@ except Exception:
 st.title("💬 League Chat")
 st.caption("Messages stay here for everyone to see until an admin removes them.")
 
+# Same six quick-reaction emoji as the PWA's long-press picker (docs/js/chat.js)
+# -- kept in sync there so both platforms offer the same "standard" set.
+REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🔥"]
+
+
+def toggle_reaction(message_id, emoji, mine):
+    try:
+        if mine:
+            supabase.table("chat_reactions").delete().eq("message_id", message_id).eq("user_id", user.id).eq("emoji", emoji).execute()
+        else:
+            supabase.table("chat_reactions").insert({
+                "message_id": message_id, "user_id": user.id, "username": username, "emoji": emoji,
+            }).execute()
+        st.rerun()
+    except Exception as e:
+        st.error(f"Couldn't update reaction: {e}")
+
+
+def render_reaction_picker(message_id, by_emoji):
+    """The popover's contents: the six standard emoji (tap to toggle), plus a
+    text field for the 'full emoji picker' equivalent -- there's no way to pop
+    the OS emoji keyboard from Streamlit, so typing or pasting any emoji here
+    and hitting Add is the desktop/admin-page stand-in for that."""
+    quick_cols = st.columns(len(REACTION_EMOJIS))
+    for i, emoji in enumerate(REACTION_EMOJIS):
+        with quick_cols[i]:
+            mine = by_emoji.get(emoji, {}).get("mine", False)
+            if st.button(emoji, key=f"quick_{message_id}_{emoji}", type="primary" if mine else "secondary", use_container_width=True):
+                toggle_reaction(message_id, emoji, mine)
+    custom_col, add_col = st.columns([3, 1])
+    with custom_col:
+        custom_emoji = st.text_input(
+            "More", key=f"custom_input_{message_id}", max_chars=8, placeholder="or paste any emoji…", label_visibility="collapsed",
+        )
+    with add_col:
+        if st.button("Add", key=f"custom_add_{message_id}", use_container_width=True) and custom_emoji.strip():
+            mine = by_emoji.get(custom_emoji.strip(), {}).get("mine", False)
+            toggle_reaction(message_id, custom_emoji.strip(), mine)
+
 
 def storage_path_from_url(url):
     """Pull the path Supabase Storage actually needs (everything after the
@@ -148,6 +187,16 @@ st.divider()
 
 EASTERN_TZ = ZoneInfo("America/New_York")
 messages = supabase.table("chat_messages").select("*").order("created_at").execute().data
+all_reactions = supabase.table("chat_reactions").select("*").execute().data
+
+reactions_by_message = {}
+for r in all_reactions:
+    by_emoji = reactions_by_message.setdefault(r["message_id"], {})
+    entry = by_emoji.setdefault(r["emoji"], {"count": 0, "mine": False, "usernames": []})
+    entry["count"] += 1
+    entry["usernames"].append(r.get("username") or "Someone")
+    if r["user_id"] == user.id:
+        entry["mine"] = True
 
 if not messages:
     st.info("No messages yet -- be the first to say something.")
@@ -165,6 +214,25 @@ else:
                 st.write(m["message"])
             if m.get("image_url"):
                 st.image(m["image_url"])
+
+            by_emoji = reactions_by_message.get(m["id"], {})
+            if by_emoji:
+                chip_cols = st.columns(len(by_emoji) + 1)
+                for i, (emoji, entry) in enumerate(by_emoji.items()):
+                    with chip_cols[i]:
+                        if st.button(
+                            f"{emoji} {entry['count']}", key=f"chip_{m['id']}_{emoji}",
+                            help=", ".join(entry["usernames"]),
+                            type="primary" if entry["mine"] else "secondary",
+                        ):
+                            toggle_reaction(m["id"], emoji, entry["mine"])
+                with chip_cols[-1]:
+                    with st.popover("➕"):
+                        render_reaction_picker(m["id"], by_emoji)
+            else:
+                with st.popover("🙂 React"):
+                    render_reaction_picker(m["id"], by_emoji)
+
             if is_admin:
                 if st.button("🗑️ Delete", key=f"delete_msg_{m['id']}"):
                     try:

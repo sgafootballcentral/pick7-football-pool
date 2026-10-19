@@ -283,6 +283,78 @@ table.standings th { color: var(--text-dim); font-weight: 600; font-size: 0.78re
 .chat-input-row .btn { width: auto; padding: 11px 14px; }
 .chat-delete { background: none; border: none; color: var(--text-dim); font-size: 0.72rem; margin-top: 3px; }
 
+.chat-msg .bubble[data-msg-id] {
+  /* Long-press is a gesture here, not text selection -- without this iOS
+     Safari pops its selection magnifier/callout mid-press and the picker
+     never gets a chance to open. */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+}
+.msg-footer { display: flex; align-items: center; gap: 10px; margin-top: 3px; }
+.chat-msg.mine .msg-footer { justify-content: flex-end; }
+.reaction-add-btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  padding: 0;
+  cursor: pointer;
+}
+.reaction-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.chat-msg.mine .reaction-row { justify-content: flex-end; }
+.reaction-chip {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.reaction-chip.mine { background: var(--accent-dim); border-color: var(--accent); }
+.reaction-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px 8px;
+}
+.chat-msg.mine .reaction-picker { justify-content: flex-end; }
+.reaction-pick-btn {
+  background: none;
+  border: none;
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.reaction-pick-btn:active { background: var(--bg-card); }
+.reaction-pick-more, .reaction-pick-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+.reaction-emoji-input {
+  width: 72px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 0.9rem;
+}
+
 .centered { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 70vh; text-align: center; gap: 10px; }
 .loading-spinner { width: 28px; height: 28px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }

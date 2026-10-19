@@ -8,8 +8,36 @@ function storagePathFromUrl(url) {
   return idx === -1 ? null : url.slice(idx + marker.length);
 }
 
+// Long-press on a message (or the reaction-add button) opens a picker with
+// these six, plus a "more" button that focuses a hidden text input so the
+// user can switch their OS/browser keyboard into emoji mode and type one.
+const REACTION_EMOJIS = ["\u{1F44D}", "\u2764\uFE0F", "\u{1F602}", "\u{1F62E}", "\u{1F622}", "\u{1F525}"];
+
+function buildReactionsByMessage(rows, myUserId) {
+  const map = {};
+  for (const r of rows || []) {
+    const byEmoji = (map[r.message_id] ||= {});
+    const entry = (byEmoji[r.emoji] ||= { count: 0, mine: false, usernames: [] });
+    entry.count++;
+    entry.usernames.push(r.username || "Someone");
+    if (r.user_id === myUserId) entry.mine = true;
+  }
+  return map;
+}
+
+function reactionsSignature(map) {
+  return Object.keys(map).sort().map((mid) => {
+    const byEmoji = map[mid];
+    return mid + ":" + Object.keys(byEmoji).sort()
+      .map((e) => `${e}=${byEmoji[e].count}${byEmoji[e].mine ? "m" : ""}`).join(",");
+  }).join("|");
+}
+
 export function renderChat(el, { supabase, user, username, isAdmin }) {
-  const s = { loading: true, error: "", messages: [], autoRefresh: true, intervalSec: 5, pendingFile: null, notifState: "checking" };
+  const s = {
+    loading: true, error: "", messages: [], autoRefresh: true, intervalSec: 5, pendingFile: null, notifState: "checking",
+    reactionsByMessage: {}, openPickerFor: null, pickerShowInput: null,
+  };
   let timer = null;
 
   function scrollToBottom() {
@@ -108,9 +136,7 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
         }
       });
     }
-    el.querySelectorAll("[data-delete-msg]").forEach((btn) => {
-      btn.addEventListener("click", () => onDeleteMessage(btn.dataset.deleteMsg, btn.dataset.imageUrl || ""));
-    });
+    wireMessageInteractions(el);
 
     if (preserveScroll) scrollToBottom();
   }
@@ -125,9 +151,133 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
     list.innerHTML = s.messages.length
       ? s.messages.map((m) => chatMsgHtml(m)).join("")
       : `<div class="hint">No messages yet -- be the first to say something.</div>`;
-    list.querySelectorAll("[data-delete-msg]").forEach((btn) => {
+    wireMessageInteractions(list);
+  }
+
+  // Shared by draw() (full rebuild) and drawMessages() (list-only patch) so
+  // every message row -- delete button, long-press-to-react, reaction chips,
+  // and the picker itself once opened -- gets its listeners either way.
+  function wireMessageInteractions(scope) {
+    scope.querySelectorAll("[data-delete-msg]").forEach((btn) => {
       btn.addEventListener("click", () => onDeleteMessage(btn.dataset.deleteMsg, btn.dataset.imageUrl || ""));
     });
+
+    // Long-press: pointerdown starts a timer; pointermove past a small
+    // threshold (a scroll, not a press-and-hold) or pointerup/cancel before
+    // it fires cancels it. Covers touch and mouse alike via Pointer Events,
+    // so a trackpad click-and-hold on desktop opens the picker too.
+    scope.querySelectorAll(".bubble[data-msg-id]").forEach((bubble) => {
+      let pressTimer = null;
+      let startX = 0, startY = 0;
+      const clearPress = () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } };
+      bubble.addEventListener("pointerdown", (e) => {
+        if (e.pointerType === "mouse" && e.button !== 0) return;
+        startX = e.clientX; startY = e.clientY;
+        clearPress();
+        pressTimer = setTimeout(() => openPicker(bubble.dataset.msgId), 450);
+      });
+      bubble.addEventListener("pointermove", (e) => {
+        if (!pressTimer) return;
+        if (Math.abs(e.clientX - startX) > 10 || Math.abs(e.clientY - startY) > 10) clearPress();
+      });
+      ["pointerup", "pointercancel", "pointerleave"].forEach((evt) => bubble.addEventListener(evt, clearPress));
+    });
+
+    scope.querySelectorAll("[data-open-picker]").forEach((btn) => {
+      btn.addEventListener("click", () => openPicker(btn.dataset.openPicker));
+    });
+    scope.querySelectorAll("[data-close-picker]").forEach((btn) => {
+      btn.addEventListener("click", closePicker);
+    });
+    scope.querySelectorAll("[data-more-picker]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        // Hands off to the device's own emoji keyboard: there's no web API
+        // to force "emoji mode", so this just focuses an ordinary text
+        // input -- on iOS/Android the user taps the keyboard's emoji/globe
+        // key, on a Mac desktop they can use Cmd+Ctrl+Space -- and whatever
+        // they end up typing there is taken as the reaction.
+        s.pickerShowInput = btn.dataset.morePicker;
+        drawMessages();
+        const input = el.querySelector(`#reaction-emoji-input-${btn.dataset.morePicker}`);
+        input?.focus();
+      });
+    });
+    scope.querySelectorAll("[data-react-msg]").forEach((btn) => {
+      btn.addEventListener("click", () => toggleReaction(btn.dataset.reactMsg, btn.dataset.reactEmoji));
+    });
+    scope.querySelectorAll(".reaction-emoji-input").forEach((input) => {
+      const commit = () => {
+        const val = (input.value || "").trim();
+        const msgId = input.id.replace("reaction-emoji-input-", "");
+        if (val) toggleReaction(msgId, val);
+        else closePicker();
+      };
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); commit(); }
+        if (e.key === "Escape") { e.preventDefault(); closePicker(); }
+      });
+      input.addEventListener("blur", commit);
+    });
+  }
+
+  function openPicker(msgId) {
+    s.openPickerFor = String(msgId);
+    s.pickerShowInput = null;
+    drawMessages();
+  }
+
+  function closePicker() {
+    s.openPickerFor = null;
+    s.pickerShowInput = null;
+    drawMessages();
+  }
+
+  async function toggleReaction(messageId, emoji) {
+    const mid = Number(messageId);
+    const mine = s.reactionsByMessage[mid]?.[emoji]?.mine;
+    closePicker();
+    try {
+      if (mine) {
+        await supabase.from("chat_reactions").delete().eq("message_id", mid).eq("user_id", user.id).eq("emoji", emoji);
+      } else {
+        await supabase.from("chat_reactions").insert({ message_id: mid, user_id: user.id, username, emoji });
+      }
+      await loadMessages(false, true);
+    } catch (e) {
+      s.error = "Couldn't update reaction: " + (e.message || e);
+      draw();
+    }
+  }
+
+  // Long-press (see wireMessageInteractions()) sets openPickerFor and we
+  // just redraw -- so the picker lives right in this message's own markup
+  // rather than as a floating, separately-positioned popover.
+  function reactionPickerHtml(m) {
+    if (String(s.openPickerFor) !== String(m.id)) return "";
+    const quickButtons = REACTION_EMOJIS.map((e) =>
+      `<button class="reaction-pick-btn" data-react-msg="${m.id}" data-react-emoji="${escapeHtml(e)}">${e}</button>`
+    ).join("");
+    const showInput = String(s.pickerShowInput) === String(m.id);
+    return `
+      <div class="reaction-picker">
+        ${quickButtons}
+        <button class="reaction-pick-more" data-more-picker="${m.id}" title="More emoji">➕</button>
+        <button class="reaction-pick-close" data-close-picker="${m.id}" title="Close">✕</button>
+        ${showInput ? `<input type="text" class="reaction-emoji-input" id="reaction-emoji-input-${m.id}" maxlength="8" placeholder="pick an emoji…">` : ""}
+      </div>
+    `;
+  }
+
+  function reactionRowHtml(m) {
+    const byEmoji = s.reactionsByMessage[m.id] || {};
+    const emojiKeys = Object.keys(byEmoji);
+    if (!emojiKeys.length) return "";
+    const chips = emojiKeys.map((emoji) => {
+      const entry = byEmoji[emoji];
+      const title = entry.usernames.join(", ");
+      return `<button class="reaction-chip ${entry.mine ? "mine" : ""}" data-react-msg="${m.id}" data-react-emoji="${escapeHtml(emoji)}" title="${escapeHtml(title)}">${emoji} ${entry.count}</button>`;
+    }).join("");
+    return `<div class="reaction-row">${chips}</div>`;
   }
 
   function chatMsgHtml(m) {
@@ -141,11 +291,16 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
     return `
       <div class="chat-msg ${mine ? "mine" : ""}">
         <div class="meta">${escapeHtml(m.username)} &middot; ${escapeHtml(timeStr)}</div>
-        <div class="bubble">
+        <div class="bubble" data-msg-id="${m.id}">
           ${m.message ? `<div>${escapeHtml(m.message)}</div>` : ""}
           ${m.image_url ? `<img src="${escapeHtml(m.image_url)}" alt="attachment" loading="lazy">` : ""}
         </div>
-        ${isAdmin ? `<div><button class="chat-delete" data-delete-msg="${m.id}" data-image-url="${escapeHtml(m.image_url || "")}">\u{1F5D1}️ Delete</button></div>` : ""}
+        ${reactionPickerHtml(m)}
+        ${reactionRowHtml(m)}
+        <div class="msg-footer">
+          <button class="reaction-add-btn" data-open-picker="${m.id}">\u{1F642}+</button>
+          ${isAdmin ? `<button class="chat-delete" data-delete-msg="${m.id}" data-image-url="${escapeHtml(m.image_url || "")}">\u{1F5D1}️ Delete</button>` : ""}
+        </div>
       </div>
     `;
   }
@@ -255,11 +410,20 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
 
   async function loadMessages(preserveScroll, backgroundOnly) {
     try {
-      const { data, error } = await supabase.from("chat_messages").select("*").order("created_at", { ascending: true });
-      if (error) throw error;
-      const newMessages = data || [];
-      const changed = messagesSignature(newMessages) !== messagesSignature(s.messages);
+      const [{ data: msgData, error: msgErr }, { data: reactData, error: reactErr }] = await Promise.all([
+        supabase.from("chat_messages").select("*").order("created_at", { ascending: true }),
+        supabase.from("chat_reactions").select("*"),
+      ]);
+      if (msgErr) throw msgErr;
+      if (reactErr) throw reactErr;
+      const newMessages = msgData || [];
+      const newReactions = buildReactionsByMessage(reactData, user.id);
+      // Reactions changing (someone else's tap) doesn't add/remove a message
+      // row, so the message-id signature alone would miss it -- compare both.
+      const changed = messagesSignature(newMessages) !== messagesSignature(s.messages)
+        || reactionsSignature(newReactions) !== reactionsSignature(s.reactionsByMessage);
       s.messages = newMessages;
+      s.reactionsByMessage = newReactions;
       s.loading = false;
       if (backgroundOnly && el.querySelector("#chat-list")) {
         // Skip touching the DOM at all when nothing actually changed --
