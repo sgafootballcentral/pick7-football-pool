@@ -237,9 +237,11 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
     const mine = s.reactionsByMessage[mid]?.[emoji]?.mine;
     closePicker();
     try {
-      if (mine) {
-        await supabase.from("chat_reactions").delete().eq("message_id", mid).eq("user_id", user.id).eq("emoji", emoji);
-      } else {
+      // Only one reaction per person per message -- clear whatever this
+      // user already has here before adding the new one. Re-picking the
+      // same emoji they already had just removes it, with no replacement.
+      await supabase.from("chat_reactions").delete().eq("message_id", mid).eq("user_id", user.id);
+      if (!mine) {
         await supabase.from("chat_reactions").insert({ message_id: mid, user_id: user.id, username, emoji });
       }
       await loadMessages(false, true);

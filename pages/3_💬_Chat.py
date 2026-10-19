@@ -89,9 +89,11 @@ REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🔥"]
 
 def toggle_reaction(message_id, emoji, mine):
     try:
-        if mine:
-            supabase.table("chat_reactions").delete().eq("message_id", message_id).eq("user_id", user.id).eq("emoji", emoji).execute()
-        else:
+        # Only one reaction per person per message -- clear whatever this
+        # user already has here before adding the new one. Re-picking the
+        # same emoji they already had just removes it, with no replacement.
+        supabase.table("chat_reactions").delete().eq("message_id", message_id).eq("user_id", user.id).execute()
+        if not mine:
             supabase.table("chat_reactions").insert({
                 "message_id": message_id, "user_id": user.id, "username": username, "emoji": emoji,
             }).execute()
