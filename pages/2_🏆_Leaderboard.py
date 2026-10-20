@@ -321,6 +321,54 @@ try:
             st.subheader("🔥 Current Standings")
             st.dataframe(display_standings, use_container_width=True, hide_index=True)
 
+            # 📢 Notify players once a week's games are ALL graded -- separate
+            # from grade-games' own automatic 15-minute Cron run, since nothing
+            # there can know "this is a good moment to tell everyone." An admin
+            # looks at these standings, confirms the week looks right, and
+            # sends a push to everyone -- same push plumbing as the other
+            # notification features, just never automatic. Gated on
+            # selected_week (whatever week they're already viewing standings
+            # for above) actually being fully graded, not just partly.
+            if is_admin:
+                graded_check_games = supabase.table("games").select("id,status").eq("week_number", selected_week).execute().data or []
+                graded_check_total = len(graded_check_games)
+                graded_check_pending = sum(1 for g in graded_check_games if g.get("status") != "final")
+
+                st.write("")
+                if graded_check_total == 0:
+                    st.caption(f"No games loaded for Week {selected_week} yet -- nothing to notify about.")
+                elif graded_check_pending > 0:
+                    st.caption(
+                        f"⏳ {graded_check_pending} of {graded_check_total} game(s) in Week {selected_week} "
+                        "aren't graded yet. Check back once they're all final to notify players."
+                    )
+                elif st.session_state.get("pending_notify_graded_week") == selected_week:
+                    st.write(f"Send a push notification to everyone that Week {selected_week}'s results are final?")
+                    col_notify_yes, col_notify_no = st.columns(2)
+                    with col_notify_yes:
+                        notify_confirm_clicked = st.button(
+                            "Yes, notify everyone", type="primary", key="confirm_notify_graded", use_container_width=True,
+                        )
+                    with col_notify_no:
+                        notify_cancel_clicked = st.button("Cancel", key="cancel_notify_graded", use_container_width=True)
+
+                    if notify_confirm_clicked:
+                        try:
+                            supabase.table("week_graded_announcements").insert({
+                                "week_number": int(selected_week), "created_by": st.session_state.user.id,
+                            }).execute()
+                            st.session_state["pending_notify_graded_week"] = None
+                            st.success(f"Notification sent -- everyone's being told Week {selected_week} is final.")
+                        except Exception as e:
+                            st.error(f"Couldn't send the notification: {e}")
+                    elif notify_cancel_clicked:
+                        st.session_state["pending_notify_graded_week"] = None
+                        st.rerun()
+                else:
+                    if st.button(f"📢 Notify Players -- Week {selected_week} Results Are In", key="notify_graded_btn"):
+                        st.session_state["pending_notify_graded_week"] = selected_week
+                        st.rerun()
+
             if is_admin:
                 players_rows = supabase.table("players").select("username, paid").execute().data
                 paid_by_username = {p["username"]: bool(p.get("paid")) for p in players_rows}
