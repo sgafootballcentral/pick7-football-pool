@@ -186,19 +186,20 @@ async function buildSlatePdf(games, weekNumber) {
     rowTop += rowH;
   }
 
-  // --- 3. Grid: verticals full height, horizontals thin except a thick red
-  // line right where one league's games end and the other's begin ---
+  // --- 3. Grid: starts at the header row, not the title row above it --
+  // no border around the empty title-row cells, just the floating
+  // "Week N" text. Verticals span header+data rows only; horizontals thin
+  // except a thick red line right where one league's games end and the
+  // other's begin ---
   doc.setLineWidth(0.4);
   doc.setDrawColor(0, 0, 0);
   for (let i = 0; i <= headers.length; i++) {
     const x = i < headers.length ? colX(i) : x0 + tableW;
-    doc.line(x, yTop, x, yTop + tableH);
+    doc.line(x, headerTop, x, headerTop + (tableH - titleH));
   }
 
-  const boundaries = [yTop];
-  let y = yTop + titleH;
-  boundaries.push(y);
-  y += headerH;
+  const boundaries = [headerTop];
+  let y = headerTop + headerH;
   boundaries.push(y);
   for (let i = 0; i < n; i++) {
     y += rowH;
@@ -206,10 +207,10 @@ async function buildSlatePdf(games, weekNumber) {
   }
 
   boundaries.forEach((by, idx) => {
-    // boundaries[0]=top edge, [1]=title/header, [2]=header/row1, then one per
-    // data-row bottom edge -- a league change shows up right after that row,
-    // i.e. boundaries[3 + i].
-    const dataRowI = idx - 3;
+    // boundaries[0]=top of header, [1]=header/row1, then one per data-row
+    // bottom edge -- a league change shows up right after that row, i.e.
+    // boundaries[2 + i].
+    const dataRowI = idx - 2;
     const isLeagueBoundary = dataRowI >= 0 && dataRowI < n - 1 && sorted[dataRowI].league !== sorted[dataRowI + 1].league;
     if (isLeagueBoundary) {
       doc.setLineWidth(2.2);

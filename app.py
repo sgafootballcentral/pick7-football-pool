@@ -856,18 +856,19 @@ else:
                 draw_cell_text(val, col_idx, row_top, row_h, "Helvetica-Bold" if bold else "Helvetica", data_font * scale)
             row_top -= row_h
 
-        # --- 3. Grid: verticals full height, horizontals thin except a thick
-        # red line right where one league's games end and the other's begin ---
+        # --- 3. Grid: starts at the header row, not the title row above it
+        # -- no border around the empty title-row cells, just the floating
+        # "Week N" text. Verticals span header+data rows only; horizontals
+        # thin except a thick red line right where one league's games end
+        # and the other's begin ---
         c.setLineWidth(0.4)
         c.setStrokeColor(colors.black)
         for i in range(len(headers) + 1):
             x = col_x(i) if i < len(headers) else x0 + table_w
-            c.line(x, y_top, x, y_top - table_h)
+            c.line(x, header_top, x, header_top - (table_h - title_h))
 
-        y = y_top
+        y = header_top
         boundaries = [y]
-        y -= title_h
-        boundaries.append(y)
         y -= header_h
         boundaries.append(y)
         for i in range(n):
@@ -876,10 +877,10 @@ else:
 
         for idx in range(len(boundaries)):
             by = boundaries[idx]
-            # boundaries[0]=top edge, [1]=title/header, [2]=header/row1, then
-            # one per data-row bottom edge -- a league change shows up on the
-            # boundary right after that row, i.e. boundaries[3 + i].
-            data_row_i = idx - 3
+            # boundaries[0]=top of header, [1]=header/row1, then one per
+            # data-row bottom edge -- a league change shows up on the
+            # boundary right after that row, i.e. boundaries[2 + i].
+            data_row_i = idx - 2
             is_league_boundary = (
                 0 <= data_row_i < n - 1
                 and sorted_games[data_row_i].get("league") != sorted_games[data_row_i + 1].get("league")
