@@ -11,6 +11,10 @@ from zoneinfo import ZoneInfo
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils import get_column_letter
+from reportlab.lib.pagesizes import letter, landscape
+from reportlab.lib.units import inch
+from reportlab.lib import colors
+from reportlab.pdfgen import canvas as pdf_canvas
 
 # 1. Connection and Secrets Verification
 SUPABASE_URL = st.secrets.get("SUPABASE_URL")
@@ -757,6 +761,149 @@ else:
             file_name=f"week_{CURRENT_WEEK}_slate.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
+
+    # ⬇️ PDF slate download -- same sheet as the Excel export above (full
+    # grid, thick red line between leagues), but open to every player, not
+    # just admins. Single page no matter how many games are in the slate,
+    # using the same idea as Excel's own "Fit to 1 page" print scaling: one
+    # uniform shrink factor (never enlarged) for the whole sheet, centered
+    # horizontally, anchored to the top of the page -- matches the print
+    # setup Trent already uses for this sheet (0.5" top/bottom margins,
+    # 0.75" left/right, "Center on page: Horizontally" only).
+    def build_slate_pdf(games_rows, week_number):
+        headers = ["#", "FAVORITE", "#", "UNDERDOG", "SPREAD", "KICKOFF (ET)", "TV"]
+        natural_col_widths = [22, 170, 22, 170, 55, 115, 55]
+        natural_title_h, natural_header_h, natural_row_h = 22, 18, 15
+        title_font, header_font, data_font = 14, 10, 9
+
+        sorted_games = sorted(games_rows, key=lambda g: (g.get("kickoff_time") or "", g.get("game_id") or ""))
+        n = len(sorted_games)
+
+        page_w, page_h = landscape(letter)
+        margin_top, margin_bottom = 0.5 * inch, 0.5 * inch
+        margin_left, margin_right = 0.75 * inch, 0.75 * inch
+        printable_w = page_w - margin_left - margin_right
+        printable_h = page_h - margin_top - margin_bottom
+
+        natural_w = sum(natural_col_widths)
+        natural_h = natural_title_h + natural_header_h + n * natural_row_h
+        scale = min(printable_w / natural_w, printable_h / max(natural_h, 1), 1.0)
+
+        col_widths = [w * scale for w in natural_col_widths]
+        title_h = natural_title_h * scale
+        header_h = natural_header_h * scale
+        row_h = natural_row_h * scale
+        table_w = sum(col_widths)
+        table_h = title_h + header_h + n * row_h
+
+        x0 = margin_left + (printable_w - table_w) / 2
+        y_top = page_h - margin_top
+
+        def col_x(idx):
+            return x0 + sum(col_widths[:idx])
+
+        buffer = io.BytesIO()
+        c = pdf_canvas.Canvas(buffer, pagesize=(page_w, page_h))
+
+        def draw_cell_text(text, col_idx, row_top, row_height, font_name, font_size, color=colors.black):
+            size = max(font_size, 0.5)
+            c.setFont(font_name, size)
+            c.setFillColor(color)
+            cx = col_x(col_idx) + col_widths[col_idx] / 2
+            cy = row_top - row_height / 2 - size * 0.35
+            c.drawCentredString(cx, cy, str(text))
+
+        # --- 1. Fills first (title/header/stripes), so the grid lines below draw on top ---
+        c.setFillColor(colors.HexColor("#1F4E78"))
+        c.rect(x0, y_top - title_h - header_h, table_w, header_h, stroke=0, fill=1)
+
+        row_top = y_top - title_h - header_h
+        for i in range(n):
+            if i % 2 == 1:
+                c.setFillColor(colors.HexColor("#F2F2F2"))
+                c.rect(x0, row_top - row_h, table_w, row_h, stroke=0, fill=1)
+            row_top -= row_h
+
+        # --- 2. Text ---
+        c.setFont("Helvetica-Bold", max(title_font * scale, 0.5))
+        c.setFillColor(colors.black)
+        c.drawCentredString(x0 + table_w / 2, y_top - title_h / 2 - (title_font * scale) * 0.35, f"Week {week_number}")
+
+        header_top = y_top - title_h
+        for i, h in enumerate(headers):
+            draw_cell_text(h, i, header_top, header_h, "Helvetica-Bold", header_font * scale, colors.white)
+
+        row_top = header_top - header_h
+        for i, g in enumerate(sorted_games):
+            fav_num, und_num = 2 * (i + 1) - 1, 2 * (i + 1)
+            fav_t = g.get("favorite_team", "")
+            und_t = g.get("underdog_team", "")
+            fav_t = f"{fav_t} (Home)" if g.get("favorite_team_home") else fav_t
+            und_t = f"{und_t} (Home)" if g.get("underdog_team_home") else und_t
+            spread_number = (g.get("spread_value") or "").rsplit(" ", 1)[-1]
+
+            kickoff_display = g.get("kickoff_time", "") or ""
+            try:
+                kickoff_dt = datetime.fromisoformat(kickoff_display.replace("Z", "+00:00")).astimezone(ZoneInfo("America/New_York"))
+                kickoff_display = kickoff_dt.strftime("%a %m/%d %I:%M %p ET").replace(" 0", " ")
+            except (ValueError, AttributeError):
+                pass
+            tv_network = g.get("tv_network", "") or ""
+
+            values = [fav_num, fav_t, und_num, und_t, spread_number, kickoff_display, tv_network]
+            for col_idx, val in enumerate(values):
+                bold = col_idx in (0, 2)
+                draw_cell_text(val, col_idx, row_top, row_h, "Helvetica-Bold" if bold else "Helvetica", data_font * scale)
+            row_top -= row_h
+
+        # --- 3. Grid: verticals full height, horizontals thin except a thick
+        # red line right where one league's games end and the other's begin ---
+        c.setLineWidth(0.4)
+        c.setStrokeColor(colors.black)
+        for i in range(len(headers) + 1):
+            x = col_x(i) if i < len(headers) else x0 + table_w
+            c.line(x, y_top, x, y_top - table_h)
+
+        y = y_top
+        boundaries = [y]
+        y -= title_h
+        boundaries.append(y)
+        y -= header_h
+        boundaries.append(y)
+        for i in range(n):
+            y -= row_h
+            boundaries.append(y)
+
+        for idx in range(len(boundaries)):
+            by = boundaries[idx]
+            # boundaries[0]=top edge, [1]=title/header, [2]=header/row1, then
+            # one per data-row bottom edge -- a league change shows up on the
+            # boundary right after that row, i.e. boundaries[3 + i].
+            data_row_i = idx - 3
+            is_league_boundary = (
+                0 <= data_row_i < n - 1
+                and sorted_games[data_row_i].get("league") != sorted_games[data_row_i + 1].get("league")
+            )
+            if is_league_boundary:
+                c.setLineWidth(2.2)
+                c.setStrokeColor(colors.red)
+            else:
+                c.setLineWidth(0.4)
+                c.setStrokeColor(colors.black)
+            c.line(x0, by, x0 + table_w, by)
+
+        c.showPage()
+        c.save()
+        buffer.seek(0)
+        return buffer
+
+    pdf_buffer = build_slate_pdf(all_games, CURRENT_WEEK)
+    st.download_button(
+        f"⬇️ Download Week {CURRENT_WEEK} Slate (PDF)",
+        data=pdf_buffer,
+        file_name=f"week_{CURRENT_WEEK}_slate.pdf",
+        mime="application/pdf",
+    )
 
     all_games = sorted(all_games, key=lambda x: x.get("game_number") or 999)
     # Sort chronologically first so the day groups come out in calendar order below.

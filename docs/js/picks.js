@@ -80,6 +80,150 @@ function formatKickoff(iso) {
   return { dateStr, timeStr };
 }
 
+// Same sheet as the admin's .xlsx slate export (full grid, thick red line
+// between leagues), but as a one-page PDF anyone can download straight from
+// the Picks tab. Mirrors the Python version of this in app.py
+// (build_slate_pdf): same columns, same "Fit to 1 page" idea (one uniform
+// shrink factor, never enlarged, so it's always a single page), same page
+// setup Trent already prints this sheet with (landscape Letter, 0.5"
+// top/bottom margins, 0.75" left/right, centered horizontally, anchored to
+// the top of the page -- not vertically centered).
+async function buildSlatePdf(games, weekNumber) {
+  const { jsPDF } = await import("https://cdn.jsdelivr.net/npm/jspdf@2.5.2/+esm");
+  const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "letter" });
+
+  const headers = ["#", "FAVORITE", "#", "UNDERDOG", "SPREAD", "KICKOFF (ET)", "TV"];
+  const naturalColWidths = [22, 170, 22, 170, 55, 115, 55];
+  const naturalTitleH = 22, naturalHeaderH = 18, naturalRowH = 15;
+  const titleFont = 14, headerFont = 10, dataFont = 9;
+
+  const sorted = [...games].sort(gameSortKey);
+  const n = sorted.length;
+
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const marginTop = 0.5 * 72, marginLeft = 0.75 * 72, marginRight = 0.75 * 72;
+  const printableW = pageW - marginLeft - marginRight;
+  const printableH = pageH - marginTop - 0.5 * 72;
+
+  const naturalW = naturalColWidths.reduce((a, b) => a + b, 0);
+  const naturalH = naturalTitleH + naturalHeaderH + n * naturalRowH;
+  const scale = Math.min(printableW / naturalW, printableH / Math.max(naturalH, 1), 1);
+
+  const colWidths = naturalColWidths.map((w) => w * scale);
+  const titleH = naturalTitleH * scale;
+  const headerH = naturalHeaderH * scale;
+  const rowH = naturalRowH * scale;
+  const tableW = colWidths.reduce((a, b) => a + b, 0);
+  const tableH = titleH + headerH + n * rowH;
+
+  const x0 = marginLeft + (printableW - tableW) / 2;
+  const yTop = marginTop; // top-anchored -- jsPDF's origin is top-left, unlike reportlab's bottom-left
+
+  function colX(idx) {
+    return x0 + colWidths.slice(0, idx).reduce((a, b) => a + b, 0);
+  }
+
+  function drawCellText(text, colIdx, rowTop, rowHeight, bold, fontSize, rgb) {
+    const size = Math.max(fontSize, 0.5);
+    doc.setFont("helvetica", bold ? "bold" : "normal");
+    doc.setFontSize(size);
+    doc.setTextColor(...(rgb || [0, 0, 0]));
+    const cx = colX(colIdx) + colWidths[colIdx] / 2;
+    const cy = rowTop + rowHeight / 2 + size * 0.35;
+    doc.text(String(text), cx, cy, { align: "center" });
+  }
+
+  // --- 1. Fills first (header/stripes), so the grid lines below draw on top ---
+  doc.setFillColor(0x1f, 0x4e, 0x78);
+  doc.rect(x0, yTop + titleH, tableW, headerH, "F");
+
+  let rowTop = yTop + titleH + headerH;
+  for (let i = 0; i < n; i++) {
+    if (i % 2 === 1) {
+      doc.setFillColor(0xf2, 0xf2, 0xf2);
+      doc.rect(x0, rowTop, tableW, rowH, "F");
+    }
+    rowTop += rowH;
+  }
+
+  // --- 2. Text ---
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(Math.max(titleFont * scale, 0.5));
+  doc.setTextColor(0, 0, 0);
+  doc.text(`Week ${weekNumber}`, x0 + tableW / 2, yTop + titleH / 2 + titleFont * scale * 0.35, { align: "center" });
+
+  const headerTop = yTop + titleH;
+  headers.forEach((h, i) => drawCellText(h, i, headerTop, headerH, true, headerFont * scale, [255, 255, 255]));
+
+  rowTop = headerTop + headerH;
+  for (let i = 0; i < n; i++) {
+    const g = sorted[i];
+    const favNum = 2 * (i + 1) - 1;
+    const undNum = 2 * (i + 1);
+    let favT = g.favorite_team || "";
+    let undT = g.underdog_team || "";
+    favT = g.favorite_team_home ? `${favT} (Home)` : favT;
+    undT = g.underdog_team_home ? `${undT} (Home)` : undT;
+    const spreadParts = (g.spread_value || "").split(" ");
+    const spreadNumber = spreadParts[spreadParts.length - 1];
+
+    let kickoffDisplay = g.kickoff_time || "";
+    const d = new Date(kickoffDisplay);
+    if (!isNaN(d)) {
+      const weekday = d.toLocaleDateString("en-US", { weekday: "short", timeZone: EASTERN_TZ });
+      const md = d.toLocaleDateString("en-US", { month: "numeric", day: "numeric", timeZone: EASTERN_TZ });
+      const time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: EASTERN_TZ });
+      kickoffDisplay = `${weekday} ${md} ${time} ET`;
+    }
+
+    const tv = g.tv_network || "";
+    const values = [favNum, favT, undNum, undT, spreadNumber, kickoffDisplay, tv];
+    values.forEach((val, colIdx) => {
+      const bold = colIdx === 0 || colIdx === 2;
+      drawCellText(val, colIdx, rowTop, rowH, bold, dataFont * scale);
+    });
+    rowTop += rowH;
+  }
+
+  // --- 3. Grid: verticals full height, horizontals thin except a thick red
+  // line right where one league's games end and the other's begin ---
+  doc.setLineWidth(0.4);
+  doc.setDrawColor(0, 0, 0);
+  for (let i = 0; i <= headers.length; i++) {
+    const x = i < headers.length ? colX(i) : x0 + tableW;
+    doc.line(x, yTop, x, yTop + tableH);
+  }
+
+  const boundaries = [yTop];
+  let y = yTop + titleH;
+  boundaries.push(y);
+  y += headerH;
+  boundaries.push(y);
+  for (let i = 0; i < n; i++) {
+    y += rowH;
+    boundaries.push(y);
+  }
+
+  boundaries.forEach((by, idx) => {
+    // boundaries[0]=top edge, [1]=title/header, [2]=header/row1, then one per
+    // data-row bottom edge -- a league change shows up right after that row,
+    // i.e. boundaries[3 + i].
+    const dataRowI = idx - 3;
+    const isLeagueBoundary = dataRowI >= 0 && dataRowI < n - 1 && sorted[dataRowI].league !== sorted[dataRowI + 1].league;
+    if (isLeagueBoundary) {
+      doc.setLineWidth(2.2);
+      doc.setDrawColor(255, 0, 0);
+    } else {
+      doc.setLineWidth(0.4);
+      doc.setDrawColor(0, 0, 0);
+    }
+    doc.line(x0, by, x0 + tableW, by);
+  });
+
+  return doc;
+}
+
 export function renderPicks(el, { supabase, user, username, isAdmin }) {
   const s = {
     loading: true,
@@ -212,6 +356,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
         <select id="week-select">
           ${s.weeks.map((w) => `<option value="${w}" ${w === s.week ? "selected" : ""}>${w}</option>`).join("")}
         </select>
+        <button class="btn btn-secondary" id="pdf-download-btn" style="flex:0 0 auto; width:auto; padding:10px 12px;" title="Download this week's slate as a PDF">⬇️ PDF</button>
       </div>
 
       ${weekLockBannerHtml()}
@@ -270,6 +415,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
       setSharedWeek(s.week);
       loadWeek();
     });
+    el.querySelector("#pdf-download-btn")?.addEventListener("click", onDownloadPdf);
     el.querySelector("#refresh-btn").addEventListener("click", () => loadScoresOnly());
     el.querySelector("#lock-btn").addEventListener("click", onLockIn);
     el.querySelector("#picks-notif-btn")?.addEventListener("click", onToggleNotifications);
@@ -658,6 +804,19 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
       .eq("week_number", s.week).eq("user_id", user.id).order("requested_at", { ascending: false });
     s.myExceptions = data || [];
     draw();
+  }
+
+  async function onDownloadPdf() {
+    const btn = el.querySelector("#pdf-download-btn");
+    if (btn) { btn.disabled = true; btn.textContent = "Building\u2026"; }
+    try {
+      const doc = await buildSlatePdf(s.games, s.week);
+      doc.save(`week_${s.week}_slate.pdf`);
+    } catch (e) {
+      alert("Couldn't build the PDF: " + (e.message || e));
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "\u2b07\ufe0f PDF"; }
+    }
   }
 
   async function onLockIn() {
