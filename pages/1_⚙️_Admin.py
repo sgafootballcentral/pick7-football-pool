@@ -628,6 +628,22 @@ with tab_setup:
                     f"Success! Pulled {total_games_inserted} games with a posted line "
                     f"(skipped {skipped_no_line} with no spread) from {start_date} to {end_date} into Week {target_week}!"
                 )
+
+                if total_games_inserted > 0:
+                    # Tells everyone (not just admins) the week is up, via the
+                    # send-week-push Edge Function -- see its README. Only
+                    # fires the FIRST time this week_number is ever pulled:
+                    # week_number is UNIQUE on week_announcements, so a later
+                    # re-pull (to fix a line, add a game, etc.) just hits a
+                    # duplicate-key error here, which is caught and ignored
+                    # rather than re-notifying everyone.
+                    try:
+                        supabase.table("week_announcements").insert({
+                            "week_number": target_week, "created_by": user_id,
+                        }).execute()
+                    except Exception:
+                        pass  # already announced -- stay quiet on a re-pull
+
                 st.session_state.pending_refetch = None
                 st.rerun()
             except Exception as e:
