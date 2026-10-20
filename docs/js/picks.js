@@ -1,5 +1,6 @@
 import { escapeHtml } from "./app.js";
 import { getSharedWeek, setSharedWeek } from "./weekState.js";
+import { pushSupported, getPushState, subscribeToPush, unsubscribeFromPush } from "./push.js";
 
 const EASTERN_TZ = "America/New_York";
 
@@ -101,6 +102,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     preview: null, // {rows, resolved}
     resubmit: null, // {existingMap, newPicks}
     recap: null, // rows
+    notifState: "checking",
   };
 
   let autoTimer = null;
@@ -226,6 +228,9 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
         <label class="hint" style="display:flex; align-items:center; gap:6px; margin-top:6px; justify-content:center;">
           <input type="checkbox" id="auto-refresh-toggle" ${s.autoRefresh ? "checked" : ""}> Auto-refresh scores every 60s
         </label>
+        <div style="text-align:center; margin-top:6px;">
+          <span id="picks-notif-slot">${notifButtonHtml()}</span>
+        </div>
       </div>
 
       <details style="margin: 10px 0;">
@@ -267,6 +272,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     });
     el.querySelector("#refresh-btn").addEventListener("click", () => loadScoresOnly());
     el.querySelector("#lock-btn").addEventListener("click", onLockIn);
+    el.querySelector("#picks-notif-btn")?.addEventListener("click", onToggleNotifications);
     el.querySelector("#auto-refresh-toggle").addEventListener("change", (e) => {
       s.autoRefresh = e.target.checked;
       setupAutoRefresh();
@@ -310,6 +316,39 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     if (s.preview && !modalAlreadyOpen) drawPreviewModal();
     if (s.resubmit && !modalAlreadyOpen) drawResubmitModal();
     if (s.recap && !modalAlreadyOpen) drawRecapModal();
+  }
+
+  function updateNotifButton() {
+    const slot = el.querySelector("#picks-notif-slot");
+    if (!slot) return; // full draw() hasn't happened yet -- nothing to patch
+    slot.innerHTML = notifButtonHtml();
+    slot.querySelector("#picks-notif-btn")?.addEventListener("click", onToggleNotifications);
+  }
+
+  function notifButtonHtml() {
+    if (s.notifState === "unsupported" || s.notifState === "checking") return "";
+    if (s.notifState === "denied") {
+      return `<span class="hint" style="margin-left:2px;">\u{1F515} Notifications blocked -- enable in browser settings</span>`;
+    }
+    const on = s.notifState === "subscribed";
+    return `<button class="btn btn-secondary" id="picks-notif-btn" style="width:auto; padding:8px 12px;">${on ? "\u{1F514} Notifications on" : "\u{1F515} Enable notifications"}</button>`;
+  }
+
+  async function onToggleNotifications() {
+    try {
+      if (s.notifState === "subscribed") {
+        await unsubscribeFromPush(supabase);
+        s.notifState = "unsubscribed";
+      } else {
+        await subscribeToPush(supabase, user.id);
+        s.notifState = "subscribed";
+      }
+      s.error = "";
+    } catch (e) {
+      s.error = e.message || "Couldn't update notification settings.";
+      s.notifState = await getPushState();
+    }
+    draw();
   }
 
   function lockedPickHtml(selectedTeam, result) {
@@ -705,6 +744,12 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
       s.error = e.message || "Couldn't load this week's games.";
       draw();
     }
+  }
+
+  if (pushSupported()) {
+    getPushState().then((st) => { s.notifState = st; updateNotifButton(); });
+  } else {
+    s.notifState = "unsupported";
   }
 
   (async function init() {
