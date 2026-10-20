@@ -207,6 +207,7 @@ input, select, textarea {
 .matchup .team { font-weight: 600; }
 .matchup .vs { color: var(--text-dim); margin: 0 4px; }
 .matchup .spread { color: var(--text-dim); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; }
+.matchup .spread-live { color: var(--accent); font-size: 0.72rem; font-weight: 600; margin-top: 1px; }
 .matchup .status { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; color: var(--text-dim); }
 .matchup .status.live { color: var(--accent); }
 .matchup .score { font-weight: 700; }

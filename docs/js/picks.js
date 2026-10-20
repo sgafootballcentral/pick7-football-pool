@@ -348,12 +348,19 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     const undHome = !!g.underdog_team_home;
 
     const live = s.scores[g.game_id];
-    let line = g.spread_value || "0.0";
+    // lockedLine is what the player actually picks against and what grading
+    // uses -- it never changes once synced. liveMarketLine is only ever
+    // shown alongside it, labeled, so a mid-week market move never looks
+    // like the real number changed.
+    const lockedLine = g.spread_value || "0.0";
+    let liveMarketLine = null;
     let statusHtml = `<span class="status">\u{1F552} ${timeStr}</span>`;
     let favScoreHtml = "", undScoreHtml = "";
 
     if (live) {
-      if (live.line && live.line !== "0.0") line = live.line;
+      // Once the game goes live ESPN typically stops returning this field
+      // at all, so it just quietly stops showing rather than snapping back.
+      if (live.line && live.line !== "0.0" && live.line !== lockedLine) liveMarketLine = live.line;
       const favScore = favHome ? live.home_score : live.away_score;
       const undScore = undHome ? live.home_score : live.away_score;
       if (live.completed) {
@@ -394,7 +401,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
         <div class="matchup">
           <div class="${favCovered ? "covered" : ""}"><span class="team">#${nums.favNum || ""} ${escapeHtml(favTeam)}${favHome ? " \u{1F3E0}" : ""}</span>${favScoreHtml}${favCovered ? " ✅" : ""}</div>
           <div class="${undCovered ? "covered" : ""}"><span class="team">#${nums.undNum || ""} ${escapeHtml(undTeam)}${undHome ? " \u{1F3E0}" : ""}</span>${undScoreHtml}${undCovered ? " ✅" : ""}</div>
-          <div class="spread">${escapeHtml(line)}</div>
+          <div class="spread">${escapeHtml(lockedLine)}${liveMarketLine ? `<div class="spread-live">Now: ${escapeHtml(liveMarketLine)}</div>` : ""}</div>
           ${statusHtml}
         </div>
         <div class="pick-choices">

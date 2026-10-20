@@ -1103,7 +1103,12 @@ else:
             fav_score_text = ""
             und_score_text = ""
             status_ticker = f"`🕒 {time_str}`"
-            live_line = game.get("spread_value", "0.0")
+            # locked_line is what the player actually picks against and what
+            # grading uses -- it never changes once synced. live_market_line
+            # is only ever shown alongside it, labeled, so a mid-week market
+            # move never looks like the real number changed.
+            locked_line = game.get("spread_value", "0.0")
+            live_market_line = None
 
             live_data = espn_scores.get(game["game_id"])
             if not live_data and game_graded and game.get("home_score") is not None and game.get("away_score") is not None:
@@ -1117,9 +1122,12 @@ else:
                 und_score_text = f"  \n**Score: {_und_score}**"
                 status_ticker = "`🏁 FINAL`"
             elif live_data:
-                # Update spreads dynamically from the live internet wire if present
-                if live_data.get("line") and live_data["line"] != "0.0":
-                    live_line = live_data["line"]
+                # Surface the live market line alongside the locked one, but
+                # only when it's actually different -- once the game goes
+                # live ESPN typically stops returning this field at all, so
+                # it just quietly stops showing rather than snapping back.
+                if live_data.get("line") and live_data["line"] != "0.0" and live_data["line"] != locked_line:
+                    live_market_line = live_data["line"]
 
                 state = live_data["state"]
                 completed = live_data.get("completed", False)
@@ -1145,7 +1153,10 @@ else:
             c_fav, c_und, c_spr, c_pck = st.columns(4)
             with c_fav: st.markdown(f"**{fav_label}**{fav_score_text}  \n{status_ticker}", unsafe_allow_html=True)
             with c_und: st.markdown(f"**{und_label}**{und_score_text}", unsafe_allow_html=True)
-            with c_spr: st.markdown(f"`{live_line}`")
+            with c_spr:
+                st.markdown(f"`{locked_line}`")
+                if live_market_line:
+                    st.caption(f"Now: {live_market_line}")
             with c_pck:
                 if viewing_other_player:
                     # Read-only, and only for games that have actually kicked
