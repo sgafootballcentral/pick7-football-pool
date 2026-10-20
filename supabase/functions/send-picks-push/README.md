@@ -1,8 +1,17 @@
 # send-picks-push
 
-Sends a real OS-level Web Push notification to every admin (subscribed via
-the same 🔔 button used for chat) whenever a player finishes submitting
-their picks for a week.
+Sends a real OS-level Web Push notification whenever a player finishes
+submitting (or resubmitting) their picks for a week:
+
+1. Every admin (subscribed via the same 🔔 button) gets a short "someone
+   submitted" alert.
+2. The player themselves gets a confirmation push listing exactly what
+   they just picked, by number (e.g. `Week 5: #3 Alabama, #8 Georgia, ...`)
+   -- the same numbering shown in the app's "pick by number" feature and
+   in the on-screen recap right after submitting.
+
+Both fire on every submission, including resubmits/changes to an
+already-submitted week.
 
 ## Deploy
 
@@ -34,9 +43,17 @@ picks are saved, so this function fires exactly once per submission.
 
 ## Who gets notified
 
-Whoever has `role = 'admin'` in `league_users` AND has enabled push
-notifications (the same 🔔 button on the Chat tab -- a browser's push
-subscription isn't tied to a single feature, so an admin who already
-turned on chat notifications is automatically covered here too, no
-extra opt-in needed). The submitter themselves is excluded, in case an
-admin submits their own picks.
+**Admins:** whoever has `role = 'admin'` in `league_users` AND has
+enabled push notifications (the 🔔 button, now on the Picks tab -- a
+browser's push subscription isn't tied to a single feature, so anyone
+who already turned on notifications is automatically covered here too,
+no extra opt-in needed). The submitter themselves is excluded from this
+admin alert, in case an admin submits their own picks.
+
+**The submitter:** whoever just submitted, if they have push
+notifications enabled. Their confirmation is built by looking up their
+own rows in `picks` for that week and the matching `games` rows, so it
+always reflects exactly what was actually saved -- not whatever was on
+screen at the moment they clicked submit. If they don't have push
+enabled, this part is silently skipped (they still see the on-screen
+recap modal immediately after submitting either way).
