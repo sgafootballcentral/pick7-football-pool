@@ -84,18 +84,25 @@ function formatKickoff(iso) {
 // between leagues), but as a one-page PDF anyone can download straight from
 // the Picks tab. Mirrors the Python version of this in app.py
 // (build_slate_pdf): same columns, same "Fit to 1 page" idea (one uniform
-// shrink factor, never enlarged, so it's always a single page), same page
-// setup Trent already prints this sheet with (landscape Letter, 0.5"
-// top/bottom margins, 0.75" left/right, centered horizontally, anchored to
-// the top of the page -- not vertically centered).
+// shrink factor, never enlarged, so it's always a single page). Portrait
+// Letter -- easier to read on a phone without rotating it than landscape,
+// and with a full slate's worth of rows the taller portrait page actually
+// needs LESS shrinking than landscape did, since landscape's height was
+// the tighter constraint. Same 0.5" top/bottom margins, 0.75" left/right,
+// centered horizontally, anchored to the top of the page -- not vertically
+// centered. Any cell whose text is still too wide for its column at the
+// page's shrink factor (e.g. a "ESPN, ABC, Disney+" multi-network
+// broadcast) gets its own extra font shrink on top of that, and as a last
+// resort an ellipsis, so text never spills into the next column.
 async function buildSlatePdf(games, weekNumber) {
   const { jsPDF } = await import("https://cdn.jsdelivr.net/npm/jspdf@2.5.2/+esm");
-  const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "letter" });
+  const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
 
   const headers = ["#", "FAVORITE", "#", "UNDERDOG", "SPREAD", "KICKOFF (ET)", "TV"];
-  const naturalColWidths = [22, 170, 22, 170, 55, 115, 55];
+  const naturalColWidths = [20, 148, 20, 148, 40, 98, 92];
   const naturalTitleH = 22, naturalHeaderH = 18, naturalRowH = 15;
   const titleFont = 14, headerFont = 10, dataFont = 9;
+  const CELL_PAD = 3, MIN_FONT = 4;
 
   const sorted = [...games].sort(gameSortKey);
   const n = sorted.length;
@@ -124,14 +131,37 @@ async function buildSlatePdf(games, weekNumber) {
     return x0 + colWidths.slice(0, idx).reduce((a, b) => a + b, 0);
   }
 
-  function drawCellText(text, colIdx, rowTop, rowHeight, bold, fontSize, rgb) {
-    const size = Math.max(fontSize, 0.5);
+  // Shrinks a cell's font (down to MIN_FONT) so its text fits the column's
+  // width, and truncates with an ellipsis in the rare case it still
+  // doesn't fit even at MIN_FONT -- never lets text spill into the next
+  // column.
+  function fitCellContent(text, colIdx, bold, desiredSize) {
+    const maxWidth = Math.max(colWidths[colIdx] - CELL_PAD * 2, 1);
     doc.setFont("helvetica", bold ? "bold" : "normal");
+    let size = Math.max(desiredSize, 0.5);
     doc.setFontSize(size);
+    let str = String(text);
+    let w = doc.getTextWidth(str);
+    if (w > maxWidth && w > 0) {
+      size = Math.max(size * (maxWidth / w), MIN_FONT);
+      doc.setFontSize(size);
+      w = doc.getTextWidth(str);
+    }
+    if (w > maxWidth) {
+      while (str.length > 1 && doc.getTextWidth(str + "…") > maxWidth) {
+        str = str.slice(0, -1);
+      }
+      str = str + "…";
+    }
+    return { size, str };
+  }
+
+  function drawCellText(text, colIdx, rowTop, rowHeight, bold, fontSize, rgb) {
+    const { size, str } = fitCellContent(text, colIdx, bold, fontSize);
     doc.setTextColor(...(rgb || [0, 0, 0]));
     const cx = colX(colIdx) + colWidths[colIdx] / 2;
     const cy = rowTop + rowHeight / 2 + size * 0.35;
-    doc.text(String(text), cx, cy, { align: "center" });
+    doc.text(str, cx, cy, { align: "center" });
   }
 
   // --- 1. Fills first (header/stripes), so the grid lines below draw on top ---

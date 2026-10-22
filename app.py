@@ -15,6 +15,7 @@ from reportlab.lib.pagesizes import letter, landscape
 from reportlab.lib.units import inch
 from reportlab.lib import colors
 from reportlab.pdfgen import canvas as pdf_canvas
+from reportlab.pdfbase import pdfmetrics
 
 # 1. Connection and Secrets Verification
 SUPABASE_URL = st.secrets.get("SUPABASE_URL")
@@ -772,14 +773,19 @@ else:
     # 0.75" left/right, "Center on page: Horizontally" only).
     def build_slate_pdf(games_rows, week_number):
         headers = ["#", "FAVORITE", "#", "UNDERDOG", "SPREAD", "KICKOFF (ET)", "TV"]
-        natural_col_widths = [22, 170, 22, 170, 55, 115, 55]
+        natural_col_widths = [20, 148, 20, 148, 40, 98, 92]
         natural_title_h, natural_header_h, natural_row_h = 22, 18, 15
         title_font, header_font, data_font = 14, 10, 9
+        CELL_PAD, MIN_FONT = 3, 4
 
         sorted_games = sorted(games_rows, key=lambda g: (g.get("kickoff_time") or "", g.get("game_id") or ""))
         n = len(sorted_games)
 
-        page_w, page_h = landscape(letter)
+        # Portrait Letter -- easier to read on a phone without rotating it
+        # than landscape, and with a full slate's worth of rows the taller
+        # portrait page actually needs LESS shrinking than landscape did,
+        # since landscape's height was the tighter constraint.
+        page_w, page_h = letter
         margin_top, margin_bottom = 0.5 * inch, 0.5 * inch
         margin_left, margin_right = 0.75 * inch, 0.75 * inch
         printable_w = page_w - margin_left - margin_right
@@ -805,13 +811,32 @@ else:
         buffer = io.BytesIO()
         c = pdf_canvas.Canvas(buffer, pagesize=(page_w, page_h))
 
+        def fit_cell_content(text, col_idx, font_name, desired_size):
+            # Shrinks a cell's font (down to MIN_FONT) so its text fits the
+            # column's width, and truncates with an ellipsis in the rare
+            # case it still doesn't fit even at MIN_FONT -- never lets text
+            # spill into the next column (e.g. a "ESPN, ABC, Disney+"
+            # multi-network broadcast).
+            max_width = max(col_widths[col_idx] - CELL_PAD * 2, 1)
+            size = max(desired_size, 0.5)
+            s = str(text)
+            w = pdfmetrics.stringWidth(s, font_name, size)
+            if w > max_width and w > 0:
+                size = max(size * (max_width / w), MIN_FONT)
+                w = pdfmetrics.stringWidth(s, font_name, size)
+            if w > max_width:
+                while len(s) > 1 and pdfmetrics.stringWidth(s + "…", font_name, size) > max_width:
+                    s = s[:-1]
+                s = s + "…"
+            return size, s
+
         def draw_cell_text(text, col_idx, row_top, row_height, font_name, font_size, color=colors.black):
-            size = max(font_size, 0.5)
+            size, s = fit_cell_content(text, col_idx, font_name, font_size)
             c.setFont(font_name, size)
             c.setFillColor(color)
             cx = col_x(col_idx) + col_widths[col_idx] / 2
             cy = row_top - row_height / 2 - size * 0.35
-            c.drawCentredString(cx, cy, str(text))
+            c.drawCentredString(cx, cy, s)
 
         # --- 1. Fills first (title/header/stripes), so the grid lines below draw on top ---
         c.setFillColor(colors.HexColor("#1F4E78"))
