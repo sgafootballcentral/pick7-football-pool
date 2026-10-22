@@ -147,8 +147,13 @@ async function buildSlatePdf(games, weekNumber) {
       doc.setFontSize(size);
       w = doc.getTextWidth(str);
     }
-    if (w > maxWidth) {
-      while (str.length > 1 && doc.getTextWidth(str + "…") > maxWidth) {
+    // TRUNCATE_EPS: the proportional shrink above is meant to land exactly
+    // at maxWidth, but float rounding in the shrink math/font metrics can
+    // leave w a hair (~1e-14pt) over -- without this tolerance that noise
+    // was enough to trip the ellipsis fallback on text that actually fits.
+    const TRUNCATE_EPS = 0.1;
+    if (w > maxWidth + TRUNCATE_EPS) {
+      while (str.length > 1 && doc.getTextWidth(str + "…") > maxWidth + TRUNCATE_EPS) {
         str = str.slice(0, -1);
       }
       str = str + "…";

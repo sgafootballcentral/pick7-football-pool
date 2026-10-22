@@ -824,8 +824,14 @@ else:
             if w > max_width and w > 0:
                 size = max(size * (max_width / w), MIN_FONT)
                 w = pdfmetrics.stringWidth(s, font_name, size)
-            if w > max_width:
-                while len(s) > 1 and pdfmetrics.stringWidth(s + "…", font_name, size) > max_width:
+            # TRUNCATE_EPS: the proportional shrink above is meant to land
+            # exactly at max_width, but float rounding in the shrink math /
+            # font metrics can leave w a hair (~1e-14pt) over -- without this
+            # tolerance that noise was enough to trip the ellipsis fallback
+            # on text that actually fits.
+            TRUNCATE_EPS = 0.1
+            if w > max_width + TRUNCATE_EPS:
+                while len(s) > 1 and pdfmetrics.stringWidth(s + "…", font_name, size) > max_width + TRUNCATE_EPS:
                     s = s[:-1]
                 s = s + "…"
             return size, s
