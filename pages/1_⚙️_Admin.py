@@ -571,6 +571,7 @@ with tab_setup:
                         home_team = home_node.get("team", {}).get("displayName", "Home Team")
                         away_team = away_node.get("team", {}).get("displayName", "Away Team")
                         home_abbr = home_node.get("team", {}).get("abbreviation", "").strip().upper()
+                        away_abbr = away_node.get("team", {}).get("abbreviation", "").strip().upper()
 
                         broadcasts = competitions.get("broadcasts") or event.get("broadcasts") or []
                         tv_names = broadcasts[0].get("names", []) if broadcasts and isinstance(broadcasts, list) else []
@@ -585,13 +586,47 @@ with tab_setup:
                         fav_team, und_team = away_team, home_team
                         fav_home, und_home = False, True
 
-                        if odds_string != "0.0" and " " in odds_string:
+                        # Prefer ESPN's explicit homeTeamOdds/awayTeamOdds
+                        # "favorite" booleans -- unambiguous, and immune to
+                        # the abbreviation mismatches below (e.g. the Buffalo
+                        # Bulls: the odds "details" string says "BUF" while
+                        # the team object's own abbreviation is "BUFF", which
+                        # silently broke the old abbreviation-only matching
+                        # and recorded Buffalo as the underdog despite being
+                        # favored by the actual spread).
+                        home_odds_node = odds_array[0].get("homeTeamOdds") or {}
+                        away_odds_node = odds_array[0].get("awayTeamOdds") or {}
+
+                        if home_odds_node.get("favorite") is True:
+                            fav_team, und_team = home_team, away_team
+                            fav_home, und_home = True, False
+                        elif away_odds_node.get("favorite") is True:
+                            fav_team, und_team = away_team, home_team
+                            fav_home, und_home = False, True
+                        elif odds_string != "0.0" and " " in odds_string:
+                            # Fallback for the rare case the favorite flags are
+                            # missing: match the odds string's abbreviation
+                            # against BOTH home and away abbreviations, not
+                            # just home -- and warn instead of silently
+                            # guessing "away" when neither matches.
                             line_parts = odds_string.split(" ")
                             fav_abbr_extracted = line_parts[0].strip().upper()
 
                             if fav_abbr_extracted == home_abbr:
                                 fav_team, und_team = home_team, away_team
                                 fav_home, und_home = True, False
+                            elif fav_abbr_extracted == away_abbr:
+                                fav_team, und_team = away_team, home_team
+                                fav_home, und_home = False, True
+                            else:
+                                st.warning(
+                                    f"⚠️ Couldn't confidently match favorite for "
+                                    f"{away_team} at {home_team} (odds said "
+                                    f"'{fav_abbr_extracted}', home abbr='{home_abbr}', "
+                                    f"away abbr='{away_abbr}') -- defaulted to away team "
+                                    f"as favorite. Please double-check this game's "
+                                    f"favorite/underdog in the Games table."
+                                )
 
                         # A genuine POSTED pick'em (0-point) line -- keep the game, just default
                         # the home team to -0.5 so it can't push.
@@ -816,6 +851,31 @@ with tab_setup:
 
                 st.write(f"**{edit_game.get('display_text') or f'{edit_und_t} at {edit_fav_t}'}**")
                 st.caption(f"Currently: {edit_fav_t} {current_spread_num:+.1f}")
+
+                # Occasionally ESPN's odds "details" string uses a different
+                # abbreviation than the team's own `abbreviation` field (e.g.
+                # the Buffalo Bulls: "BUF" in the odds string vs "BUFF" as
+                # the team's recorded abbreviation), which can make the sync
+                # label the wrong team as favorite even though spread_value
+                # is correct. This swaps favorite/underdog (and which side
+                # is home) without touching spread_value -- existing picks
+                # are stored by team name and the spread they saw, not by a
+                # favorite/underdog label, so they're unaffected by the swap.
+                if st.button(
+                    f"⇄ Swap: make {edit_und_t} the favorite",
+                    key=f"swap_fav_und_{selected_edit_game_id}",
+                ):
+                    try:
+                        supabase.table("games").update({
+                            "favorite_team": edit_und_t,
+                            "underdog_team": edit_fav_t,
+                            "favorite_team_home": edit_game.get("underdog_team_home", False),
+                            "underdog_team_home": edit_game.get("favorite_team_home", False),
+                        }).eq("id", edit_game["id"]).execute()
+                        st.success(f"Swapped -- {edit_und_t} is now the favorite, {edit_fav_t} the underdog.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Database error: {e}")
 
                 new_spread_num = st.number_input(
                     f"New spread ({edit_fav_t}'s number, e.g. -6.5):",
