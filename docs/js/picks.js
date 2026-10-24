@@ -275,13 +275,13 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     viewScope: "all", // "all" | "mine" | a specific other player's username
     weekLock: null, // the week_pick_locks row for s.week, or null if no lock is set
     myExceptions: [], // my pick_lock_exceptions rows for s.week, newest first
-    exceptionReason: "",
     autoRefresh: false,
     numberInput: "",
     numberError: "",
     preview: null, // {rows, resolved}
     resubmit: null, // {existingMap, newPicks}
     recap: null, // rows
+    recapPending: false, // true if the open recap is a pending (post-lock) submission, not a final one
     notifState: "checking",
   };
 
@@ -358,30 +358,24 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
           \u{1F513} Picks for Week ${s.week} locked as of ${escapeHtml(lockAtEst)} ET -- but an admin approved an exception for you, so you can still submit or change picks.
         </div>`;
       }
-      let extra = "";
+      // Doesn't block submitting below -- picking games and hitting "Lock In
+      // Weekly Picks" still works, it just saves as pending (see
+      // queuePendingPicks) instead of writing straight to the real picks
+      // table until an admin approves it. No separate "request an
+      // exception" step needed.
       if (latestException && latestException.status === "pending") {
-        extra = `<div class="hint" style="margin-top:8px;">⏳ Your exception request is pending admin review.</div>`;
-      } else {
-        if (latestException && latestException.status === "denied") {
-          extra += latestException.denial_reason
-            ? `<div class="hint" style="margin-top:8px;">Your last request was denied -- admin note: ${escapeHtml(latestException.denial_reason)}</div>`
-            : `<div class="hint" style="margin-top:8px;">Your last request was denied.</div>`;
-        }
-        extra += `
-          <details style="margin-top:8px;">
-            <summary class="hint" style="cursor:pointer;">Request an exception</summary>
-            <div class="card" style="margin-top:8px;">
-              <div class="field">
-                <label>Why do you need to submit/change picks after the lock? (optional)</label>
-                <textarea id="exception-reason-input" rows="3">${escapeHtml(s.exceptionReason)}</textarea>
-              </div>
-              <button class="btn btn-secondary" id="request-exception-btn">Request an exception</button>
-            </div>
-          </details>
-        `;
+        return `<div class="card" style="border-left:4px solid #e9a825; margin-bottom:12px;">
+          \u23F3 Picks for Week ${s.week} locked as of ${escapeHtml(lockAtEst)} ET. Your picks are saved and waiting on an admin to approve them -- pick again and submit below any time to update what's pending.
+        </div>`;
+      }
+      let extra = "";
+      if (latestException && latestException.status === "denied") {
+        extra = latestException.denial_reason
+          ? `<div class="hint" style="margin-top:8px;">Your last submission was denied -- admin note: ${escapeHtml(latestException.denial_reason)}</div>`
+          : `<div class="hint" style="margin-top:8px;">Your last submission was denied.</div>`;
       }
       return `<div class="card" style="border-left:4px solid #c62828; margin-bottom:12px;">
-        \u{1F512} Picks for Week ${s.week} are locked as of ${escapeHtml(lockAtEst)} ET. You can't submit or change picks unless an admin approves an exception.
+        \u{1F512} Picks for Week ${s.week} locked as of ${escapeHtml(lockAtEst)} ET. You can still pick and submit below -- it'll be saved as pending until an admin approves it.
         ${extra}
       </div>`;
     }
@@ -403,7 +397,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
           <div class="progress-track"><div class="progress-fill" style="width:${pct}%;"></div></div>
         </div>
         <div class="btn-row" style="margin-top:8px;">
-          <button class="btn btn-primary" id="lock-btn" ${effectivelyLocked ? "disabled" : ""}>Lock In Weekly Picks</button>
+          <button class="btn btn-primary" id="lock-btn">Lock In Weekly Picks</button>
           <button class="btn btn-secondary" id="refresh-btn" style="flex:0 0 auto; width:auto; padding:11px 14px;">\u{1F504}</button>
         </div>
         <label class="hint" style="display:flex; align-items:center; gap:6px; margin-top:6px; justify-content:center;">
@@ -465,8 +459,6 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     });
     el.querySelector("#number-input").addEventListener("input", (e) => { s.numberInput = e.target.value; });
     el.querySelector("#preview-numbers-btn").addEventListener("click", onPreviewNumbers);
-    el.querySelector("#exception-reason-input")?.addEventListener("input", (e) => { s.exceptionReason = e.target.value; });
-    el.querySelector("#request-exception-btn")?.addEventListener("click", onRequestException);
 
     el.querySelectorAll("[data-pick-game]").forEach((input) => {
       // "click" (not "change") on purpose -- clicking an already-checked
@@ -707,10 +699,12 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     document.body.appendChild(wrap);
     wrap.querySelector("#confirm-resubmit-btn").addEventListener("click", async () => {
       if (isEffectivelyLocked()) {
-        alert("\u{1F512} Picks for this week are locked. Request an exception if you need to submit or change your picks.");
-        return;
+        // Doesn't block it -- saves it as pending instead, and leaves
+        // whatever's already on file untouched until an admin approves it.
+        await queuePendingPicks(newMap);
+      } else {
+        await submitPicks();
       }
-      await submitPicks();
       s.resubmit = null;
       wrap.remove();
     });
@@ -723,19 +717,28 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
   function drawRecapModal() {
     const wrap = document.createElement("div");
     wrap.className = "modal-backdrop";
+    const title = s.recapPending ? "\u23F3 Picks Submitted — Pending Admin Approval" : "\u{1F512} Your Picks Are Locked In!";
+    const intro = s.recapPending
+      ? "The week is locked, so these are saved as pending until an admin approves them:"
+      : "Here's what you picked for this week:";
+    const outro = s.recapPending
+      ? `<p class="hint" style="margin-top:8px;">You can come back and change these any time before an admin reviews them.</p>`
+      : "";
     wrap.innerHTML = `
       <div class="modal-sheet">
-        <h2>\u{1F512} Your Picks Are Locked In!</h2>
-        <p class="hint">Here's what you picked for this week:</p>
+        <h2>${title}</h2>
+        <p class="hint">${intro}</p>
         ${s.recap.map((r) => `<div class="card" style="padding:10px 12px; margin-bottom:6px;">
           <b>${escapeHtml(r.selected_team)}</b> — ${escapeHtml(r.matchup)} <span class="hint">(${escapeHtml(r.spread)})</span>
         </div>`).join("")}
+        ${outro}
         <button class="btn btn-primary" id="recap-ok-btn">Got it!</button>
       </div>
     `;
     document.body.appendChild(wrap);
     wrap.querySelector("#recap-ok-btn").addEventListener("click", () => {
       s.recap = null;
+      s.recapPending = false;
       wrap.remove();
     });
   }
@@ -812,6 +815,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
       matchup: `${gameLookup[r.game_id]?.favorite_team || ""} vs ${gameLookup[r.game_id]?.underdog_team || r.game_id}`,
       spread: gameLookup[r.game_id]?.spread_value || "",
     }));
+    s.recapPending = false;
     const { data } = await supabase.from("picks").select("*").eq("user_id", user.id).eq("week_number", s.week);
     s.existingPicks = data || [];
     s.pickResults = {};
@@ -830,15 +834,39 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     return !(latest && latest.status === "approved");
   }
 
-  async function onRequestException() {
-    await supabase.from("pick_lock_exceptions").insert({
-      week_number: s.week, user_id: user.id, username,
-      reason: s.exceptionReason.trim() || null,
-    });
-    s.exceptionReason = "";
+  // Called instead of writing straight to `picks` when the week is locked
+  // and this player doesn't have an approved exception yet. Saves the
+  // attempted picks on the pending pick_lock_exceptions row (updating it in
+  // place if one's already pending, so resubmitting while waiting just
+  // updates what's pending instead of piling up duplicate requests) --
+  // whatever was on file before the lock (if anything) is left exactly as
+  // it was unless/until an admin approves this from the Admin page.
+  async function queuePendingPicks(selected) {
+    const gameLookup = Object.fromEntries(s.games.map((g) => [g.game_id, g]));
+    const payload = Object.entries(selected).map(([gameId, team]) => ({
+      game_id: gameId, selected_team: team,
+      spread_at_pick: gameLookup[gameId]?.spread_value || "",
+    }));
+    const latest = s.myExceptions[0] || null;
+    if (latest && latest.status === "pending") {
+      await supabase.from("pick_lock_exceptions").update({
+        picks_payload: payload, requested_at: new Date().toISOString(),
+      }).eq("id", latest.id);
+    } else {
+      await supabase.from("pick_lock_exceptions").insert({
+        week_number: s.week, user_id: user.id, username,
+        status: "pending", picks_payload: payload,
+      });
+    }
     const { data } = await supabase.from("pick_lock_exceptions").select("*")
       .eq("week_number", s.week).eq("user_id", user.id).order("requested_at", { ascending: false });
     s.myExceptions = data || [];
+    s.recap = payload.map((r) => ({
+      selected_team: r.selected_team,
+      matchup: `${gameLookup[r.game_id]?.favorite_team || ""} vs ${gameLookup[r.game_id]?.underdog_team || r.game_id}`,
+      spread: gameLookup[r.game_id]?.spread_value || "",
+    }));
+    s.recapPending = true;
     draw();
   }
 
@@ -856,10 +884,6 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
   }
 
   async function onLockIn() {
-    if (isEffectivelyLocked()) {
-      alert("\u{1F512} Picks for this week are locked. Request an exception if you need to submit or change your picks.");
-      return;
-    }
     const count = Object.keys(s.selected).length;
     if (count !== 7) {
       s.error = "";
@@ -869,6 +893,10 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     if (s.existingPicks.length) {
       s.resubmit = { existingPicks: s.existingPicks, newPicks: { ...s.selected } };
       draw();
+    } else if (isEffectivelyLocked()) {
+      // Doesn't block it -- saves it as pending instead of writing straight
+      // to the real picks table, until an admin approves it.
+      await queuePendingPicks(s.selected);
     } else {
       await submitPicks();
     }
@@ -929,6 +957,16 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
         s.myExceptions = exceptions || [];
       } catch (_) {
         s.myExceptions = [];
+      }
+
+      // A pending late submission reflects this player's most recent
+      // intent, so it wins over whatever's officially on file from before
+      // the lock when pre-filling the selections below.
+      const latestExceptionForPrefill = s.myExceptions[0] || null;
+      if (latestExceptionForPrefill?.status === "pending" && latestExceptionForPrefill.picks_payload) {
+        for (const pp of latestExceptionForPrefill.picks_payload) {
+          s.selected[pp.game_id] = pp.selected_team;
+        }
       }
 
       s.scores = await fetchLiveScores(s.games);

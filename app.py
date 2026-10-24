@@ -214,6 +214,16 @@ def show_picks_recap(recap_rows):
         st.rerun()
 
 
+@st.dialog("⏳ Picks Submitted — Pending Admin Approval")
+def show_pending_recap(recap_rows):
+    st.write("The week is locked, so these are saved as pending until an admin approves them:")
+    for item in recap_rows:
+        st.markdown(f"- **{item['selected_team']}** — {item['matchup']}  (`{item['spread']}`)")
+    st.caption("You can come back and change these any time before an admin reviews them.")
+    if st.button("Got it!", use_container_width=True):
+        st.rerun()
+
+
 @st.dialog("⚠️ You've Already Submitted This Week")
 def confirm_resubmit(existing_picks_raw, new_picks, game_lookup):
     st.write("Here's how your on-file picks compare to your new selections:")
@@ -244,9 +254,12 @@ def confirm_resubmit(existing_picks_raw, new_picks, game_lookup):
 
     col_yes, col_no = st.columns(2)
     with col_yes:
-        if st.button("Yes, resubmit", type="primary", use_container_width=True, disabled=effectively_locked):
+        if st.button("Yes, resubmit", type="primary", use_container_width=True):
             if effectively_locked:
-                st.error("🔒 Picks for this week are locked. Request an exception if you need to submit or change your picks.")
+                # Doesn't block the submission -- saves it as pending instead,
+                # and leaves whatever's already on file untouched until an
+                # admin approves it. See queue_picks_pending below.
+                queue_picks_pending(new_picks, game_lookup)
             else:
                 try:
                     supabase.table("picks").delete().eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute()
@@ -623,11 +636,12 @@ st.header(f"Week {CURRENT_WEEK} Master Slate")
 now = datetime.now(timezone.utc)
 EASTERN_TZ = ZoneInfo("America/New_York")
 
-# 🔒 ADMIN PICK LOCK -- an admin can freeze all pick submissions/changes for
-# a week starting at a specific time (Admin -> Picks tab), independent of
-# each game's own kickoff-time lock further below. A player who's locked out
-# can request an exception; once an admin approves it, that player can
-# submit/change picks for the rest of the week same as if it weren't locked.
+# 🔒 ADMIN PICK LOCK -- an admin can freeze picks from writing straight to
+# the games table for a week starting at a specific time (Admin -> Picks
+# tab), independent of each game's own kickoff-time lock further below.
+# Submitting while locked doesn't get blocked outright, though -- see
+# queue_picks_pending below -- it's saved as a pending request instead, and
+# an admin approving it is what actually commits it to the real picks table.
 try:
     _lock_row = supabase.table("week_pick_locks").select("*").eq("week_number", CURRENT_WEEK).maybe_single().execute().data
 except Exception:
@@ -652,33 +666,64 @@ latest_exception = my_exceptions_this_week[0] if my_exceptions_this_week else No
 has_approved_exception = bool(latest_exception and latest_exception["status"] == "approved")
 effectively_locked = week_locked and not has_approved_exception
 
+
+def queue_picks_pending(new_picks, game_lookup):
+    """Called instead of writing straight to `picks` when the week is locked
+    and this player doesn't have an approved exception yet. Saves the
+    attempted picks on the pending pick_lock_exceptions row (updating it in
+    place if they already have one pending, so re-submitting while waiting
+    just updates what's pending rather than piling up duplicate requests)
+    instead of touching the real picks table -- whatever they had on file
+    before the lock (if anything) stays exactly as it was unless/until an
+    admin approves this, at which point Admin's approval handler is what
+    actually commits it.
+    """
+    try:
+        payload = [
+            {
+                "game_id": p["game_id"], "selected_team": p["selected_team"],
+                "spread_at_pick": game_lookup.get(p["game_id"], {}).get("spread_value", ""),
+            }
+            for p in new_picks
+        ]
+        if latest_exception and latest_exception.get("status") == "pending":
+            supabase.table("pick_lock_exceptions").update({
+                "picks_payload": payload,
+                "requested_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", latest_exception["id"]).execute()
+        else:
+            supabase.table("pick_lock_exceptions").insert({
+                "week_number": CURRENT_WEEK, "user_id": user.id, "username": username,
+                "status": "pending", "picks_payload": payload,
+            }).execute()
+        st.session_state.pending_resubmit = None
+        recap_rows = [
+            {
+                "selected_team": p["selected_team"],
+                "matchup": game_lookup.get(p["game_id"], {}).get("display_text", p["game_id"]),
+                "spread": game_lookup.get(p["game_id"], {}).get("spread_value", ""),
+            }
+            for p in new_picks
+        ]
+        show_pending_recap(recap_rows)
+    except Exception as e:
+        st.error(f"Database error: {e}")
+
+
 if week_locked:
     lock_at_est = lock_at_dt.astimezone(EASTERN_TZ)
     lock_at_str = lock_at_est.strftime("%a %m/%d %I:%M %p ET").replace(" 0", " ")
     if has_approved_exception:
         st.success(f"🔓 Picks for Week {CURRENT_WEEK} locked as of {lock_at_str} -- but an admin approved an exception for you, so you can still submit or change picks.")
+    elif latest_exception and latest_exception["status"] == "pending":
+        st.info(f"⏳ Picks for Week {CURRENT_WEEK} locked as of {lock_at_str}. Your picks are saved and waiting on an admin to approve them -- pick again and submit below any time to update what's pending.")
     else:
-        st.error(f"🔒 Picks for Week {CURRENT_WEEK} are locked as of {lock_at_str}. You can't submit or change picks unless an admin approves an exception.")
-        if latest_exception and latest_exception["status"] == "pending":
-            st.info("⏳ Your exception request is pending admin review.")
-        else:
-            if latest_exception and latest_exception["status"] == "denied":
-                if latest_exception.get("denial_reason"):
-                    st.caption(f"Your last request was denied -- admin note: {latest_exception['denial_reason']}")
-                else:
-                    st.caption("Your last request was denied.")
-            with st.expander("Request an exception"):
-                exception_reason = st.text_area(
-                    "Why do you need to submit/change picks after the lock? (optional)",
-                    key=f"exception_reason_{CURRENT_WEEK}", height=80,
-                )
-                if st.button("Request an exception", key=f"request_exception_{CURRENT_WEEK}"):
-                    supabase.table("pick_lock_exceptions").insert({
-                        "week_number": CURRENT_WEEK, "user_id": user.id, "username": username,
-                        "reason": exception_reason.strip() or None,
-                    }).execute()
-                    st.success("Request sent -- an admin has been notified.")
-                    st.rerun()
+        st.warning(f"🔒 Picks for Week {CURRENT_WEEK} locked as of {lock_at_str}. You can still pick and submit below -- it'll be saved as pending until an admin approves it.")
+        if latest_exception and latest_exception["status"] == "denied":
+            if latest_exception.get("denial_reason"):
+                st.caption(f"Your last submission was denied -- admin note: {latest_exception['denial_reason']}")
+            else:
+                st.caption("Your last submission was denied.")
 
 # 4. Pull active week slate from database rows
 try:
@@ -958,6 +1003,17 @@ else:
     # user, not just admins, so this doesn't open up anything new.
     week_picks_all = supabase.table("picks").select("*").eq("week_number", CURRENT_WEEK).execute().data
     existing_picks = [p for p in week_picks_all if p["user_id"] == user.id]
+
+    # A pending late submission (see queue_picks_pending) reflects this
+    # player's most recent intent, so seed from it FIRST -- the guard below
+    # means whichever loop runs first wins, and we want a pending attempt to
+    # take priority over whatever's officially on file from before the lock.
+    if latest_exception and latest_exception.get("status") == "pending" and latest_exception.get("picks_payload"):
+        for _pp in latest_exception["picks_payload"]:
+            _sel_key = f"sel_{_pp['game_id']}"
+            if _sel_key not in st.session_state:
+                st.session_state[_sel_key] = _pp["selected_team"]
+
     pick_results_by_game = {}
     for _p in existing_picks:
         _sel_key = f"sel_{_p['game_id']}"
@@ -1140,7 +1196,6 @@ else:
         with col_lock:
             lock_clicked = st.button(
                 "Lock In Weekly Picks", type="primary", use_container_width=True,
-                disabled=effectively_locked,
             )
         with col_refresh_btn:
             if st.button("🔄 Refresh Scores", use_container_width=True):
@@ -1157,9 +1212,7 @@ else:
                 st_autorefresh(interval=interval_seconds * 1000, key="scoreboard_autorefresh")
 
         if lock_clicked:
-            if effectively_locked:
-                st.error("🔒 Picks for this week are locked. Request an exception above if you need to submit or change your picks.")
-            elif len(chosen_picks) != 7:
+            if len(chosen_picks) != 7:
                 st.error("Validation Error: You must pick exactly 7 games.")
             elif already_submitted:
                 st.session_state.pending_resubmit = {
@@ -1168,6 +1221,9 @@ else:
                     "game_lookup": game_lookup,
                 }
                 st.rerun()
+            elif effectively_locked:
+                # Doesn't block the submission -- saves it as pending instead.
+                queue_picks_pending(chosen_picks, game_lookup)
             else:
                 try:
                     supabase.table("picks").delete().eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute()

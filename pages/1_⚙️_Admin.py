@@ -924,11 +924,13 @@ with tab_setup:
 
 
 with tab_picks:
-    # 6a. ADMIN PICK LOCK -- freeze all pick submissions/changes for a week as
-    # of a specific time, independent of each game's own kickoff-time lock
-    # (which still always applies on top of this). A locked-out player sees a
-    # "Request an exception" option in app.py; approving/denying it here is
-    # what actually lets them back in (or not) -- see pick_lock_exceptions.
+    # 6a. ADMIN PICK LOCK -- freezes picks for a week from writing straight to
+    # the real picks table as of a specific time, independent of each game's
+    # own kickoff-time lock (which still always applies on top of this). A
+    # locked-out player isn't blocked outright -- their picks are saved
+    # pending instead (see app.py's queue_picks_pending / picks.js's
+    # queuePendingPicks) -- approving/denying it here is what actually
+    # commits them (or not) -- see pick_lock_exceptions below.
     st.subheader("🔒 Pick Lock")
     lock_week = section_week_selector("pick_lock", active_week, "Week to manage the lock for:")
 
@@ -972,19 +974,33 @@ with tab_picks:
             st.success(f"Picks for Week {lock_week} will lock at {_confirm_str}.")
             st.rerun()
 
-    st.subheader("🔑 Pick Lock Exception Requests")
+    st.subheader("🔑 Pending Late Picks (Pick Lock Exceptions)")
+    st.caption(
+        "A player who picks after the week's lock doesn't get blocked -- their picks are saved here as "
+        "pending instead. Approving one writes those picks to the real picks table (replacing whatever "
+        "they had on file before, if anything); denying one leaves their prior picks (if any) untouched "
+        "and these are simply discarded."
+    )
     pending_exceptions = (
         supabase.table("pick_lock_exceptions").select("*")
         .eq("status", "pending").order("requested_at", desc=True).execute().data or []
     )
     if not pending_exceptions:
-        st.caption("No pending exception requests.")
+        st.caption("No pending late picks.")
     else:
         for exc in pending_exceptions:
             with st.container(border=True):
                 st.markdown(f"**{exc.get('username') or 'Unknown player'}** -- Week {exc['week_number']}")
                 if exc.get("reason"):
                     st.write(f"_{exc['reason']}_")
+                payload = exc.get("picks_payload") or []
+                if payload:
+                    picks_lines = "  \n".join(
+                        f"- **{p.get('selected_team', '')}** (`{p.get('spread_at_pick', '')}`)" for p in payload
+                    )
+                    st.markdown(f"Picks submitted ({len(payload)}/7):  \n{picks_lines}")
+                else:
+                    st.caption("⚠️ No picks attached to this request.")
                 st.caption(f"Requested {exc['requested_at']}")
 
                 col_deny, col_approve = st.columns(2)
@@ -993,12 +1009,21 @@ with tab_picks:
                         st.session_state[f"denying_exc_{exc['id']}"] = True
                 with col_approve:
                     if st.button("✅ Approve", key=f"approve_exc_{exc['id']}"):
+                        if payload:
+                            supabase.table("picks").delete().eq("user_id", exc["user_id"]).eq("week_number", exc["week_number"]).execute()
+                            for p in payload:
+                                supabase.table("picks").insert({
+                                    "user_id": exc["user_id"], "username": exc.get("username"),
+                                    "week_number": exc["week_number"], "game_id": p.get("game_id"),
+                                    "selected_team": p.get("selected_team"),
+                                    "spread_at_pick": p.get("spread_at_pick", ""),
+                                }).execute()
                         supabase.table("pick_lock_exceptions").update({
                             "status": "approved",
                             "reviewed_by": user_id,
                             "reviewed_at": datetime.now(timezone.utc).isoformat(),
                         }).eq("id", exc["id"]).execute()
-                        st.success("Approved -- the player has been notified.")
+                        st.success("Approved -- picks saved and the player has been notified.")
                         st.rerun()
 
                 if st.session_state.get(f"denying_exc_{exc['id']}"):
