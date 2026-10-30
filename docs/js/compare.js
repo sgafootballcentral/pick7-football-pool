@@ -1,4 +1,4 @@
-import { escapeHtml } from "./app.js";
+import { escapeHtml, avatarInnerHtml, fetchAvatarsByUsername } from "./app.js";
 import { getSharedWeek, setSharedWeek } from "./weekState.js";
 
 // Same chronological numbering scheme picks.js uses (favorite=odd,
@@ -33,6 +33,7 @@ export function renderCompare(el, { supabase, username }) {
     week: getSharedWeek() || 1,
     games: [],
     picksByUsername: {}, // username -> [picks rows] for s.week
+    avatars: {}, // username -> avatar_url, fetched once (doesn't depend on week)
     weekLock: null, // week_pick_locks row for s.week, or null
     mode: "grid", // "grid" | "h2h"
     h2hA: "",
@@ -87,7 +88,7 @@ export function renderCompare(el, { supabase, username }) {
       });
       const isMe = p === username;
       return `<tr class="${isMe ? "cmp-me" : ""}">
-        <td class="cmp-player">${escapeHtml(p)}${isMe ? " <span class=\"hint\">(you)</span>" : ""}</td>
+        <td class="cmp-player"><span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[p], p)}</span>${escapeHtml(p)}</span>${isMe ? " <span class=\"hint\">(you)</span>" : ""}</td>
         ${cells.join("")}
         <td class="cmp-record">${wins}-${losses}</td>
       </tr>`;
@@ -169,11 +170,15 @@ export function renderCompare(el, { supabase, username }) {
     return `
       ${pickerRow}
       <div class="card" style="text-align:center;">
-        <b>${escapeHtml(s.h2hA)}</b> ${aWins}-${aLosses} &nbsp;vs&nbsp; <b>${escapeHtml(s.h2hB)}</b> ${bWins}-${bLosses}
+        <span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[s.h2hA], s.h2hA)}</span><b>${escapeHtml(s.h2hA)}</b></span>
+        ${aWins}-${aLosses} &nbsp;vs&nbsp;
+        <span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[s.h2hB], s.h2hB)}</span><b>${escapeHtml(s.h2hB)}</b></span>
+        ${bWins}-${bLosses}
         <div class="hint" style="margin-top:4px;">Agree on ${agree} of ${comparable} comparable pick(s) this week.</div>
       </div>
       <div style="display:flex; justify-content:space-between; padding:0 4px;">
-        <b>${escapeHtml(s.h2hA)}</b><b>${escapeHtml(s.h2hB)}</b>
+        <span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[s.h2hA], s.h2hA)}</span><b>${escapeHtml(s.h2hA)}</b></span>
+        <span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[s.h2hB], s.h2hB)}</span><b>${escapeHtml(s.h2hB)}</b></span>
       </div>
       ${gameRows || `<div class="card hint">Neither ${escapeHtml(s.h2hA)} nor ${escapeHtml(s.h2hB)} has picked any games yet for Week ${s.week}.</div>`}
     `;
@@ -286,8 +291,12 @@ export function renderCompare(el, { supabase, username }) {
 
   (async function init() {
     try {
-      const { data: rows, error: wErr } = await supabase.from("games").select("week_number");
+      const [{ data: rows, error: wErr }, avatars] = await Promise.all([
+        supabase.from("games").select("week_number"),
+        fetchAvatarsByUsername(supabase),
+      ]);
       if (wErr) throw wErr;
+      s.avatars = avatars;
       const weeks = [...new Set((rows || []).map((r) => r.week_number))].sort((a, b) => b - a);
       s.weeks = weeks;
       if (!weeks.length) { s.loading = false; draw(); return; }

@@ -1,4 +1,4 @@
-import { escapeHtml } from "./app.js";
+import { escapeHtml, avatarInnerHtml, fetchAvatarsByUsername } from "./app.js";
 
 function storagePathFromUrl(url) {
   if (!url) return null;
@@ -35,7 +35,7 @@ function reactionsSignature(map) {
 export function renderChat(el, { supabase, user, username, isAdmin }) {
   const s = {
     loading: true, error: "", messages: [], autoRefresh: true, intervalSec: 5, pendingFile: null,
-    reactionsByMessage: {}, openPickerFor: null, pickerShowInput: null,
+    reactionsByMessage: {}, openPickerFor: null, pickerShowInput: null, avatarsByUsername: {},
   };
   let timer = null;
 
@@ -289,7 +289,10 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
     } catch (_) {}
     return `
       <div class="chat-msg ${mine ? "mine" : ""}">
-        <div class="meta">${escapeHtml(m.username)} &middot; ${escapeHtml(timeStr)}</div>
+        <div class="meta player-with-avatar">
+          <span class="avatar-circle-sm">${avatarInnerHtml(s.avatarsByUsername[m.username], m.username)}</span>
+          ${escapeHtml(m.username)} &middot; ${escapeHtml(timeStr)}
+        </div>
         <div class="bubble" data-msg-id="${m.id}">
           ${m.message ? `<div>${escapeHtml(m.message)}</div>` : ""}
           ${m.image_url ? `<img src="${escapeHtml(m.image_url)}" alt="attachment" loading="lazy">` : ""}
@@ -415,6 +418,14 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
     if (s.autoRefresh) timer = setInterval(() => loadMessages(false, true), s.intervalSec * 1000);
   }
 
+  // One-off fetch, not tied to the 5s auto-refresh poll -- avatars rarely
+  // change mid-session, and re-querying players on every poll would be
+  // wasted work. Runs in parallel with the first message load; whichever
+  // finishes last triggers the redraw that actually shows the avatars.
+  fetchAvatarsByUsername(supabase).then((m) => {
+    s.avatarsByUsername = m;
+    if (!s.loading) drawMessages();
+  });
   loadMessages(true).then(setupAutoRefresh);
   draw();
 

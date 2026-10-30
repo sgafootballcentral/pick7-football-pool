@@ -237,12 +237,22 @@ function buildAdminUrl() {
   return `${base}${sep}admin_sso_at=${encodeURIComponent(accessToken)}&admin_sso_rt=${encodeURIComponent(refreshToken || "")}`;
 }
 
+// username -> avatar_url for every player, used wherever someone else's
+// avatar needs to show (leaderboard, chat, compare) -- "players readable
+// by all" makes this a safe single-table select, no join needed.
+export async function fetchAvatarsByUsername(supabase) {
+  const { data } = await supabase.from("players").select("username, avatar_url");
+  const map = {};
+  (data || []).forEach((p) => { if (p.username) map[p.username] = p.avatar_url || null; });
+  return map;
+}
+
 function initialOf(name) {
   const n = (name || "").trim();
   return n ? n.charAt(0).toUpperCase() : "?";
 }
 
-function avatarInnerHtml(url, name) {
+export function avatarInnerHtml(url, name) {
   return url
     ? `<img src="${escapeHtml(url)}" alt="">`
     : `<span>${escapeHtml(initialOf(name))}</span>`;

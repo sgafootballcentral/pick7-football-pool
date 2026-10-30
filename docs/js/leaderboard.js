@@ -1,11 +1,11 @@
-import { escapeHtml } from "./app.js";
+import { escapeHtml, avatarInnerHtml, fetchAvatarsByUsername } from "./app.js";
 import { getSharedWeek, setSharedWeek } from "./weekState.js";
 
 export function renderLeaderboard(el, { supabase }) {
   // Falls back to Week 1 only if the Picks tab hasn't set a week yet this
   // session (Picks is the default tab, so in practice this almost always
   // already reflects whatever week the player was just looking at there).
-  const s = { loading: true, error: "", picksData: [], selectedWeek: getSharedWeek() || 1 };
+  const s = { loading: true, error: "", picksData: [], avatars: {}, selectedWeek: getSharedWeek() || 1 };
 
   function draw() {
     if (s.loading) {
@@ -28,7 +28,11 @@ export function renderLeaderboard(el, { supabase }) {
         <h2>\u{1F3C6} League Standings</h2>
         <div class="card">\u{1F3C8} Total standings will update here as soon as games are graded.</div>
         <h3>Active League Roster</h3>
-        <div class="card">${roster.map((u) => `<div>${escapeHtml(u)}</div>`).join("")}</div>
+        <div class="card">${roster.map((u) => `
+          <div class="player-with-avatar" style="margin-bottom:6px;">
+            <span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[u], u)}</span>${escapeHtml(u)}
+          </div>
+        `).join("")}</div>
       `;
       return;
     }
@@ -76,7 +80,7 @@ export function renderLeaderboard(el, { supabase }) {
               const rankClass = r.place <= 3 ? `rank-${r.place}` : "";
               return `<tr>
                 <td class="${rankClass}">${medals[r.place] || r.place}</td>
-                <td>${escapeHtml(r.username)}</td>
+                <td><span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[r.username], r.username)}</span>${escapeHtml(r.username)}</span></td>
                 <td>${r.wins} | ${r.losses}</td>
                 <td>${wk.wins} | ${wk.losses}</td>
                 <td>${(r.winPct * 100).toFixed(1)}%</td>
@@ -96,9 +100,13 @@ export function renderLeaderboard(el, { supabase }) {
 
   (async function init() {
     try {
-      const { data, error } = await supabase.from("picks").select("username, result, week_number");
+      const [{ data, error }, avatars] = await Promise.all([
+        supabase.from("picks").select("username, result, week_number"),
+        fetchAvatarsByUsername(supabase),
+      ]);
       if (error) throw error;
       s.picksData = data || [];
+      s.avatars = avatars;
       s.loading = false;
       draw();
     } catch (e) {
