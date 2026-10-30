@@ -180,12 +180,6 @@ function renderChrome(innerHtml) {
         <button class="avatar-btn" id="account-menu-btn" aria-label="Account menu" title="${escapeHtml(state.username || "")}">
           ${avatarInnerHtml(state.avatarUrl, state.username)}
         </button>
-        <span style="display:flex; gap:6px; align-items:center;">
-          ${state.isAdmin ? `
-            <a class="btn btn-secondary" href="${escapeHtml(buildAdminUrl())}" target="_blank" rel="noopener"
-               style="width:auto; padding:6px 12px; font-size:0.82rem; text-decoration:none;">Admin ↗</a>
-          ` : ""}
-        </span>
       </div>
     ` : ""}
     <div id="tab-content">${innerHtml}</div>
@@ -304,6 +298,11 @@ async function openAccountMenu() {
         ${notif ? `
           <button class="btn btn-secondary" id="account-notif-btn" style="margin-bottom:6px;" ${notif.disabled ? "disabled" : ""}>${notif.label}</button>
           <div class="hint" style="min-height:1.2em; margin-bottom:10px;">${menu.notifMsg ? escapeHtml(menu.notifMsg) : ""}</div>
+        ` : ""}
+
+        ${state.isAdmin ? `
+          <a class="btn btn-secondary" href="${escapeHtml(buildAdminUrl())}" target="_blank" rel="noopener"
+             style="text-decoration:none; margin-bottom:10px;">Admin ↗</a>
         ` : ""}
 
         <button class="btn btn-secondary" id="account-logout-btn" style="margin-bottom:10px;">Log Out</button>
