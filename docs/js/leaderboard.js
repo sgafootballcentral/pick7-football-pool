@@ -21,8 +21,8 @@ export function renderLeaderboard(el, { supabase }) {
       return;
     }
 
-    const graded = s.picksData.filter((p) => p.result === "win" || p.result === "loss");
-    if (!graded.length) {
+    const hasAnyGraded = s.picksData.some((r) => r.wins > 0 || r.losses > 0);
+    if (!hasAnyGraded) {
       const roster = [...new Set(s.picksData.map((p) => p.username))];
       el.innerHTML = `
         <h2>\u{1F3C6} League Standings</h2>
@@ -37,12 +37,18 @@ export function renderLeaderboard(el, { supabase }) {
       return;
     }
 
+    // Keyed by the stable user_id, never by the display name -- a rename
+    // can never split or orphan someone's record here, because
+    // picks_week_tallies (see the "avatars everywhere" migration) groups
+    // by user_id in Postgres and joins in whatever the player's CURRENT
+    // name is, live, every time this loads.
     const byPlayer = {};
-    for (const p of graded) {
-      const rec = (byPlayer[p.username] ||= { username: p.username, wins: 0, losses: 0 });
-      if (p.result === "win") rec.wins++; else rec.losses++;
+    for (const r of s.picksData) {
+      const rec = (byPlayer[r.user_id] ||= { user_id: r.user_id, username: r.username, wins: 0, losses: 0 });
+      rec.wins += r.wins;
+      rec.losses += r.losses;
     }
-    const standings = Object.values(byPlayer);
+    const standings = Object.values(byPlayer).filter((r) => r.wins + r.losses > 0);
     standings.forEach((r) => (r.winPct = r.wins / (r.wins + r.losses)));
     standings.sort((a, b) => (b.wins - a.wins) || (a.losses - b.losses));
 
@@ -54,11 +60,11 @@ export function renderLeaderboard(el, { supabase }) {
     });
     const medals = { 1: "\u{1F947}", 2: "\u{1F948}", 3: "\u{1F949}" };
 
-    const weekPicks = graded.filter((p) => p.week_number === s.selectedWeek);
+    // The view already has (at most) one row per player per week, so this
+    // is a direct lookup rather than a re-aggregation.
     const weekByPlayer = {};
-    for (const p of weekPicks) {
-      const rec = (weekByPlayer[p.username] ||= { wins: 0, losses: 0 });
-      if (p.result === "win") rec.wins++; else rec.losses++;
+    for (const r of s.picksData) {
+      if (r.week_number === s.selectedWeek) weekByPlayer[r.user_id] = { wins: r.wins, losses: r.losses };
     }
 
     const weekOptions = Array.from({ length: 16 }, (_, i) => i + 1);
@@ -76,7 +82,7 @@ export function renderLeaderboard(el, { supabase }) {
           <thead><tr><th>Rank</th><th>Player</th><th>Overall</th><th>Week ${s.selectedWeek}</th><th>Win %</th></tr></thead>
           <tbody>
             ${standings.map((r) => {
-              const wk = weekByPlayer[r.username] || { wins: 0, losses: 0 };
+              const wk = weekByPlayer[r.user_id] || { wins: 0, losses: 0 };
               const rankClass = r.place <= 3 ? `rank-${r.place}` : "";
               return `<tr>
                 <td class="${rankClass}">${medals[r.place] || r.place}</td>
@@ -100,8 +106,16 @@ export function renderLeaderboard(el, { supabase }) {
 
   (async function init() {
     try {
+      // picks_week_tallies is a Postgres view (user_id + week_number -> wins/
+      // losses, with the player's current name joined in live) instead of
+      // raw picks rows. Two things this fixes at once: (1) the raw picks
+      // table recently passed Supabase's default 1000-row API cap, which
+      // was silently truncating this unfiltered select and producing
+      // wrong, randomly-shifting totals; (2) grouping by user_id instead
+      // of by username means a display-name change can never split or
+      // orphan anyone's record again, however the rename happens.
       const [{ data, error }, avatars] = await Promise.all([
-        supabase.from("picks").select("username, result, week_number"),
+        supabase.from("picks_week_tallies").select("user_id, username, week_number, wins, losses"),
         fetchAvatarsByUsername(supabase),
       ]);
       if (error) throw error;

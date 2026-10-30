@@ -1,4 +1,4 @@
-import { escapeHtml, avatarInnerHtml, fetchAvatarsByUsername } from "./app.js";
+import { escapeHtml, avatarInnerHtml, fetchAvatarsByUsername, fetchCurrentUsernames } from "./app.js";
 import { getSharedWeek, setSharedWeek } from "./weekState.js";
 
 // Same chronological numbering scheme picks.js uses (favorite=odd,
@@ -34,6 +34,7 @@ export function renderCompare(el, { supabase, username }) {
     games: [],
     picksByUsername: {}, // username -> [picks rows] for s.week
     avatars: {}, // username -> avatar_url, fetched once (doesn't depend on week)
+    currentUsernames: {}, // user_id -> current display name, fetched once (doesn't depend on week)
     weekLock: null, // week_pick_locks row for s.week, or null
     mode: "grid", // "grid" | "h2h"
     h2hA: "",
@@ -269,7 +270,12 @@ export function renderCompare(el, { supabase, username }) {
       if (pErr) throw pErr;
       s.picksByUsername = {};
       for (const p of weekPicks || []) {
-        const uname = p.username || "Unknown";
+        // Resolve through the live user_id -> name map first -- the
+        // snapshot username on the pick row itself can be stale if
+        // someone renamed since picking, and this keeps their picks
+        // grouped under whoever they are NOW rather than splitting off
+        // under a name nobody recognizes anymore.
+        const uname = s.currentUsernames[p.user_id] || p.username || "Unknown";
         (s.picksByUsername[uname] ||= []).push(p);
       }
 
@@ -291,12 +297,14 @@ export function renderCompare(el, { supabase, username }) {
 
   (async function init() {
     try {
-      const [{ data: rows, error: wErr }, avatars] = await Promise.all([
+      const [{ data: rows, error: wErr }, avatars, currentUsernames] = await Promise.all([
         supabase.from("games").select("week_number"),
         fetchAvatarsByUsername(supabase),
+        fetchCurrentUsernames(supabase),
       ]);
       if (wErr) throw wErr;
       s.avatars = avatars;
+      s.currentUsernames = currentUsernames;
       const weeks = [...new Set((rows || []).map((r) => r.week_number))].sort((a, b) => b - a);
       s.weeks = weeks;
       if (!weeks.length) { s.loading = false; draw(); return; }

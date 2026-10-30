@@ -255,6 +255,18 @@ export async function fetchAvatarsByUsername(supabase) {
   return map;
 }
 
+// user_id -> current display name, for anywhere that groups or labels
+// picks/messages by player but only has a (possibly stale) snapshot
+// username on the row itself. Resolving through this instead of trusting
+// that snapshot means a rename can never split or orphan someone's
+// history again, whether or not any backfill of the old rows succeeded.
+export async function fetchCurrentUsernames(supabase) {
+  const { data } = await supabase.from("players").select("id, username");
+  const map = {};
+  (data || []).forEach((p) => { if (p.id) map[p.id] = p.username || null; });
+  return map;
+}
+
 function initialOf(name) {
   const n = (name || "").trim();
   return n ? n.charAt(0).toUpperCase() : "?";
