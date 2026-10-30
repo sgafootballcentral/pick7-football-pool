@@ -6,6 +6,7 @@ import { renderCompare } from "./compare.js";
 import { renderChat } from "./chat.js";
 import { renderRequestsVotes } from "./requestsVotes.js";
 import { renderSetNewPassword } from "./recovery.js";
+import { pushSupported, getPushState, subscribeToPush, unsubscribeFromPush } from "./push.js";
 
 const root = document.getElementById("app");
 
@@ -13,6 +14,7 @@ const state = {
   session: null,
   user: null,
   username: null,
+  avatarUrl: null,
   isAdmin: false,
   activeTab: "picks",
   deferredInstallPrompt: null,
@@ -20,6 +22,7 @@ const state = {
   recoveryMode: false,
   lastChatReadAt: null,
   hasUnreadChat: false,
+  notifState: "checking",
 };
 
 function isStandalone() {
@@ -46,6 +49,7 @@ async function refreshIdentity() {
 
   if (!state.user) {
     state.username = null;
+    state.avatarUrl = null;
     state.isAdmin = false;
     return;
   }
@@ -59,9 +63,10 @@ async function refreshIdentity() {
   // the very next time this player logs in. Same idea for full_name -- only
   // ever backfill it if it's missing, never stomp an admin correction.
   try {
-    const { data: existingPlayerRows } = await supabase.from("players").select("username, full_name").eq("id", state.user.id);
+    const { data: existingPlayerRows } = await supabase.from("players").select("username, full_name, avatar_url").eq("id", state.user.id);
     if (existingPlayerRows && existingPlayerRows.length) {
       state.username = existingPlayerRows[0].username || signupUsername;
+      state.avatarUrl = existingPlayerRows[0].avatar_url || null;
       if (!existingPlayerRows[0].full_name && signupFullName) {
         try {
           await supabase.from("players").update({ full_name: signupFullName }).eq("id", state.user.id);
@@ -69,10 +74,12 @@ async function refreshIdentity() {
       }
     } else {
       state.username = signupUsername;
+      state.avatarUrl = null;
       await supabase.from("players").insert({ id: state.user.id, username: state.username, full_name: signupFullName || null });
     }
   } catch (_) {
     state.username = signupUsername; // non-critical -- don't block the session over this
+    state.avatarUrl = null;
   }
 
   try {
@@ -142,6 +149,7 @@ supabase.auth.onAuthStateChange((event, session) => {
     state.hasUnreadChat = false;
     state.lastChatReadAt = null;
     state.username = null;
+    state.avatarUrl = null;
     state.isAdmin = false;
     render();
   }
@@ -169,13 +177,14 @@ function renderChrome(innerHtml) {
       </div>` : ""}
     ${state.user && !state.recoveryMode ? `
       <div class="topbar">
-        <div class="who">Logged in as <b>${escapeHtml(state.username)}</b></div>
+        <button class="avatar-btn" id="account-menu-btn" aria-label="Account menu" title="${escapeHtml(state.username || "")}">
+          ${avatarInnerHtml(state.avatarUrl, state.username)}
+        </button>
         <span style="display:flex; gap:6px; align-items:center;">
           ${state.isAdmin ? `
             <a class="btn btn-secondary" href="${escapeHtml(buildAdminUrl())}" target="_blank" rel="noopener"
                style="width:auto; padding:6px 12px; font-size:0.82rem; text-decoration:none;">Admin ↗</a>
           ` : ""}
-          <button class="btn btn-secondary" id="logout-btn" style="width:auto; padding:6px 12px; font-size:0.82rem;">Log Out</button>
         </span>
       </div>
     ` : ""}
@@ -214,9 +223,7 @@ function renderChrome(innerHtml) {
     state.deferredInstallPrompt = null;
     render();
   });
-  document.getElementById("logout-btn")?.addEventListener("click", async () => {
-    await supabase.auth.signOut();
-  });
+  document.getElementById("account-menu-btn")?.addEventListener("click", openAccountMenu);
   root.querySelectorAll(".bottom-nav [data-tab]").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.activeTab = btn.dataset.tab;
@@ -234,6 +241,176 @@ function buildAdminUrl() {
 
   const sep = base.includes("?") ? "&" : "?";
   return `${base}${sep}admin_sso_at=${encodeURIComponent(accessToken)}&admin_sso_rt=${encodeURIComponent(refreshToken || "")}`;
+}
+
+function initialOf(name) {
+  const n = (name || "").trim();
+  return n ? n.charAt(0).toUpperCase() : "?";
+}
+
+function avatarInnerHtml(url, name) {
+  return url
+    ? `<img src="${escapeHtml(url)}" alt="">`
+    : `<span>${escapeHtml(initialOf(name))}</span>`;
+}
+
+// Avatar circle (top bar) -> a bottom-sheet account menu, same modal pattern
+// picks.js already uses for its own modals: appended straight to
+// document.body (so renderChrome()'s root.innerHTML rewrites never touch
+// it) with a local `redraw()` that patches just this sheet instead of
+// going through the whole app's render().
+async function openAccountMenu() {
+  if (document.querySelector(".modal-backdrop")) return; // already open
+
+  const menu = { nameDraft: state.username || "", nameSaving: false, nameMsg: "", photoUploading: false, photoMsg: "", notifMsg: "" };
+
+  const wrap = document.createElement("div");
+  wrap.className = "modal-backdrop";
+  document.body.appendChild(wrap);
+
+  function notifButtonInfo() {
+    if (state.notifState === "unsupported") return null;
+    if (state.notifState === "checking") return { label: "Checking notifications…", disabled: true };
+    if (state.notifState === "denied") return { label: "\u{1F515} Notifications blocked -- enable in browser settings", disabled: true };
+    const on = state.notifState === "subscribed";
+    return { label: on ? "\u{1F514} Notifications on" : "\u{1F515} Enable notifications", disabled: false };
+  }
+
+  function redraw() {
+    const notif = notifButtonInfo();
+    wrap.innerHTML = `
+      <div class="modal-sheet">
+        <div style="display:flex; justify-content:center; margin-bottom:16px;">
+          <div class="avatar-circle-lg">${avatarInnerHtml(state.avatarUrl, state.username)}</div>
+        </div>
+
+        <div style="text-align:center; margin-bottom:20px;">
+          <input type="file" id="account-avatar-input" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none;">
+          <button class="btn btn-secondary" id="account-change-photo-btn" style="width:auto; padding:8px 14px;" ${menu.photoUploading ? "disabled" : ""}>
+            ${menu.photoUploading ? "Uploading…" : "Change Photo"}
+          </button>
+          ${menu.photoMsg ? `<div class="hint" style="margin-top:6px;">${escapeHtml(menu.photoMsg)}</div>` : ""}
+        </div>
+
+        <div class="field">
+          <label>Display name</label>
+          <input type="text" id="account-name-input" value="${escapeHtml(menu.nameDraft)}">
+        </div>
+        <button class="btn btn-primary" id="account-save-name-btn" style="margin-bottom:6px;" ${menu.nameSaving ? "disabled" : ""}>
+          ${menu.nameSaving ? "Saving…" : "Save Name"}
+        </button>
+        <div class="hint" style="min-height:1.2em; margin-bottom:16px;">${menu.nameMsg ? escapeHtml(menu.nameMsg) : ""}</div>
+
+        ${notif ? `
+          <button class="btn btn-secondary" id="account-notif-btn" style="margin-bottom:6px;" ${notif.disabled ? "disabled" : ""}>${notif.label}</button>
+          <div class="hint" style="min-height:1.2em; margin-bottom:10px;">${menu.notifMsg ? escapeHtml(menu.notifMsg) : ""}</div>
+        ` : ""}
+
+        <button class="btn btn-secondary" id="account-logout-btn" style="margin-bottom:10px;">Log Out</button>
+        <button class="btn btn-secondary" id="account-done-btn">Done</button>
+      </div>
+    `;
+
+    wrap.querySelector("#account-change-photo-btn")?.addEventListener("click", () => {
+      wrap.querySelector("#account-avatar-input").click();
+    });
+
+    wrap.querySelector("#account-avatar-input")?.addEventListener("change", async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      menu.photoUploading = true;
+      menu.photoMsg = "";
+      redraw();
+      try {
+        const ext = file.name.includes(".") ? file.name.split(".").pop().toLowerCase() : "jpg";
+        const path = `${state.user.id}/${crypto.randomUUID()}.${ext}`;
+        const { error: upErr } = await supabase.storage.from("avatars").upload(path, file, {
+          contentType: file.type || "application/octet-stream",
+        });
+        if (upErr) throw upErr;
+        const { data } = supabase.storage.from("avatars").getPublicUrl(path);
+        const oldUrl = state.avatarUrl;
+        await supabase.from("players").update({ avatar_url: data.publicUrl }).eq("id", state.user.id);
+        state.avatarUrl = data.publicUrl;
+        // Best-effort cleanup of the old file so the bucket doesn't just grow forever.
+        if (oldUrl) {
+          const marker = "/avatars/";
+          const idx = oldUrl.indexOf(marker);
+          if (idx !== -1) {
+            try { await supabase.storage.from("avatars").remove([oldUrl.slice(idx + marker.length)]); } catch (_) { /* non-critical */ }
+          }
+        }
+        render(); // refresh the top-bar avatar too
+      } catch (err) {
+        menu.photoMsg = "Upload failed: " + (err.message || err);
+      }
+      menu.photoUploading = false;
+      redraw();
+    });
+
+    wrap.querySelector("#account-save-name-btn")?.addEventListener("click", async () => {
+      const newName = (wrap.querySelector("#account-name-input").value || "").trim();
+      if (!newName) {
+        menu.nameMsg = "Display name can't be empty.";
+        redraw();
+        return;
+      }
+      if (newName === state.username) {
+        menu.nameMsg = "That's already your display name.";
+        redraw();
+        return;
+      }
+      menu.nameSaving = true;
+      menu.nameMsg = "";
+      redraw();
+      try {
+        await supabase.from("players").update({ username: newName }).eq("id", state.user.id);
+        // Keep past weeks' picks showing the current name, same as what
+        // happens when an admin renames someone from the Player Roster.
+        try { await supabase.from("picks").update({ username: newName }).eq("user_id", state.user.id); } catch (_) { /* non-critical */ }
+        try { await supabase.from("pick_submissions").update({ username: newName }).eq("user_id", state.user.id); } catch (_) { /* non-critical */ }
+        state.username = newName;
+        menu.nameDraft = newName;
+        menu.nameMsg = "Saved!";
+        render(); // refresh the top-bar tooltip / anywhere else the name shows
+      } catch (err) {
+        menu.nameMsg = "Couldn't save: " + (err.message || err);
+      }
+      menu.nameSaving = false;
+      redraw();
+    });
+
+    wrap.querySelector("#account-notif-btn")?.addEventListener("click", async () => {
+      menu.notifMsg = "";
+      try {
+        if (state.notifState === "subscribed") {
+          await unsubscribeFromPush(supabase);
+          state.notifState = "unsubscribed";
+        } else {
+          await subscribeToPush(supabase, state.user.id);
+          state.notifState = "subscribed";
+        }
+      } catch (e) {
+        menu.notifMsg = e.message || "Couldn't update notification settings.";
+        state.notifState = await getPushState();
+      }
+      redraw();
+    });
+
+    wrap.querySelector("#account-logout-btn")?.addEventListener("click", async () => {
+      wrap.remove();
+      await supabase.auth.signOut();
+    });
+    wrap.querySelector("#account-done-btn")?.addEventListener("click", () => {
+      wrap.remove();
+    });
+  }
+
+  redraw();
+  // Re-check fresh every time the menu opens -- the browser-level
+  // notification permission can change outside the app at any point.
+  state.notifState = pushSupported() ? await getPushState() : "unsupported";
+  redraw();
 }
 
 export function escapeHtml(str) {
