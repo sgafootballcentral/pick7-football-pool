@@ -226,6 +226,29 @@ input, select, textarea {
 .avatar-circle-sm img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .player-with-avatar { display: inline-flex; align-items: center; gap: 6px; }
 
+/* Circular crop/pan/zoom stage used when picking a new avatar photo. */
+.cropper-circle {
+  width: 240px;
+  height: 240px;
+  max-width: 100%;
+  border-radius: 50%;
+  overflow: hidden;
+  position: relative;
+  margin: 0 auto;
+  background: #111;
+  border: 3px solid var(--accent);
+  touch-action: none;
+  cursor: grab;
+}
+.cropper-circle.dragging { cursor: grabbing; }
+.cropper-circle img {
+  position: absolute;
+  max-width: none;
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: none;
+}
+
 .progress-track {
   background: var(--bg-elevated);
   border-radius: 6px;

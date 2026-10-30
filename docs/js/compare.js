@@ -88,7 +88,7 @@ export function renderCompare(el, { supabase, username }) {
       });
       const isMe = p === username;
       return `<tr class="${isMe ? "cmp-me" : ""}">
-        <td class="cmp-player"><span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[p], p)}</span>${escapeHtml(p)}</span>${isMe ? " <span class=\"hint\">(you)</span>" : ""}</td>
+        <td class="cmp-player"><span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[p]?.url, s.avatars[p]?.monogram, p)}</span>${escapeHtml(p)}</span>${isMe ? " <span class=\"hint\">(you)</span>" : ""}</td>
         ${cells.join("")}
         <td class="cmp-record">${wins}-${losses}</td>
       </tr>`;
@@ -170,15 +170,15 @@ export function renderCompare(el, { supabase, username }) {
     return `
       ${pickerRow}
       <div class="card" style="text-align:center;">
-        <span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[s.h2hA], s.h2hA)}</span><b>${escapeHtml(s.h2hA)}</b></span>
+        <span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[s.h2hA]?.url, s.avatars[s.h2hA]?.monogram, s.h2hA)}</span><b>${escapeHtml(s.h2hA)}</b></span>
         ${aWins}-${aLosses} &nbsp;vs&nbsp;
-        <span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[s.h2hB], s.h2hB)}</span><b>${escapeHtml(s.h2hB)}</b></span>
+        <span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[s.h2hB]?.url, s.avatars[s.h2hB]?.monogram, s.h2hB)}</span><b>${escapeHtml(s.h2hB)}</b></span>
         ${bWins}-${bLosses}
         <div class="hint" style="margin-top:4px;">Agree on ${agree} of ${comparable} comparable pick(s) this week.</div>
       </div>
       <div style="display:flex; justify-content:space-between; padding:0 4px;">
-        <span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[s.h2hA], s.h2hA)}</span><b>${escapeHtml(s.h2hA)}</b></span>
-        <span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[s.h2hB], s.h2hB)}</span><b>${escapeHtml(s.h2hB)}</b></span>
+        <span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[s.h2hA]?.url, s.avatars[s.h2hA]?.monogram, s.h2hA)}</span><b>${escapeHtml(s.h2hA)}</b></span>
+        <span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[s.h2hB]?.url, s.avatars[s.h2hB]?.monogram, s.h2hB)}</span><b>${escapeHtml(s.h2hB)}</b></span>
       </div>
       ${gameRows || `<div class="card hint">Neither ${escapeHtml(s.h2hA)} nor ${escapeHtml(s.h2hB)} has picked any games yet for Week ${s.week}.</div>`}
     `;

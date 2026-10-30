@@ -15,6 +15,7 @@ const state = {
   user: null,
   username: null,
   avatarUrl: null,
+  avatarMonogram: null,
   isAdmin: false,
   activeTab: "picks",
   deferredInstallPrompt: null,
@@ -50,6 +51,7 @@ async function refreshIdentity() {
   if (!state.user) {
     state.username = null;
     state.avatarUrl = null;
+    state.avatarMonogram = null;
     state.isAdmin = false;
     return;
   }
@@ -63,10 +65,11 @@ async function refreshIdentity() {
   // the very next time this player logs in. Same idea for full_name -- only
   // ever backfill it if it's missing, never stomp an admin correction.
   try {
-    const { data: existingPlayerRows } = await supabase.from("players").select("username, full_name, avatar_url").eq("id", state.user.id);
+    const { data: existingPlayerRows } = await supabase.from("players").select("username, full_name, avatar_url, avatar_monogram").eq("id", state.user.id);
     if (existingPlayerRows && existingPlayerRows.length) {
       state.username = existingPlayerRows[0].username || signupUsername;
       state.avatarUrl = existingPlayerRows[0].avatar_url || null;
+      state.avatarMonogram = existingPlayerRows[0].avatar_monogram || null;
       if (!existingPlayerRows[0].full_name && signupFullName) {
         try {
           await supabase.from("players").update({ full_name: signupFullName }).eq("id", state.user.id);
@@ -75,11 +78,13 @@ async function refreshIdentity() {
     } else {
       state.username = signupUsername;
       state.avatarUrl = null;
+      state.avatarMonogram = null;
       await supabase.from("players").insert({ id: state.user.id, username: state.username, full_name: signupFullName || null });
     }
   } catch (_) {
     state.username = signupUsername; // non-critical -- don't block the session over this
     state.avatarUrl = null;
+    state.avatarMonogram = null;
   }
 
   try {
@@ -150,6 +155,7 @@ supabase.auth.onAuthStateChange((event, session) => {
     state.lastChatReadAt = null;
     state.username = null;
     state.avatarUrl = null;
+    state.avatarMonogram = null;
     state.isAdmin = false;
     render();
   }
@@ -178,7 +184,7 @@ function renderChrome(innerHtml) {
     ${state.user && !state.recoveryMode ? `
       <div class="topbar">
         <button class="avatar-btn" id="account-menu-btn" aria-label="Account menu" title="${escapeHtml(state.username || "")}">
-          ${avatarInnerHtml(state.avatarUrl, state.username)}
+          ${avatarInnerHtml(state.avatarUrl, state.avatarMonogram, state.username)}
         </button>
       </div>
     ` : ""}
@@ -241,9 +247,11 @@ function buildAdminUrl() {
 // avatar needs to show (leaderboard, chat, compare) -- "players readable
 // by all" makes this a safe single-table select, no join needed.
 export async function fetchAvatarsByUsername(supabase) {
-  const { data } = await supabase.from("players").select("username, avatar_url");
+  const { data } = await supabase.from("players").select("username, avatar_url, avatar_monogram");
   const map = {};
-  (data || []).forEach((p) => { if (p.username) map[p.username] = p.avatar_url || null; });
+  (data || []).forEach((p) => {
+    if (p.username) map[p.username] = { url: p.avatar_url || null, monogram: p.avatar_monogram || null };
+  });
   return map;
 }
 
@@ -252,10 +260,17 @@ function initialOf(name) {
   return n ? n.charAt(0).toUpperCase() : "?";
 }
 
-export function avatarInnerHtml(url, name) {
-  return url
-    ? `<img src="${escapeHtml(url)}" alt="">`
-    : `<span>${escapeHtml(initialOf(name))}</span>`;
+export function avatarInnerHtml(url, monogram, name) {
+  if (url) return `<img src="${escapeHtml(url)}" alt="">`;
+  const letters = (monogram || "").trim().toUpperCase();
+  if (letters) {
+    // However many letters someone picks, they all render at the same
+    // size -- just dialed down as a group so 2-3 characters still fit the
+    // circle instead of one letter being bigger than the rest.
+    const scale = letters.length <= 1 ? 1 : letters.length === 2 ? 0.62 : 0.48;
+    return `<span style="font-size:${scale}em; letter-spacing:0.02em;">${escapeHtml(letters)}</span>`;
+  }
+  return `<span>${escapeHtml(initialOf(name))}</span>`;
 }
 
 // Avatar circle (top bar) -> a bottom-sheet account menu, same modal pattern
@@ -266,7 +281,13 @@ export function avatarInnerHtml(url, name) {
 async function openAccountMenu() {
   if (document.querySelector(".modal-backdrop")) return; // already open
 
-  const menu = { nameDraft: state.username || "", nameSaving: false, nameMsg: "", photoUploading: false, photoMsg: "", notifMsg: "" };
+  const menu = {
+    nameDraft: state.username || "", nameSaving: false, nameMsg: "",
+    photoUploading: false, photoMsg: "",
+    showMonogramEditor: false, monogramDraft: state.avatarMonogram || "", monogramSaving: false, monogramMsg: "",
+    resetSaving: false, resetMsg: "",
+    notifMsg: "",
+  };
 
   const wrap = document.createElement("div");
   wrap.className = "modal-backdrop";
@@ -280,21 +301,194 @@ async function openAccountMenu() {
     return { label: on ? "\u{1F514} Notifications on" : "\u{1F515} Enable notifications", disabled: false };
   }
 
+  // Best-effort cleanup of whatever photo used to be in the "avatars"
+  // bucket -- never blocks the action it's cleaning up after.
+  async function removeStoredAvatar(url) {
+    if (!url) return;
+    const marker = "/avatars/";
+    const idx = url.indexOf(marker);
+    if (idx === -1) return;
+    try { await supabase.storage.from("avatars").remove([url.slice(idx + marker.length)]); } catch (_) { /* non-critical */ }
+  }
+
+  async function uploadAvatarBlob(blob) {
+    const path = `${state.user.id}/${crypto.randomUUID()}.jpg`;
+    const { error: upErr } = await supabase.storage.from("avatars").upload(path, blob, { contentType: "image/jpeg" });
+    if (upErr) throw upErr;
+    const { data } = supabase.storage.from("avatars").getPublicUrl(path);
+    const oldUrl = state.avatarUrl;
+    await supabase.from("players").update({ avatar_url: data.publicUrl, avatar_monogram: null }).eq("id", state.user.id);
+    state.avatarUrl = data.publicUrl;
+    state.avatarMonogram = null;
+    await removeStoredAvatar(oldUrl);
+    render(); // refresh the top-bar avatar too
+  }
+
+  // Lets someone drag the photo around and zoom it in/out inside a circle
+  // that's exactly what gets saved -- opened on top of the account menu
+  // (its own stacked modal-backdrop) once a file is picked.
+  function openCropper(file) {
+    const objectUrl = URL.createObjectURL(file);
+    const circleSize = 240;
+    const minZoom = 1, maxZoom = 3;
+    const crop = { zoom: minZoom, panX: 0, panY: 0, baseScale: 1, naturalW: 0, naturalH: 0 };
+
+    const cropWrap = document.createElement("div");
+    cropWrap.className = "modal-backdrop";
+    document.body.appendChild(cropWrap);
+
+    function closeCropper() {
+      URL.revokeObjectURL(objectUrl);
+      cropWrap.remove();
+    }
+
+    cropWrap.innerHTML = `
+      <div class="modal-sheet">
+        <h3 style="text-align:center; margin-top:0;">Adjust Photo</h3>
+        <div class="cropper-circle" id="cropper-circle">
+          <img id="cropper-img" alt="" style="display:none;">
+        </div>
+        <input type="range" id="cropper-zoom" min="${minZoom * 100}" max="${maxZoom * 100}" value="${minZoom * 100}" style="width:100%; margin:14px 0;">
+        <div class="hint" id="cropper-msg" style="text-align:center; min-height:1.2em; margin-bottom:10px;"></div>
+        <div class="btn-row">
+          <button class="btn btn-secondary" id="cropper-cancel-btn">Cancel</button>
+          <button class="btn btn-primary" id="cropper-use-btn" disabled>Use Photo</button>
+        </div>
+      </div>
+    `;
+
+    const circleEl = cropWrap.querySelector("#cropper-circle");
+    const imgEl = cropWrap.querySelector("#cropper-img");
+    const zoomEl = cropWrap.querySelector("#cropper-zoom");
+    const msgEl = cropWrap.querySelector("#cropper-msg");
+    const useBtn = cropWrap.querySelector("#cropper-use-btn");
+
+    function applyTransform() {
+      const scale = crop.baseScale * crop.zoom;
+      const displayW = crop.naturalW * scale;
+      const displayH = crop.naturalH * scale;
+      const maxPanX = Math.max(0, (displayW - circleSize) / 2);
+      const maxPanY = Math.max(0, (displayH - circleSize) / 2);
+      crop.panX = Math.min(maxPanX, Math.max(-maxPanX, crop.panX));
+      crop.panY = Math.min(maxPanY, Math.max(-maxPanY, crop.panY));
+      const left = circleSize / 2 - displayW / 2 + crop.panX;
+      const top = circleSize / 2 - displayH / 2 + crop.panY;
+      imgEl.style.width = `${displayW}px`;
+      imgEl.style.height = `${displayH}px`;
+      imgEl.style.left = `${left}px`;
+      imgEl.style.top = `${top}px`;
+    }
+
+    imgEl.onload = () => {
+      crop.naturalW = imgEl.naturalWidth;
+      crop.naturalH = imgEl.naturalHeight;
+      crop.baseScale = circleSize / Math.min(crop.naturalW, crop.naturalH);
+      imgEl.style.display = "block";
+      applyTransform();
+      useBtn.disabled = false;
+    };
+    imgEl.onerror = () => {
+      msgEl.textContent = "Couldn't load that image.";
+      useBtn.disabled = true;
+    };
+    imgEl.src = objectUrl;
+
+    // Drag to pan -- pointer events cover touch, mouse, and trackpad alike.
+    let dragging = false, startX = 0, startY = 0, startPanX = 0, startPanY = 0;
+    circleEl.addEventListener("pointerdown", (e) => {
+      dragging = true;
+      circleEl.classList.add("dragging");
+      circleEl.setPointerCapture(e.pointerId);
+      startX = e.clientX; startY = e.clientY;
+      startPanX = crop.panX; startPanY = crop.panY;
+    });
+    circleEl.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      crop.panX = startPanX + (e.clientX - startX);
+      crop.panY = startPanY + (e.clientY - startY);
+      applyTransform();
+    });
+    ["pointerup", "pointercancel", "pointerleave"].forEach((evt) => {
+      circleEl.addEventListener(evt, () => { dragging = false; circleEl.classList.remove("dragging"); });
+    });
+
+    zoomEl.addEventListener("input", () => {
+      crop.zoom = Number(zoomEl.value) / 100;
+      applyTransform();
+    });
+
+    cropWrap.querySelector("#cropper-cancel-btn").addEventListener("click", closeCropper);
+
+    useBtn.addEventListener("click", async () => {
+      useBtn.disabled = true;
+      useBtn.textContent = "Saving…";
+      try {
+        const OUT = 480;
+        const drawScale = OUT / circleSize;
+        const canvas = document.createElement("canvas");
+        canvas.width = OUT;
+        canvas.height = OUT;
+        const ctx = canvas.getContext("2d");
+        const scale = crop.baseScale * crop.zoom;
+        const displayW = crop.naturalW * scale;
+        const displayH = crop.naturalH * scale;
+        const left = circleSize / 2 - displayW / 2 + crop.panX;
+        const top = circleSize / 2 - displayH / 2 + crop.panY;
+        ctx.drawImage(imgEl, left * drawScale, top * drawScale, displayW * drawScale, displayH * drawScale);
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+        if (!blob) throw new Error("Couldn't process that image.");
+        await uploadAvatarBlob(blob);
+        closeCropper();
+        menu.photoMsg = "";
+        redraw();
+      } catch (err) {
+        msgEl.textContent = "Upload failed: " + (err.message || err);
+        useBtn.disabled = false;
+        useBtn.textContent = "Use Photo";
+      }
+    });
+  }
+
   function redraw() {
     const notif = notifButtonInfo();
+    const hasCustomAvatar = !!(state.avatarUrl || state.avatarMonogram);
     wrap.innerHTML = `
       <div class="modal-sheet">
         <div style="display:flex; justify-content:center; margin-bottom:16px;">
-          <div class="avatar-circle-lg">${avatarInnerHtml(state.avatarUrl, state.username)}</div>
+          <div class="avatar-circle-lg">${avatarInnerHtml(state.avatarUrl, state.avatarMonogram, state.username)}</div>
         </div>
 
-        <div style="text-align:center; margin-bottom:20px;">
+        <div style="text-align:center; margin-bottom:12px;">
           <input type="file" id="account-avatar-input" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none;">
-          <button class="btn btn-secondary" id="account-change-photo-btn" style="width:auto; padding:8px 14px;" ${menu.photoUploading ? "disabled" : ""}>
-            ${menu.photoUploading ? "Uploading…" : "Change Photo"}
-          </button>
+          <div class="btn-row">
+            <button class="btn btn-secondary" id="account-change-photo-btn" ${menu.photoUploading ? "disabled" : ""}>
+              ${menu.photoUploading ? "Uploading…" : "Change Photo"}
+            </button>
+            <button class="btn btn-secondary" id="account-monogram-btn">Use Letters</button>
+          </div>
           ${menu.photoMsg ? `<div class="hint" style="margin-top:6px;">${escapeHtml(menu.photoMsg)}</div>` : ""}
         </div>
+
+        ${menu.showMonogramEditor ? `
+          <div class="field">
+            <label>Letters (up to 3, e.g. your initials)</label>
+            <input type="text" id="account-monogram-input" maxlength="3" value="${escapeHtml(menu.monogramDraft)}" style="text-transform:uppercase;">
+          </div>
+          <div class="btn-row" style="margin-bottom:6px;">
+            <button class="btn btn-secondary" id="account-monogram-cancel-btn">Cancel</button>
+            <button class="btn btn-primary" id="account-monogram-save-btn" ${menu.monogramSaving ? "disabled" : ""}>
+              ${menu.monogramSaving ? "Saving…" : "Save Letters"}
+            </button>
+          </div>
+          <div class="hint" style="min-height:1.2em; margin-bottom:10px;">${menu.monogramMsg ? escapeHtml(menu.monogramMsg) : ""}</div>
+        ` : ""}
+
+        ${hasCustomAvatar ? `
+          <button class="btn btn-secondary" id="account-reset-avatar-btn" style="margin-bottom:6px;" ${menu.resetSaving ? "disabled" : ""}>
+            ${menu.resetSaving ? "Resetting…" : "Reset to Default"}
+          </button>
+          <div class="hint" style="min-height:1.2em; margin-bottom:10px;">${menu.resetMsg ? escapeHtml(menu.resetMsg) : ""}</div>
+        ` : ""}
 
         <div class="field">
           <label>Display name</label>
@@ -324,36 +518,64 @@ async function openAccountMenu() {
       wrap.querySelector("#account-avatar-input").click();
     });
 
-    wrap.querySelector("#account-avatar-input")?.addEventListener("change", async (e) => {
+    wrap.querySelector("#account-avatar-input")?.addEventListener("change", (e) => {
       const file = e.target.files[0];
+      e.target.value = ""; // let the same file be re-picked later if they cancel out
       if (!file) return;
-      menu.photoUploading = true;
-      menu.photoMsg = "";
+      openCropper(file);
+    });
+
+    wrap.querySelector("#account-monogram-btn")?.addEventListener("click", () => {
+      menu.showMonogramEditor = true;
+      menu.monogramDraft = state.avatarMonogram || "";
+      menu.monogramMsg = "";
+      redraw();
+    });
+    wrap.querySelector("#account-monogram-cancel-btn")?.addEventListener("click", () => {
+      menu.showMonogramEditor = false;
+      redraw();
+    });
+    wrap.querySelector("#account-monogram-save-btn")?.addEventListener("click", async () => {
+      const letters = (wrap.querySelector("#account-monogram-input").value || "").trim().toUpperCase();
+      if (!letters) {
+        menu.monogramMsg = "Enter at least one letter.";
+        redraw();
+        return;
+      }
+      menu.monogramSaving = true;
+      menu.monogramMsg = "";
       redraw();
       try {
-        const ext = file.name.includes(".") ? file.name.split(".").pop().toLowerCase() : "jpg";
-        const path = `${state.user.id}/${crypto.randomUUID()}.${ext}`;
-        const { error: upErr } = await supabase.storage.from("avatars").upload(path, file, {
-          contentType: file.type || "application/octet-stream",
-        });
-        if (upErr) throw upErr;
-        const { data } = supabase.storage.from("avatars").getPublicUrl(path);
         const oldUrl = state.avatarUrl;
-        await supabase.from("players").update({ avatar_url: data.publicUrl }).eq("id", state.user.id);
-        state.avatarUrl = data.publicUrl;
-        // Best-effort cleanup of the old file so the bucket doesn't just grow forever.
-        if (oldUrl) {
-          const marker = "/avatars/";
-          const idx = oldUrl.indexOf(marker);
-          if (idx !== -1) {
-            try { await supabase.storage.from("avatars").remove([oldUrl.slice(idx + marker.length)]); } catch (_) { /* non-critical */ }
-          }
-        }
+        await supabase.from("players").update({ avatar_monogram: letters, avatar_url: null }).eq("id", state.user.id);
+        state.avatarMonogram = letters;
+        state.avatarUrl = null;
+        await removeStoredAvatar(oldUrl);
+        menu.showMonogramEditor = false;
         render(); // refresh the top-bar avatar too
       } catch (err) {
-        menu.photoMsg = "Upload failed: " + (err.message || err);
+        menu.monogramMsg = "Couldn't save: " + (err.message || err);
       }
-      menu.photoUploading = false;
+      menu.monogramSaving = false;
+      redraw();
+    });
+
+    wrap.querySelector("#account-reset-avatar-btn")?.addEventListener("click", async () => {
+      if (!confirm("Reset your avatar back to the default letter circle?")) return;
+      menu.resetSaving = true;
+      menu.resetMsg = "";
+      redraw();
+      try {
+        const oldUrl = state.avatarUrl;
+        await supabase.from("players").update({ avatar_url: null, avatar_monogram: null }).eq("id", state.user.id);
+        state.avatarUrl = null;
+        state.avatarMonogram = null;
+        await removeStoredAvatar(oldUrl);
+        render(); // refresh the top-bar avatar too
+      } catch (err) {
+        menu.resetMsg = "Couldn't reset: " + (err.message || err);
+      }
+      menu.resetSaving = false;
       redraw();
     });
 

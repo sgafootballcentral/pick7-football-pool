@@ -30,7 +30,7 @@ export function renderLeaderboard(el, { supabase }) {
         <h3>Active League Roster</h3>
         <div class="card">${roster.map((u) => `
           <div class="player-with-avatar" style="margin-bottom:6px;">
-            <span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[u], u)}</span>${escapeHtml(u)}
+            <span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[u]?.url, s.avatars[u]?.monogram, u)}</span>${escapeHtml(u)}
           </div>
         `).join("")}</div>
       `;
@@ -80,7 +80,7 @@ export function renderLeaderboard(el, { supabase }) {
               const rankClass = r.place <= 3 ? `rank-${r.place}` : "";
               return `<tr>
                 <td class="${rankClass}">${medals[r.place] || r.place}</td>
-                <td><span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[r.username], r.username)}</span>${escapeHtml(r.username)}</span></td>
+                <td><span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[r.username]?.url, s.avatars[r.username]?.monogram, r.username)}</span>${escapeHtml(r.username)}</span></td>
                 <td>${r.wins} | ${r.losses}</td>
                 <td>${wk.wins} | ${wk.losses}</td>
                 <td>${(r.winPct * 100).toFixed(1)}%</td>

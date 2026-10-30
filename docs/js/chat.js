@@ -290,7 +290,7 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
     return `
       <div class="chat-msg ${mine ? "mine" : ""}">
         <div class="meta player-with-avatar">
-          <span class="avatar-circle-sm">${avatarInnerHtml(s.avatarsByUsername[m.username], m.username)}</span>
+          <span class="avatar-circle-sm">${avatarInnerHtml(s.avatarsByUsername[m.username]?.url, s.avatarsByUsername[m.username]?.monogram, m.username)}</span>
           ${escapeHtml(m.username)} &middot; ${escapeHtml(timeStr)}
         </div>
         <div class="bubble" data-msg-id="${m.id}">
