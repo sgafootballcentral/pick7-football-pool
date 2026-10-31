@@ -124,6 +124,7 @@ export function renderLeaderboard(el, { supabase, user, username }) {
           </div>
           <div class="podium-name">${escapeHtml(r.username)}</div>
           <div class="podium-record">${r.wins}–${r.losses} <span style="opacity:0.7;">overall</span></div>
+          <div class="podium-record">${(r.winPct * 100).toFixed(1)}% win · ${rankChipHtml(r)}</div>
           <div class="podium-record">Wk ${s.selectedWeek}: ${wk.wins}–${wk.losses}</div>
           <div class="podium-platform">${r.place}</div>
         </button>
