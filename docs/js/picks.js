@@ -259,7 +259,11 @@ async function buildSlatePdf(games, weekNumber) {
   return doc;
 }
 
-export function renderPicks(el, { supabase, user, username, isAdmin }) {
+export function renderPicks(el, { supabase, user, username, isAdmin, currentSeason }) {
+  const seasonId = currentSeason?.id ?? null;
+  function withSeason(query) {
+    return seasonId ? query.eq("season_id", seasonId) : query;
+  }
   const s = {
     loading: true,
     error: "",
@@ -796,11 +800,12 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
 
   async function submitPicks() {
     const gameLookup = Object.fromEntries(s.games.map((g) => [g.game_id, g]));
-    await supabase.from("picks").delete().eq("user_id", user.id).eq("week_number", s.week);
+    await withSeason(supabase.from("picks").delete().eq("user_id", user.id).eq("week_number", s.week));
     const rows = Object.entries(s.selected).map(([gameId, team]) => ({
       user_id: user.id, username, week_number: s.week,
       game_id: gameId, selected_team: team,
       spread_at_pick: gameLookup[gameId]?.spread_value || "",
+      ...(seasonId ? { season_id: seasonId } : {}),
     }));
     // One request for every pick instead of looping insert() per row --
     // besides being up to 7x faster, a loop left a real failure mode: the
@@ -821,6 +826,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     try {
       await supabase.from("pick_submissions").insert({
         user_id: user.id, username, week_number: s.week, picks_count: rows.length,
+        ...(seasonId ? { season_id: seasonId } : {}),
       });
     } catch (_) { /* non-critical */ }
     s.recap = rows.map((r) => ({
@@ -829,7 +835,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
       spread: gameLookup[r.game_id]?.spread_value || "",
     }));
     s.recapPending = false;
-    const { data } = await supabase.from("picks").select("*").eq("user_id", user.id).eq("week_number", s.week);
+    const { data } = await withSeason(supabase.from("picks").select("*").eq("user_id", user.id).eq("week_number", s.week));
     s.existingPicks = data || [];
     s.pickResults = {};
     for (const p of s.existingPicks) s.pickResults[p.game_id] = p.result;
@@ -869,10 +875,11 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
       await supabase.from("pick_lock_exceptions").insert({
         week_number: s.week, user_id: user.id, username,
         status: "pending", picks_payload: payload,
+        ...(seasonId ? { season_id: seasonId } : {}),
       });
     }
-    const { data } = await supabase.from("pick_lock_exceptions").select("*")
-      .eq("week_number", s.week).eq("user_id", user.id).order("requested_at", { ascending: false });
+    const { data } = await withSeason(supabase.from("pick_lock_exceptions").select("*")
+      .eq("week_number", s.week).eq("user_id", user.id)).order("requested_at", { ascending: false });
     s.myExceptions = data || [];
     s.recap = payload.map((r) => ({
       selected_team: r.selected_team,
@@ -987,7 +994,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
   async function loadWeek() {
     s.loading = true; draw();
     try {
-      const { data: games, error: gErr } = await supabase.from("games").select("*").eq("week_number", s.week);
+      const { data: games, error: gErr } = await withSeason(supabase.from("games").select("*").eq("week_number", s.week));
       if (gErr) throw gErr;
       s.games = games || [];
       s.selected = {};
@@ -999,7 +1006,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
       // identical to "nobody's picked yet"), which made a real problem here
       // look exactly like normal, empty data -- log it now so it's visible
       // in the console instead of just quietly showing nothing.
-      const { data: weekPicks, error: pErr } = await supabase.from("picks").select("*").eq("week_number", s.week);
+      const { data: weekPicks, error: pErr } = await withSeason(supabase.from("picks").select("*").eq("week_number", s.week));
       if (pErr) console.error("Couldn't load this week's picks:", pErr);
       const weekPicksAll = weekPicks || [];
       s.existingPicks = weekPicksAll.filter((p) => p.user_id === user.id);
@@ -1018,14 +1025,14 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
       // \u{1F512} Admin pick lock for this week, and my own exception requests
       // against it (if any) -- see the ADMIN PICK LOCK block in draw().
       try {
-        const { data: lockRow } = await supabase.from("week_pick_locks").select("*").eq("week_number", s.week).maybeSingle();
+        const { data: lockRow } = await withSeason(supabase.from("week_pick_locks").select("*").eq("week_number", s.week)).maybeSingle();
         s.weekLock = lockRow || null;
       } catch (_) {
         s.weekLock = null;
       }
       try {
-        const { data: exceptions } = await supabase.from("pick_lock_exceptions").select("*")
-          .eq("week_number", s.week).eq("user_id", user.id).order("requested_at", { ascending: false });
+        const { data: exceptions } = await withSeason(supabase.from("pick_lock_exceptions").select("*")
+          .eq("week_number", s.week).eq("user_id", user.id)).order("requested_at", { ascending: false });
         s.myExceptions = exceptions || [];
       } catch (_) {
         s.myExceptions = [];
@@ -1053,7 +1060,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
 
   (async function init() {
     try {
-      const { data: rows, error: wErr } = await supabase.from("games").select("week_number");
+      const { data: rows, error: wErr } = await withSeason(supabase.from("games").select("week_number"));
       if (wErr) throw wErr;
       const weeks = [...new Set((rows || []).map((r) => r.week_number))].sort((a, b) => b - a);
       s.weeks = weeks;
