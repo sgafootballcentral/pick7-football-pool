@@ -3,7 +3,7 @@ import { getSharedWeek, setSharedWeek } from "./weekState.js";
 
 const MEDALS = { 1: "\u{1F947}", 2: "\u{1F948}", 3: "\u{1F949}" };
 
-export function renderLeaderboard(el, { supabase, user, username }) {
+export function renderLeaderboard(el, { supabase, user, username, unreadDmSenders, markDmRead }) {
   // Falls back to Week 1 only if the Picks tab hasn't set a week yet this
   // session (Picks is the default tab, so in practice this almost always
   // already reflects whatever week the player was just looking at there).
@@ -141,7 +141,7 @@ export function renderLeaderboard(el, { supabase, user, username }) {
                     <span class="avatar-circle-lg" style="${tier === "first" ? "width:62px;height:62px;font-size:1.3rem;" : "width:48px;height:48px;font-size:1rem;"}">${avatarInnerHtml(s.avatars[r.username]?.url, s.avatars[r.username]?.monogram, r.username)}</span>
                     <span class="podium-medal">${medal}</span>
                   </div>
-                  <div class="podium-name">${escapeHtml(r.username)}</div>
+                  <div class="podium-name">${escapeHtml(r.username)}${unreadDmSenders?.[r.user_id] ? `<span class="dm-unread-dot" title="New message"></span>` : ""}</div>
                   <div class="podium-record">${r.wins}–${r.losses} <span style="opacity:0.7;">overall</span></div>
                   <div class="podium-record">${(r.winPct * 100).toFixed(1)}% win · ${rankChipHtml(r)}</div>
                   <div class="podium-record">Wk ${s.selectedWeek}: ${wk.wins}–${wk.losses}</div>
@@ -175,7 +175,7 @@ export function renderLeaderboard(el, { supabase, user, username }) {
               const isMe = r.user_id === user.id;
               return `<tr class="standings-clickable ${isMe ? "standings-me" : ""}" data-open-profile="${escapeHtml(r.user_id)}" data-open-profile-name="${escapeHtml(r.username)}">
                 <td class="${rankClass}">${MEDALS[r.place] || r.place}</td>
-                <td><span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[r.username]?.url, s.avatars[r.username]?.monogram, r.username)}</span>${escapeHtml(r.username)}${isMe ? ` <span class="hint">(you)</span>` : ""}</span></td>
+                <td><span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[r.username]?.url, s.avatars[r.username]?.monogram, r.username)}</span>${escapeHtml(r.username)}${isMe ? ` <span class="hint">(you)</span>` : ""}${unreadDmSenders?.[r.user_id] ? `<span class="dm-unread-dot" title="New message"></span>` : ""}</span></td>
                 <td>${r.wins} | ${r.losses}</td>
                 <td>${wk.wins} | ${wk.losses}</td>
                 <td>${(r.winPct * 100).toFixed(1)}%</td>
@@ -252,6 +252,7 @@ export function renderLeaderboard(el, { supabase, user, username }) {
   }
 
   async function openDmThread(otherId, otherUsername) {
+    markDmRead?.(otherId);
     s.dm = { otherId, otherUsername, messages: [], loading: true };
     draw();
     await loadDm();

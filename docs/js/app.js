@@ -23,6 +23,9 @@ const state = {
   recoveryMode: false,
   lastChatReadAt: null,
   hasUnreadChat: false,
+  dmReadsByOther: {}, // other_id -> last_read_at, for DMs I've opened
+  unreadDmSenders: {}, // sender_id -> true, for senders with an unread DM to me
+  hasUnreadDm: false,
   notifState: "checking",
 };
 
@@ -100,6 +103,14 @@ async function refreshIdentity() {
   } catch (_) {
     state.lastChatReadAt = null;
   }
+
+  try {
+    const { data } = await supabase.from("dm_reads").select("other_id, last_read_at").eq("user_id", state.user.id);
+    state.dmReadsByOther = {};
+    for (const r of data || []) state.dmReadsByOther[r.other_id] = r.last_read_at;
+  } catch (_) {
+    state.dmReadsByOther = {};
+  }
 }
 
 // Lightweight poll for new chat activity -- independent of whether the Chat
@@ -140,6 +151,59 @@ async function markChatRead() {
   }
 }
 
+// Lightweight poll for unread DMs, same idea as checkUnreadChat -- runs
+// independent of which tab is open so the Standings nav badge is accurate.
+// Looks at recent incoming messages (capped, this is a small private pool)
+// and reduces to "most recent message per sender" client-side, since the
+// Supabase JS client has no group-by.
+async function checkUnreadDm() {
+  if (!state.user) return;
+  try {
+    const { data } = await supabase
+      .from("direct_messages")
+      .select("sender_id, created_at")
+      .eq("recipient_id", state.user.id)
+      .order("created_at", { ascending: false })
+      .limit(200);
+    const latestBySender = {};
+    for (const m of data || []) {
+      if (!(m.sender_id in latestBySender)) latestBySender[m.sender_id] = m.created_at;
+    }
+    const unread = {};
+    for (const [senderId, createdAt] of Object.entries(latestBySender)) {
+      const lastRead = state.dmReadsByOther[senderId];
+      if (!lastRead || new Date(createdAt) > new Date(lastRead)) unread[senderId] = true;
+    }
+    state.unreadDmSenders = unread;
+    const nowUnread = Object.keys(unread).length > 0;
+    if (nowUnread !== state.hasUnreadDm) {
+      state.hasUnreadDm = nowUnread;
+      render();
+    }
+  } catch (_) {
+    /* non-critical */
+  }
+}
+
+// Marks one DM thread as read -- called when the player opens it from the
+// Standings profile sheet. Upserts rather than insert/update because this
+// is the first time this pair has ever had a read row.
+async function markDmRead(otherId) {
+  if (!state.user || !otherId) return;
+  const nowIso = new Date().toISOString();
+  state.dmReadsByOther[otherId] = nowIso;
+  if (state.unreadDmSenders[otherId]) {
+    delete state.unreadDmSenders[otherId];
+    state.hasUnreadDm = Object.keys(state.unreadDmSenders).length > 0;
+    render();
+  }
+  try {
+    await supabase.from("dm_reads").upsert({ user_id: state.user.id, other_id: otherId, last_read_at: nowIso });
+  } catch (_) {
+    /* non-critical */
+  }
+}
+
 supabase.auth.onAuthStateChange((event, session) => {
   if (event === "PASSWORD_RECOVERY") {
     state.recoveryMode = true;
@@ -149,10 +213,13 @@ supabase.auth.onAuthStateChange((event, session) => {
   state.session = session;
   state.user = session?.user ?? null;
   if (state.user && !state.recoveryMode) {
-    refreshIdentity().then(() => { render(); checkUnreadChat(); });
+    refreshIdentity().then(() => { render(); checkUnreadChat(); checkUnreadDm(); });
   } else if (!state.user) {
     state.hasUnreadChat = false;
     state.lastChatReadAt = null;
+    state.hasUnreadDm = false;
+    state.unreadDmSenders = {};
+    state.dmReadsByOther = {};
     state.username = null;
     state.avatarUrl = null;
     state.avatarMonogram = null;
@@ -196,6 +263,7 @@ function renderChrome(innerHtml) {
         </button>
         <button data-tab="leaderboard" class="${state.activeTab === "leaderboard" ? "active" : ""}">
           <span class="icon">\u{1F3C6}</span>Standings
+          ${state.hasUnreadDm ? `<span class="nav-badge"></span>` : ""}
         </button>
         <button data-tab="compare" class="${state.activeTab === "compare" ? "active" : ""}">
           <span class="icon">\u{1F19A}</span>Compare
@@ -687,7 +755,7 @@ export function render() {
 
   renderChrome(`<div id="tab-slot"></div>`);
   const slot = document.getElementById("tab-slot");
-  const ctx = { supabase, user: state.user, username: state.username, isAdmin: state.isAdmin };
+  const ctx = { supabase, user: state.user, username: state.username, isAdmin: state.isAdmin, unreadDmSenders: state.unreadDmSenders, markDmRead };
 
   if (state.activeTab === "picks") renderPicks(slot, ctx);
   else if (state.activeTab === "leaderboard") renderLeaderboard(slot, ctx);
@@ -711,5 +779,7 @@ if (navigator.storage && navigator.storage.persist) {
   await refreshIdentity();
   render();
   checkUnreadChat();
+  checkUnreadDm();
   setInterval(checkUnreadChat, 20000);
+  setInterval(checkUnreadDm, 20000);
 })();
