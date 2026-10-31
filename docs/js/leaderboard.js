@@ -3,12 +3,13 @@ import { getSharedWeek, setSharedWeek } from "./weekState.js";
 
 const MEDALS = { 1: "\u{1F947}", 2: "\u{1F948}", 3: "\u{1F949}" };
 
-export function renderLeaderboard(el, { supabase, user, username, unreadDmSenders, markDmRead }) {
+export function renderLeaderboard(el, { supabase, user, username, unreadDmSenders, markDmRead, currentSeason }) {
   // Falls back to Week 1 only if the Picks tab hasn't set a week yet this
   // session (Picks is the default tab, so in practice this almost always
   // already reflects whatever week the player was just looking at there).
   const s = {
     loading: true, error: "", picksData: [], avatars: {}, selectedWeek: getSharedWeek() || 1,
+    seasons: [], selectedSeasonId: currentSeason?.id ?? null,
     profile: null, // { userId, username } when the profile sheet is open
     dm: null, // { otherId, otherUsername, messages, loading } when a DM thread is open
   };
@@ -156,6 +157,14 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
 
     el.innerHTML = `
       <h2>\u{1F3C6} League Standings</h2>
+      ${s.seasons.length > 1 ? `
+        <div class="week-select-row">
+          <label class="hint" style="white-space:nowrap;">Season:</label>
+          <select id="lb-season-select">
+            ${s.seasons.map((se) => `<option value="${se.id}" ${se.id === s.selectedSeasonId ? "selected" : ""}>${escapeHtml(se.label)}</option>`).join("")}
+          </select>
+        </div>
+      ` : ""}
       <div class="week-select-row">
         <label class="hint" style="white-space:nowrap;">Show record for week:</label>
         <select id="lb-week-select">
@@ -192,6 +201,11 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
       s.selectedWeek = Number(e.target.value);
       setSharedWeek(s.selectedWeek);
       draw();
+    });
+
+    el.querySelector("#lb-season-select")?.addEventListener("change", async (e) => {
+      s.selectedSeasonId = Number(e.target.value);
+      await loadStandings();
     });
 
     el.querySelectorAll("[data-open-profile]").forEach((node) => {
@@ -366,18 +380,25 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
     if (wrap) renderDmInner(wrap);
   }
 
-  (async function init() {
+  // Re-usable for both the first load and a season-switch -- the season
+  // dropdown only ever needs to swap this data and redraw, not reload the
+  // whole page.
+  async function loadStandings() {
+    s.loading = true;
+    draw();
     try {
       // picks_week_tallies is a Postgres view (user_id + week_number -> wins/
-      // losses, with the player's current name joined in live) instead of
-      // raw picks rows. Two things this fixes at once: (1) the raw picks
-      // table recently passed Supabase's default 1000-row API cap, which
-      // was silently truncating this unfiltered select and producing
-      // wrong, randomly-shifting totals; (2) grouping by user_id instead
-      // of by username means a display-name change can never split or
-      // orphan anyone's record again, however the rename happens.
+      // losses, with the player's current name and season_id joined in
+      // live) instead of raw picks rows. Two things this fixes at once:
+      // (1) the raw picks table recently passed Supabase's default 1000-row
+      // API cap, which was silently truncating this unfiltered select and
+      // producing wrong, randomly-shifting totals; (2) grouping by user_id
+      // instead of by username means a display-name change can never split
+      // or orphan anyone's record again, however the rename happens.
+      let tallyQuery = supabase.from("picks_week_tallies").select("user_id, username, week_number, wins, losses, season_id");
+      if (s.selectedSeasonId != null) tallyQuery = tallyQuery.eq("season_id", s.selectedSeasonId);
       const [{ data, error }, avatars] = await Promise.all([
-        supabase.from("picks_week_tallies").select("user_id, username, week_number, wins, losses"),
+        tallyQuery,
         fetchAvatarsByUsername(supabase),
       ]);
       if (error) throw error;
@@ -390,6 +411,17 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
       s.error = e.message || "Couldn't load standings.";
       draw();
     }
+  }
+
+  (async function init() {
+    try {
+      const { data: seasons } = await supabase.from("seasons").select("id, year, label").order("year", { ascending: false });
+      s.seasons = seasons || [];
+      if (s.selectedSeasonId == null && s.seasons.length) s.selectedSeasonId = s.seasons[0].id;
+    } catch (_) {
+      s.seasons = [];
+    }
+    await loadStandings();
   })();
 
   draw();

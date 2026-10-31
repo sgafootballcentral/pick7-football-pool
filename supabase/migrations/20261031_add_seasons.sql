@@ -106,3 +106,18 @@ alter table picks alter column season_id set default current_season_id();
 alter table pick_submissions alter column season_id set default current_season_id();
 alter table week_pick_locks alter column season_id set default current_season_id();
 alter table pick_lock_exceptions alter column season_id set default current_season_id();
+
+-- Phase F (2026-10-31, same day): picks_week_tallies is a view over picks
+-- used by leaderboard.js -- widen it to expose season_id so standings can
+-- be scoped and filtered per season.
+create or replace view picks_week_tallies as
+select
+  p.user_id,
+  coalesce(pl.username, p.username) as username,
+  p.week_number,
+  count(*) filter (where p.result = 'win') as wins,
+  count(*) filter (where p.result = 'loss') as losses,
+  p.season_id
+from picks p
+left join players pl on pl.id = p.user_id
+group by p.user_id, coalesce(pl.username, p.username), p.week_number, p.season_id;
