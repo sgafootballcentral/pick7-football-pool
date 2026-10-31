@@ -617,3 +617,7 @@ table.profile-weeks th { color: var(--text-dim); font-weight: 600; font-size: 0.
 
 /* Chat: gradient tint on your own messages, matching the accent gradient used elsewhere */
 .chat-msg.mine .bubble { background: linear-gradient(135deg, var(--accent-dim), #3a1515); }
+
+/* Podium: a tied place shows every tied player stacked within that tier */
+.podium-players-stack { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.podium-player { background: none; border: none; font: inherit; color: inherit; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 4px; width: 100%; padding: 0; }

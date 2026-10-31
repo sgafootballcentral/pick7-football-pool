@@ -107,27 +107,45 @@ export function renderLeaderboard(el, { supabase, user, username }) {
 
     const weekOptions = Array.from({ length: 16 }, (_, i) => i + 1);
 
-    const podiumPlayers = standings.slice(0, 3);
-    const restPlayers = standings.slice(3);
-    const podiumOrder = podiumPlayers.length === 3 ? [podiumPlayers[1], podiumPlayers[0], podiumPlayers[2]] : podiumPlayers;
-    const podiumRankClass = (r) => (r === podiumPlayers[0] ? "first" : r === podiumPlayers[1] ? "second" : "third");
+    // A tie shares a place (1-2-2-4, see above), so "top 3" means the top 3
+    // DISTINCT place values, not simply the first 3 sorted rows -- a 3-way
+    // tie for 2nd must show all three players on the 2nd-place tier, never
+    // split two of them onto the podium and bump the third into the table
+    // while still (correctly) showing a "2" rank badge there.
+    const distinctPlaces = [...new Set(standings.map((r) => r.place))].sort((a, b) => a - b).slice(0, 3);
+    const podiumGroups = distinctPlaces.map((pl) => standings.filter((r) => r.place === pl));
+    const restPlayers = standings.filter((r) => !distinctPlaces.includes(r.place));
+    const tierNames = ["first", "second", "third"];
+    // Visual layout convention: 2nd on the left, 1st in the center, 3rd on
+    // the right -- only when all three tiers are actually present.
+    const visualOrder = podiumGroups.length === 3 ? [1, 0, 2] : podiumGroups.map((_, i) => i);
 
-    function podiumItemHtml(r) {
-      if (!r) return `<div class="podium-item" style="visibility:hidden;"></div>`;
-      const cls = podiumRankClass(r);
-      const wk = weekByPlayer[r.user_id] || { wins: 0, losses: 0 };
+    function podiumTierHtml(groupIdx) {
+      const players = podiumGroups[groupIdx];
+      if (!players || !players.length) return `<div class="podium-item" style="visibility:hidden;"></div>`;
+      const tier = tierNames[groupIdx];
+      const medal = MEDALS[groupIdx + 1];
       return `
-        <button type="button" class="podium-item ${cls}" data-open-profile="${escapeHtml(r.user_id)}" data-open-profile-name="${escapeHtml(r.username)}">
-          <div class="podium-avatar-wrap">
-            <span class="avatar-circle-lg" style="${cls === "first" ? "width:62px;height:62px;font-size:1.3rem;" : "width:48px;height:48px;font-size:1rem;"}">${avatarInnerHtml(s.avatars[r.username]?.url, s.avatars[r.username]?.monogram, r.username)}</span>
-            <span class="podium-medal">${MEDALS[cls === "first" ? 1 : cls === "second" ? 2 : 3]}</span>
+        <div class="podium-item ${tier}">
+          <div class="podium-players-stack">
+            ${players.map((r) => {
+              const wk = weekByPlayer[r.user_id] || { wins: 0, losses: 0 };
+              return `
+                <button type="button" class="podium-player" data-open-profile="${escapeHtml(r.user_id)}" data-open-profile-name="${escapeHtml(r.username)}">
+                  <div class="podium-avatar-wrap">
+                    <span class="avatar-circle-lg" style="${tier === "first" ? "width:62px;height:62px;font-size:1.3rem;" : "width:48px;height:48px;font-size:1rem;"}">${avatarInnerHtml(s.avatars[r.username]?.url, s.avatars[r.username]?.monogram, r.username)}</span>
+                    <span class="podium-medal">${medal}</span>
+                  </div>
+                  <div class="podium-name">${escapeHtml(r.username)}</div>
+                  <div class="podium-record">${r.wins}–${r.losses} <span style="opacity:0.7;">overall</span></div>
+                  <div class="podium-record">${(r.winPct * 100).toFixed(1)}% win · ${rankChipHtml(r)}</div>
+                  <div class="podium-record">Wk ${s.selectedWeek}: ${wk.wins}–${wk.losses}</div>
+                </button>
+              `;
+            }).join("")}
           </div>
-          <div class="podium-name">${escapeHtml(r.username)}</div>
-          <div class="podium-record">${r.wins}–${r.losses} <span style="opacity:0.7;">overall</span></div>
-          <div class="podium-record">${(r.winPct * 100).toFixed(1)}% win · ${rankChipHtml(r)}</div>
-          <div class="podium-record">Wk ${s.selectedWeek}: ${wk.wins}–${wk.losses}</div>
-          <div class="podium-platform">${r.place}</div>
-        </button>
+          <div class="podium-platform">${players[0].place}</div>
+        </div>
       `;
     }
 
@@ -140,7 +158,7 @@ export function renderLeaderboard(el, { supabase, user, username }) {
         </select>
       </div>
 
-      ${podiumPlayers.length ? `<div class="podium">${podiumOrder.map(podiumItemHtml).join("")}</div>` : ""}
+      ${podiumGroups.length ? `<div class="podium">${visualOrder.map(podiumTierHtml).join("")}</div>` : ""}
 
       <div style="overflow-x:auto;">
         <table class="standings">
