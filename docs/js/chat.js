@@ -12,6 +12,10 @@ function storagePathFromUrl(url) {
 // user can switch their OS/browser keyboard into emoji mode and type one.
 const REACTION_EMOJIS = ["\u{1F44D}", "\u2764\uFE0F", "\u{1F602}", "\u{1F62E}", "\u{1F622}", "\u{1F525}"];
 
+// Keep phone-camera photos and long gifs from quietly eating mobile data
+// and storage -- enforced client-side before the upload even starts.
+const CHAT_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+
 function buildReactionsByMessage(rows, myUserId, currentUsernames) {
   const map = {};
   for (const r of rows || []) {
@@ -112,7 +116,18 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
     el.querySelector("#chat-clear-btn")?.addEventListener("click", onClearAll);
     el.querySelector("#chat-attach-btn").addEventListener("click", () => el.querySelector("#chat-file-input").click());
     el.querySelector("#chat-file-input").addEventListener("change", (e) => {
-      s.pendingFile = e.target.files[0] || null;
+      const file = e.target.files[0] || null;
+      // A full-res phone photo or a long gif can be tens of MB -- catch it
+      // here instead of letting it silently crawl up over mobile data and
+      // pile onto the chat-images storage bucket every time.
+      if (file && file.size > CHAT_IMAGE_MAX_BYTES) {
+        alert(`That file is ${(file.size / (1024 * 1024)).toFixed(1)}MB -- please attach something under ${CHAT_IMAGE_MAX_BYTES / (1024 * 1024)}MB.`);
+        e.target.value = "";
+        s.pendingFile = null;
+        draw();
+        return;
+      }
+      s.pendingFile = file;
       draw();
     });
     el.querySelector("#chat-remove-file")?.addEventListener("click", () => { s.pendingFile = null; draw(); });
