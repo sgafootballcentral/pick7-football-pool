@@ -802,8 +802,17 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
       game_id: gameId, selected_team: team,
       spread_at_pick: gameLookup[gameId]?.spread_value || "",
     }));
-    for (const row of rows) {
-      await supabase.from("picks").insert(row);
+    // One request for every pick instead of looping insert() per row --
+    // besides being up to 7x faster, a loop left a real failure mode: the
+    // delete above had already run, so a dropped connection partway
+    // through the loop (easy on a phone's signal) silently left whoever
+    // hit it with fewer picks saved than they actually submitted.
+    if (rows.length) {
+      const { error: insErr } = await supabase.from("picks").insert(rows);
+      if (insErr) {
+        alert("Couldn't save your picks -- please try again: " + (insErr.message || insErr));
+        return;
+      }
     }
     // One row per submission event (not per pick) -- a Database Webhook on
     // this table's INSERT is what triggers the admin push notification,
