@@ -115,6 +115,7 @@ export function renderLeaderboard(el, { supabase, user, username }) {
     function podiumItemHtml(r) {
       if (!r) return `<div class="podium-item" style="visibility:hidden;"></div>`;
       const cls = podiumRankClass(r);
+      const wk = weekByPlayer[r.user_id] || { wins: 0, losses: 0 };
       return `
         <button type="button" class="podium-item ${cls}" data-open-profile="${escapeHtml(r.user_id)}" data-open-profile-name="${escapeHtml(r.username)}">
           <div class="podium-avatar-wrap">
@@ -122,7 +123,8 @@ export function renderLeaderboard(el, { supabase, user, username }) {
             <span class="podium-medal">${MEDALS[cls === "first" ? 1 : cls === "second" ? 2 : 3]}</span>
           </div>
           <div class="podium-name">${escapeHtml(r.username)}</div>
-          <div class="podium-record">${r.wins}–${r.losses}</div>
+          <div class="podium-record">${r.wins}–${r.losses} <span style="opacity:0.7;">overall</span></div>
+          <div class="podium-record">Wk ${s.selectedWeek}: ${wk.wins}–${wk.losses}</div>
           <div class="podium-platform">${r.place}</div>
         </button>
       `;
