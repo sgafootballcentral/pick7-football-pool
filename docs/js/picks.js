@@ -398,6 +398,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
           <button class="btn btn-primary" id="lock-btn">Lock In Weekly Picks</button>
           <button class="btn btn-secondary" id="refresh-btn" style="flex:0 0 auto; width:auto; padding:11px 14px;">\u{1F504}</button>
         </div>
+        <div class="hint" style="text-align:center; margin-top:4px; font-size:0.78rem;">You don't have to pick all 7 at once -- lock in as many as you're sure about now, and come back for the rest later.</div>
         <label class="hint" style="display:flex; align-items:center; gap:6px; margin-top:6px; justify-content:center;">
           <input type="checkbox" id="auto-refresh-toggle" ${s.autoRefresh ? "checked" : ""}> Auto-refresh scores every 60s
         </label>
@@ -407,7 +408,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
         <summary class="hint" style="cursor:pointer;">\u{1F522} Enter your picks by number instead</summary>
         <div class="card" style="margin-top:8px;">
           <div class="field">
-            <label>Your 7 picks, comma-separated (e.g. 1,5,9,12,23,78,100)</label>
+            <label>Your picks, comma-separated -- 1 to 7 of them (e.g. 1,5,9,12,23,78,100)</label>
             <input type="text" id="number-input" value="${escapeHtml(s.numberInput)}" placeholder="1,5,9,12,23,78,100">
           </div>
           ${s.numberError ? `<div class="error-msg">${escapeHtml(s.numberError)}</div>` : ""}
@@ -766,7 +767,8 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     if (invalid.length) s.numberError = `These numbers don't match any game this week: ${invalid.join(", ")}`;
     else if (dupes.length) s.numberError = `These numbers were entered more than once: ${dupes.join(", ")}`;
     else if (locked.length) s.numberError = `These games have already started and can't be picked: ${locked.join(", ")}`;
-    else if (entered.length !== 7) s.numberError = `You entered ${entered.length} number(s) -- exactly 7 are required.`;
+    else if (entered.length === 0) s.numberError = "Enter at least one number.";
+    else if (entered.length > 7) s.numberError = `You entered ${entered.length} numbers -- at most 7 are allowed.`;
     else {
       const gameLookup = Object.fromEntries(s.games.map((g) => [g.game_id, g]));
       const rows = entered.map((n) => {
@@ -875,10 +877,22 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
 
   async function onLockIn() {
     const count = Object.keys(s.selected).length;
-    if (count !== 7) {
+    if (count === 0) {
       s.error = "";
-      alert("You must pick exactly 7 games.");
+      alert("Pick at least one game before locking in your picks.");
       return;
+    }
+    if (count < 7) {
+      // Partial submissions are allowed -- just make sure they know exactly
+      // how many they're about to lock in before it goes through, since
+      // it's easy to mean to come back and finish the rest later.
+      const ok = confirm(
+        `You're submitting picks for ${count} of 7 games this week. The ` +
+        `other ${7 - count} game${7 - count === 1 ? "" : "s"} will stay unpicked for ` +
+        `now -- you can come back and add to or change these any time before ` +
+        `kickoff. Submit ${count} pick${count === 1 ? "" : "s"}?`
+      );
+      if (!ok) return;
     }
     if (s.existingPicks.length) {
       s.resubmit = { existingPicks: s.existingPicks, newPicks: { ...s.selected } };
