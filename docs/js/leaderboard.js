@@ -257,7 +257,7 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
     document.body.appendChild(wrap);
     wrap.querySelectorAll("tr[data-week]").forEach((row) => {
       row.addEventListener("click", () => {
-        openWeekPicksModal(userId, uname, Number(row.dataset.week));
+        openWeekPicksModal(userId, uname, Number(row.dataset.week), wrap);
       });
     });
     wrap.querySelector("#profile-close-btn").addEventListener("click", () => {
@@ -278,17 +278,27 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
   // whichever season the Standings tab is currently showing, not always
   // the live current season, so this stays correct when looking at a past
   // season's final standings too.
-  async function openWeekPicksModal(userId, uname, weekNumber) {
+  async function openWeekPicksModal(userId, uname, weekNumber, profileWrap) {
     const panel = document.createElement("div");
     panel.className = "modal-backdrop";
     document.body.appendChild(panel);
 
+    // The X goes all the way back to the Standings list -- it closes both
+    // this popup and the profile sheet underneath it, not just itself.
+    function closeToStandings() {
+      panel.remove();
+      profileWrap?.remove();
+      s.profile = null;
+    }
+
     panel.innerHTML = `
       <div class="modal-sheet">
+        <button class="modal-close-x" id="week-picks-x-btn" aria-label="Close">&times;</button>
         <h3 style="text-align:center; margin-top:0;">${escapeHtml(uname)} -- Week ${weekNumber}</h3>
         <div class="hint" style="text-align:center;">Loading…</div>
       </div>
     `;
+    panel.querySelector("#week-picks-x-btn").addEventListener("click", closeToStandings);
 
     try {
       let picksQuery = supabase.from("picks").select("*").eq("user_id", userId).eq("week_number", weekNumber);
@@ -309,6 +319,7 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
 
       panel.innerHTML = `
         <div class="modal-sheet">
+          <button class="modal-close-x" id="week-picks-x-btn" aria-label="Close">&times;</button>
           <h3 style="text-align:center; margin-top:0;">${escapeHtml(uname)} -- Week ${weekNumber}</h3>
           ${rows.length ? rows.map((p) => {
             const g = gameLookup[p.game_id];
@@ -336,15 +347,18 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
           <button class="btn btn-secondary" id="week-picks-close-btn" style="margin-top:10px;">Close</button>
         </div>
       `;
+      panel.querySelector("#week-picks-x-btn").addEventListener("click", closeToStandings);
       panel.querySelector("#week-picks-close-btn").addEventListener("click", () => panel.remove());
     } catch (e) {
       panel.innerHTML = `
         <div class="modal-sheet">
+          <button class="modal-close-x" id="week-picks-x-btn" aria-label="Close">&times;</button>
           <h3 style="text-align:center; margin-top:0;">${escapeHtml(uname)} -- Week ${weekNumber}</h3>
           <div class="error-msg" style="text-align:center;">Couldn't load picks: ${escapeHtml(e.message || String(e))}</div>
           <button class="btn btn-secondary" id="week-picks-close-btn" style="margin-top:10px;">Close</button>
         </div>
       `;
+      panel.querySelector("#week-picks-x-btn").addEventListener("click", closeToStandings);
       panel.querySelector("#week-picks-close-btn").addEventListener("click", () => panel.remove());
     }
   }
