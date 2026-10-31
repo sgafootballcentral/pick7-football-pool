@@ -107,6 +107,12 @@ input, select, textarea {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
 }
+.field input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  flex: none;
+}
 
 .error-msg { color: var(--loss); font-size: 0.88rem; margin: 6px 0; }
 .success-msg { color: var(--win); font-size: 0.88rem; margin: 6px 0; }

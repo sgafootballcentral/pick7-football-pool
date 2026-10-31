@@ -27,6 +27,8 @@ const state = {
   unreadDmSenders: {}, // sender_id -> true, for senders with an unread DM to me
   hasUnreadDm: false,
   notifState: "checking",
+  currentSeason: null, // { id, year, label }
+  playerSeasonActive: true, // am I opted in to the current season
 };
 
 function isStandalone() {
@@ -56,6 +58,8 @@ async function refreshIdentity() {
     state.avatarUrl = null;
     state.avatarMonogram = null;
     state.isAdmin = false;
+    state.currentSeason = null;
+    state.playerSeasonActive = true;
     return;
   }
 
@@ -110,6 +114,39 @@ async function refreshIdentity() {
     for (const r of data || []) state.dmReadsByOther[r.other_id] = r.last_read_at;
   } catch (_) {
     state.dmReadsByOther = {};
+  }
+
+  await refreshCurrentSeason();
+}
+
+// Loads the current season and whether I'm opted in to it. Defaults to
+// "playing" (true) whenever there's no row yet, since the season migration
+// backfilled every existing player as active=true -- a missing row only
+// happens for a brand new signup made after the opt-out toggle shipped, and
+// new signups should start out playing too.
+async function refreshCurrentSeason() {
+  try {
+    const { data: season } = await supabase.from("seasons").select("id, year, label").eq("is_current", true).single();
+    state.currentSeason = season || null;
+  } catch (_) {
+    state.currentSeason = null;
+  }
+
+  if (!state.currentSeason) {
+    state.playerSeasonActive = true;
+    return;
+  }
+
+  try {
+    const { data } = await supabase
+      .from("player_seasons")
+      .select("active")
+      .eq("season_id", state.currentSeason.id)
+      .eq("user_id", state.user.id)
+      .maybeSingle();
+    state.playerSeasonActive = data ? data.active : true;
+  } catch (_) {
+    state.playerSeasonActive = true;
   }
 }
 
@@ -224,6 +261,8 @@ supabase.auth.onAuthStateChange((event, session) => {
     state.avatarUrl = null;
     state.avatarMonogram = null;
     state.isAdmin = false;
+    state.currentSeason = null;
+    state.playerSeasonActive = true;
     render();
   }
 });
@@ -367,6 +406,7 @@ async function openAccountMenu() {
     showMonogramEditor: false, monogramDraft: state.avatarMonogram || "", monogramSaving: false, monogramMsg: "",
     resetSaving: false, resetMsg: "",
     notifMsg: "",
+    seasonSaving: false, seasonMsg: "",
   };
 
   const wrap = document.createElement("div");
@@ -584,6 +624,26 @@ async function openAccountMenu() {
           <div class="hint" style="min-height:1.2em; margin-bottom:10px;">${menu.notifMsg ? escapeHtml(menu.notifMsg) : ""}</div>
         ` : ""}
 
+        ${state.currentSeason ? `
+          <div class="field" style="margin-bottom:10px;">
+            <label style="display:flex; align-items:center; justify-content:space-between; cursor:pointer; gap:10px;">
+              <span>Playing in ${escapeHtml(state.currentSeason.label)}</span>
+              <input type="checkbox" id="account-season-toggle" ${state.playerSeasonActive ? "checked" : ""} ${menu.seasonSaving ? "disabled" : ""}>
+            </label>
+          </div>
+          <div class="hint" style="min-height:1.2em; margin-bottom:10px;">
+            ${menu.seasonMsg ? escapeHtml(menu.seasonMsg) : "Turn this off if you don't want to play this season -- flip it back on any time, no need to sign up again."}
+          </div>
+        ` : ""}
+
+        ${state.isAdmin && state.currentSeason ? `
+          <button class="btn btn-secondary" id="account-manage-players-btn" style="margin-bottom:6px;">Manage Players (${escapeHtml(state.currentSeason.label)})</button>
+        ` : ""}
+
+        ${state.isAdmin ? `
+          <button class="btn btn-secondary" id="account-start-season-btn" style="margin-bottom:10px;">Start New Season…</button>
+        ` : ""}
+
         ${state.isAdmin ? `
           <a class="btn btn-secondary" href="${escapeHtml(buildAdminUrl())}" target="_blank" rel="noopener"
              style="text-decoration:none; margin-bottom:10px;">Admin ↗</a>
@@ -708,6 +768,36 @@ async function openAccountMenu() {
       redraw();
     });
 
+    wrap.querySelector("#account-season-toggle")?.addEventListener("click", async (e) => {
+      if (!state.currentSeason) return;
+      const nextActive = e.target.checked;
+      menu.seasonSaving = true;
+      menu.seasonMsg = "";
+      redraw();
+      try {
+        await supabase.from("player_seasons").upsert({
+          season_id: state.currentSeason.id,
+          user_id: state.user.id,
+          active: nextActive,
+        });
+        state.playerSeasonActive = nextActive;
+        menu.seasonMsg = nextActive ? "You're in!" : "You're sitting this season out.";
+      } catch (err) {
+        e.target.checked = !nextActive; // revert the checkbox on failure
+        menu.seasonMsg = "Couldn't save: " + (err.message || err);
+      }
+      menu.seasonSaving = false;
+      redraw();
+    });
+
+    wrap.querySelector("#account-manage-players-btn")?.addEventListener("click", () => {
+      openManagePlayersPanel();
+    });
+
+    wrap.querySelector("#account-start-season-btn")?.addEventListener("click", () => {
+      openStartSeasonPanel();
+    });
+
     wrap.querySelector("#account-logout-btn")?.addEventListener("click", async () => {
       wrap.remove();
       await supabase.auth.signOut();
@@ -715,6 +805,144 @@ async function openAccountMenu() {
     wrap.querySelector("#account-done-btn")?.addEventListener("click", () => {
       wrap.remove();
     });
+  }
+
+  // Admin-only: lists every player with a checkbox for whether they're
+  // active in the current season -- the override half of the self-serve
+  // toggle above. Opens as its own stacked modal, same pattern as the
+  // photo cropper.
+  async function openManagePlayersPanel() {
+    if (!state.currentSeason) return;
+    const panel = document.createElement("div");
+    panel.className = "modal-backdrop";
+    document.body.appendChild(panel);
+
+    let loading = true;
+    let msg = "";
+    let rows = [];
+
+    function panelRedraw() {
+      panel.innerHTML = `
+        <div class="modal-sheet">
+          <h3 style="text-align:center; margin-top:0;">Manage Players -- ${escapeHtml(state.currentSeason.label)}</h3>
+          ${loading ? `<div class="hint" style="text-align:center;">Loading…</div>` : `
+            <div style="max-height:50vh; overflow-y:auto; margin-bottom:12px;">
+              ${rows.map((r) => `
+                <label style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid var(--border, #2a2a2a);">
+                  <span>${escapeHtml(r.username || "(no name)")}</span>
+                  <input type="checkbox" data-player-id="${escapeHtml(r.id)}" ${r.active ? "checked" : ""}>
+                </label>
+              `).join("") || `<div class="hint">No players yet.</div>`}
+            </div>
+          `}
+          <div class="hint" style="min-height:1.2em; margin-bottom:10px;">${msg ? escapeHtml(msg) : ""}</div>
+          <button class="btn btn-secondary" id="manage-players-close-btn">Close</button>
+        </div>
+      `;
+      panel.querySelectorAll("input[data-player-id]").forEach((cb) => {
+        cb.addEventListener("click", async (e) => {
+          const playerId = e.target.dataset.playerId;
+          const nextActive = e.target.checked;
+          try {
+            await supabase.from("player_seasons").upsert({
+              season_id: state.currentSeason.id,
+              user_id: playerId,
+              active: nextActive,
+            });
+            const row = rows.find((r) => r.id === playerId);
+            if (row) row.active = nextActive;
+            if (playerId === state.user.id) state.playerSeasonActive = nextActive;
+          } catch (err) {
+            e.target.checked = !nextActive;
+            msg = "Couldn't save: " + (err.message || err);
+            panelRedraw();
+          }
+        });
+      });
+      panel.querySelector("#manage-players-close-btn")?.addEventListener("click", () => panel.remove());
+    }
+
+    panelRedraw();
+
+    try {
+      const [{ data: players }, { data: seasonRows }] = await Promise.all([
+        supabase.from("players").select("id, username").order("username", { ascending: true }),
+        supabase.from("player_seasons").select("user_id, active").eq("season_id", state.currentSeason.id),
+      ]);
+      const activeByUser = {};
+      for (const r of seasonRows || []) activeByUser[r.user_id] = r.active;
+      rows = (players || []).map((p) => ({ id: p.id, username: p.username, active: activeByUser[p.id] !== false }));
+    } catch (err) {
+      msg = "Couldn't load players: " + (err.message || err);
+    }
+    loading = false;
+    panelRedraw();
+  }
+
+  // Admin-only: rolls the league over to a new year via the start_new_season
+  // RPC, which flips is_current and carries forward anyone active in the
+  // outgoing season. Opens as its own stacked modal.
+  function openStartSeasonPanel() {
+    const nextYear = (state.currentSeason?.year || new Date().getFullYear()) + 1;
+    const panel = document.createElement("div");
+    panel.className = "modal-backdrop";
+    document.body.appendChild(panel);
+
+    let saving = false;
+    let msg = "";
+
+    function panelRedraw() {
+      panel.innerHTML = `
+        <div class="modal-sheet">
+          <h3 style="text-align:center; margin-top:0;">Start New Season</h3>
+          <div class="hint" style="margin-bottom:14px;">
+            This closes out ${state.currentSeason ? escapeHtml(state.currentSeason.label) : "the current season"} and opens a new one.
+            Everyone currently playing carries over automatically -- nobody has to sign up again.
+          </div>
+          <div class="field">
+            <label>Year</label>
+            <input type="number" id="start-season-year" value="${nextYear}">
+          </div>
+          <div class="field">
+            <label>Label (optional)</label>
+            <input type="text" id="start-season-label" placeholder="${nextYear} Season">
+          </div>
+          <div class="hint" style="min-height:1.2em; margin-bottom:10px;">${msg ? escapeHtml(msg) : ""}</div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" id="start-season-cancel-btn" ${saving ? "disabled" : ""}>Cancel</button>
+            <button class="btn btn-primary" id="start-season-confirm-btn" ${saving ? "disabled" : ""}>
+              ${saving ? "Starting…" : "Start Season"}
+            </button>
+          </div>
+        </div>
+      `;
+      panel.querySelector("#start-season-cancel-btn")?.addEventListener("click", () => panel.remove());
+      panel.querySelector("#start-season-confirm-btn")?.addEventListener("click", async () => {
+        const year = parseInt(panel.querySelector("#start-season-year").value, 10);
+        const label = (panel.querySelector("#start-season-label").value || "").trim();
+        if (!year) {
+          msg = "Enter a valid year.";
+          panelRedraw();
+          return;
+        }
+        if (!confirm(`Start the ${label || year + " Season"} season now? This can't be easily undone.`)) return;
+        saving = true;
+        msg = "";
+        panelRedraw();
+        try {
+          await supabase.rpc("start_new_season", { p_year: year, p_label: label || null });
+          await refreshCurrentSeason();
+          panel.remove();
+          redraw();
+        } catch (err) {
+          msg = "Couldn't start season: " + (err.message || err);
+          saving = false;
+          panelRedraw();
+        }
+      });
+    }
+
+    panelRedraw();
   }
 
   redraw();
@@ -755,7 +983,7 @@ export function render() {
 
   renderChrome(`<div id="tab-slot"></div>`);
   const slot = document.getElementById("tab-slot");
-  const ctx = { supabase, user: state.user, username: state.username, isAdmin: state.isAdmin, unreadDmSenders: state.unreadDmSenders, markDmRead };
+  const ctx = { supabase, user: state.user, username: state.username, isAdmin: state.isAdmin, unreadDmSenders: state.unreadDmSenders, markDmRead, currentSeason: state.currentSeason };
 
   if (state.activeTab === "picks") renderPicks(slot, ctx);
   else if (state.activeTab === "leaderboard") renderLeaderboard(slot, ctx);
