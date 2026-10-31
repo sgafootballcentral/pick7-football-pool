@@ -25,6 +25,21 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+
+@st.cache_data(ttl=60)
+def get_current_season_id():
+    """The id of the seasons row with is_current=true, used to tag every
+    new games/week_pick_locks row this page inserts -- mirrors the PWA's
+    own current_season_id() DB default, just made explicit here too so a
+    season rollover can never leave a row pointing at the wrong year."""
+    try:
+        resp = supabase.table("seasons").select("id").eq("is_current", True).limit(1).execute()
+        rows = resp.data or []
+        return rows[0]["id"] if rows else None
+    except Exception:
+        return None
+
+
 # Same "remember me" browser storage keys/helpers as app.py -- this page
 # doesn't drive its own login (app.py does), but a successful refresh here
 # needs to update the same saved tokens app.py's restore logic reads on the
@@ -656,7 +671,8 @@ with tab_setup:
                             "display_text": f"{away_team} at {home_team}",
                             "kickoff_time": kickoff_time,
                             "tv_network": tv_network,
-                            "week_number": target_week
+                            "week_number": target_week,
+                            "season_id": get_current_season_id(),
                         }).execute()
 
                 st.success(
@@ -783,6 +799,7 @@ with tab_setup:
                         "kickoff_time": kickoff_iso,
                         "tv_network": manual_tv.strip(),
                         "week_number": int(manual_week),
+                        "season_id": get_current_season_id(),
                     }).execute()
                     st.success(f"Added {fav_team} vs {und_team} to Week {manual_week}.")
                     st.rerun()
@@ -935,7 +952,7 @@ with tab_picks:
     lock_week = section_week_selector("pick_lock", active_week, "Week to manage the lock for:")
 
     try:
-        _lock_row = supabase.table("week_pick_locks").select("*").eq("week_number", lock_week).maybe_single().execute().data
+        _lock_row = supabase.table("week_pick_locks").select("*").eq("week_number", lock_week).eq("season_id", get_current_season_id()).maybe_single().execute().data
     except Exception:
         _lock_row = None
 
@@ -949,7 +966,7 @@ with tab_picks:
         else:
             st.info(f"⏳ Scheduled to lock at {_lock_at_str} (not locked yet).")
         if st.button("Remove lock", key=f"remove_pick_lock_{lock_week}"):
-            supabase.table("week_pick_locks").delete().eq("week_number", lock_week).execute()
+            supabase.table("week_pick_locks").delete().eq("week_number", lock_week).eq("season_id", get_current_season_id()).execute()
             st.success("Lock removed.")
             st.rerun()
     else:
@@ -966,9 +983,10 @@ with tab_picks:
         if st.button("🔒 Set lock", key=f"set_pick_lock_{lock_week}", type="primary"):
             lock_local = datetime.combine(new_lock_date, new_lock_time).replace(tzinfo=ZoneInfo("America/New_York"))
             lock_utc = lock_local.astimezone(timezone.utc)
-            supabase.table("week_pick_locks").delete().eq("week_number", lock_week).execute()
+            supabase.table("week_pick_locks").delete().eq("week_number", lock_week).eq("season_id", get_current_season_id()).execute()
             supabase.table("week_pick_locks").insert({
                 "week_number": lock_week, "lock_at": lock_utc.isoformat(), "set_by": user_id,
+                "season_id": get_current_season_id(),
             }).execute()
             _confirm_str = lock_utc.astimezone(ZoneInfo("America/New_York")).strftime("%a %m/%d %I:%M %p ET").replace(" 0", " ")
             st.success(f"Picks for Week {lock_week} will lock at {_confirm_str}.")
