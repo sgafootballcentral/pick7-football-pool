@@ -394,15 +394,30 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
     }
   }
 
+  // How many of the most recent messages to keep live in the chat --
+  // capped rather than unbounded for two reasons: (1) this query re-runs
+  // every autoRefresh tick, so an unbounded select re-downloads the whole
+  // history every few seconds and gets slower as the season's chat grows;
+  // (2) Supabase's API caps an unbounded select at 1000 rows by default,
+  // and since this used to be sorted oldest-first, once total messages
+  // passed that cap new messages would've silently stopped appearing --
+  // the exact bug the "avatars everywhere" migration already fixed once
+  // for the standings page. 300 is comfortably more than anyone scrolls
+  // back through in practice.
+  const CHAT_HISTORY_LIMIT = 300;
+
   async function loadMessages(preserveScroll, backgroundOnly) {
     try {
       const [{ data: msgData, error: msgErr }, { data: reactData, error: reactErr }] = await Promise.all([
-        supabase.from("chat_messages").select("*").order("created_at", { ascending: true }),
+        supabase.from("chat_messages").select("*").order("created_at", { ascending: false }).limit(CHAT_HISTORY_LIMIT),
         supabase.from("chat_reactions").select("*"),
       ]);
       if (msgErr) throw msgErr;
       if (reactErr) throw reactErr;
-      const newMessages = msgData || [];
+      // Query comes back newest-first (so .limit() keeps the RECENT
+      // messages, not the oldest ones) -- reverse back to oldest-first for
+      // display, since that's what chatMsgHtml/scrollToBottom expect.
+      const newMessages = (msgData || []).slice().reverse();
       const newReactions = buildReactionsByMessage(reactData, user.id, s.currentUsernames);
       // Reactions changing (someone else's tap) doesn't add/remove a message
       // row, so the message-id signature alone would miss it -- compare both.

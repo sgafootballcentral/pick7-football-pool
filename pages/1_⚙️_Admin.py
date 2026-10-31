@@ -26,12 +26,15 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-@st.cache_data(ttl=60)
 def get_current_season_id():
     """The id of the seasons row with is_current=true, used to tag every
     new games/week_pick_locks row this page inserts -- mirrors the PWA's
     own current_season_id() DB default, just made explicit here too so a
-    season rollover can never leave a row pointing at the wrong year."""
+    season rollover can never leave a row pointing at the wrong year.
+    Deliberately NOT cached: it's one cheap indexed query, and caching it
+    (even briefly) risked tagging a game/lock with the outgoing season if
+    an admin ran "Start New Season" in the PWA and then immediately added
+    a game or set a lock here within the same cache window."""
     try:
         resp = supabase.table("seasons").select("id").eq("is_current", True).limit(1).execute()
         rows = resp.data or []
@@ -1539,6 +1542,25 @@ with tab_grading:
                 already_final_count = 0
                 still_pending_count = 0
 
+                # Batched instead of one request per game/pick: one select
+                # up front for every pick on any game in this week (not one
+                # per game), then every games/picks write this run collects
+                # into a list and goes out as a couple of bulk calls at the
+                # end. Grading a 15-20 game week used to mean 500+
+                # sequential round-trips to Supabase (one per pick) -- this
+                # cuts it to a small, constant number of requests no matter
+                # how many players are in the league.
+                all_game_ids_this_week = [g["game_id"] for g in games_in_week]
+                picks_by_game_id = {}
+                if all_game_ids_this_week:
+                    all_week_picks = supabase.table("picks").select("*").in_("game_id", all_game_ids_this_week).execute().data or []
+                    for p in all_week_picks:
+                        picks_by_game_id.setdefault(p["game_id"], []).append(p)
+
+                games_to_upsert = []
+                winning_pick_ids = []
+                losing_pick_ids = []
+
                 for g in games_in_week:
                     if g.get("status") == "final":
                         already_final_count += 1
@@ -1566,17 +1588,22 @@ with tab_grading:
                     margin = (fav_score + spread_num) - und_score
                     winning_team = g.get("favorite_team") if margin > 0 else g.get("underdog_team")
 
-                    supabase.table("games").update({
+                    # Spread the full existing row in, not just the changed fields --
+                    # Postgres validates NOT NULL on every column of the attempted
+                    # INSERT side of an upsert even when ON CONFLICT ends up doing
+                    # an UPDATE instead, so a partial payload here (e.g. missing
+                    # game_id) would fail the whole batch.
+                    games_to_upsert.append({
+                        **g,
                         "status": "final",
                         "winning_team": winning_team,
                         "home_score": home_score,
                         "away_score": away_score,
-                    }).eq("id", g["id"]).execute()
+                    })
 
                     # Grade each pick against the spread IT actually saw, not necessarily
                     # today's spread_value -- protects anyone who picked before a re-sync.
-                    picks_for_game = supabase.table("picks").select("*").eq("game_id", g["game_id"]).execute().data
-                    for p in picks_for_game:
+                    for p in picks_by_game_id.get(g["game_id"], []):
                         locked_spread_str = (p.get("spread_at_pick") or g.get("spread_value") or "").rsplit(" ", 1)[-1]
                         try:
                             locked_spread_num = float(locked_spread_str)
@@ -1585,11 +1612,19 @@ with tab_grading:
 
                         pick_margin = (fav_score + locked_spread_num) - und_score
                         pick_winning_team = g.get("favorite_team") if pick_margin > 0 else g.get("underdog_team")
-                        pick_result = "win" if p.get("selected_team") == pick_winning_team else "loss"
-
-                        supabase.table("picks").update({"result": pick_result}).eq("id", p["id"]).execute()
+                        if p.get("selected_team") == pick_winning_team:
+                            winning_pick_ids.append(p["id"])
+                        else:
+                            losing_pick_ids.append(p["id"])
 
                     graded_count += 1
+
+                if games_to_upsert:
+                    supabase.table("games").upsert(games_to_upsert).execute()
+                if winning_pick_ids:
+                    supabase.table("picks").update({"result": "win"}).in_("id", winning_pick_ids).execute()
+                if losing_pick_ids:
+                    supabase.table("picks").update({"result": "loss"}).in_("id", losing_pick_ids).execute()
 
             st.success(
                 f"Graded {graded_count} newly-final game(s) for Week {grade_week_num}. "
