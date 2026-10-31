@@ -244,8 +244,9 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
         ${weeks.length ? `
           <table class="profile-weeks">
             <thead><tr><th>Week</th><th>W</th><th>L</th></tr></thead>
-            <tbody>${weeks.map((w) => `<tr><td>${w.week_number}</td><td>${w.wins}</td><td>${w.losses}</td></tr>`).join("")}</tbody>
+            <tbody>${weeks.map((w) => `<tr class="standings-clickable" data-week="${w.week_number}"><td>${w.week_number}</td><td>${w.wins}</td><td>${w.losses}</td></tr>`).join("")}</tbody>
           </table>
+          <div class="hint" style="text-align:center; margin-top:6px;">Tap a week to see those picks.</div>
         ` : `<div class="hint" style="text-align:center;">No graded weeks yet.</div>`}
         <div class="btn-row" style="margin-top:14px;">
           ${!isMe ? `<button class="btn btn-primary" id="profile-message-btn">\u{1F4AC} Message ${escapeHtml(uname)}</button>` : ""}
@@ -254,6 +255,11 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
       </div>
     `;
     document.body.appendChild(wrap);
+    wrap.querySelectorAll("tr[data-week]").forEach((row) => {
+      row.addEventListener("click", () => {
+        openWeekPicksModal(userId, uname, Number(row.dataset.week));
+      });
+    });
     wrap.querySelector("#profile-close-btn").addEventListener("click", () => {
       s.profile = null;
       wrap.remove();
@@ -263,6 +269,84 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
       wrap.remove();
       openDmThread(userId, uname);
     });
+  }
+
+  // Opens on top of the profile sheet (its own stacked modal-backdrop, same
+  // pattern as the DM thread / photo cropper elsewhere) and shows exactly
+  // what a player picked that week -- matchup, their team, the spread they
+  // picked it at, and the graded result if there is one. Scoped to
+  // whichever season the Standings tab is currently showing, not always
+  // the live current season, so this stays correct when looking at a past
+  // season's final standings too.
+  async function openWeekPicksModal(userId, uname, weekNumber) {
+    const panel = document.createElement("div");
+    panel.className = "modal-backdrop";
+    document.body.appendChild(panel);
+
+    panel.innerHTML = `
+      <div class="modal-sheet">
+        <h3 style="text-align:center; margin-top:0;">${escapeHtml(uname)} -- Week ${weekNumber}</h3>
+        <div class="hint" style="text-align:center;">Loading…</div>
+      </div>
+    `;
+
+    try {
+      let picksQuery = supabase.from("picks").select("*").eq("user_id", userId).eq("week_number", weekNumber);
+      let gamesQuery = supabase.from("games").select("*").eq("week_number", weekNumber);
+      if (s.selectedSeasonId != null) {
+        picksQuery = picksQuery.eq("season_id", s.selectedSeasonId);
+        gamesQuery = gamesQuery.eq("season_id", s.selectedSeasonId);
+      }
+      const [{ data: picks, error: pErr }, { data: games, error: gErr }] = await Promise.all([picksQuery, gamesQuery]);
+      if (pErr) throw pErr;
+      if (gErr) throw gErr;
+
+      const gameLookup = Object.fromEntries((games || []).map((g) => [g.game_id, g]));
+      const rows = (picks || []).slice().sort((a, b) => {
+        const ga = gameLookup[a.game_id], gb = gameLookup[b.game_id];
+        return (ga?.kickoff_time || "").localeCompare(gb?.kickoff_time || "");
+      });
+
+      panel.innerHTML = `
+        <div class="modal-sheet">
+          <h3 style="text-align:center; margin-top:0;">${escapeHtml(uname)} -- Week ${weekNumber}</h3>
+          ${rows.length ? rows.map((p) => {
+            const g = gameLookup[p.game_id];
+            const matchup = g ? `${g.favorite_team} vs ${g.underdog_team}` : p.game_id;
+            const spread = p.spread_at_pick || g?.spread_value || "";
+            const resultClass = p.result === "win" ? "win" : p.result === "loss" ? "loss" : "";
+            const resultLabel = p.result === "win" ? "✓ Win" : p.result === "loss" ? "✗ Loss" : "Pending";
+            return `
+              <div class="game-card" style="margin-bottom:7px;">
+                <div class="game-card-stripe ${resultClass}"></div>
+                <div class="game-card-body">
+                  <div class="game-card-top">
+                    <div class="game-card-matchup">${escapeHtml(matchup)}</div>
+                    <div class="game-card-meta"><span class="spread">${escapeHtml(spread)}</span></div>
+                  </div>
+                  <div class="game-card-pickrow ${resultClass === "win" ? "win-bg" : ""}">
+                    <span class="label">Picked</span>
+                    <span class="value">${escapeHtml(p.selected_team)}</span>
+                    <span class="value ${resultClass}">${resultLabel}</span>
+                  </div>
+                </div>
+              </div>
+            `;
+          }).join("") : `<div class="hint" style="text-align:center;">No picks on file for this week.</div>`}
+          <button class="btn btn-secondary" id="week-picks-close-btn" style="margin-top:10px;">Close</button>
+        </div>
+      `;
+      panel.querySelector("#week-picks-close-btn").addEventListener("click", () => panel.remove());
+    } catch (e) {
+      panel.innerHTML = `
+        <div class="modal-sheet">
+          <h3 style="text-align:center; margin-top:0;">${escapeHtml(uname)} -- Week ${weekNumber}</h3>
+          <div class="error-msg" style="text-align:center;">Couldn't load picks: ${escapeHtml(e.message || String(e))}</div>
+          <button class="btn btn-secondary" id="week-picks-close-btn" style="margin-top:10px;">Close</button>
+        </div>
+      `;
+      panel.querySelector("#week-picks-close-btn").addEventListener("click", () => panel.remove());
+    }
   }
 
   async function openDmThread(otherId, otherUsername) {
