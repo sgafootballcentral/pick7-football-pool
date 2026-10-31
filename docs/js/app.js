@@ -241,6 +241,137 @@ async function markDmRead(otherId) {
   }
 }
 
+function ordinal(n) {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+// Once a week's games have all been graded, shows each player a one-time
+// "here's where you stand" popup the next time they log in -- their
+// record for that week, their season record, their current place, and
+// how their place moved since the week before. Tracked per-player on
+// players.last_recap_season_id/last_recap_week_seen so it only ever shows
+// once per newly-completed week, never on an interval/poll like the
+// unread-chat/DM checks above.
+async function checkWeekRecap() {
+  if (!state.user || !state.currentSeason) return;
+  const seasonId = state.currentSeason.id;
+  try {
+    const { data: games } = await supabase.from("games").select("week_number, status").eq("season_id", seasonId);
+    const statusesByWeek = {};
+    for (const g of games || []) (statusesByWeek[g.week_number] ||= []).push(g.status);
+    const completedWeeks = Object.entries(statusesByWeek)
+      .filter(([, statuses]) => statuses.length > 0 && statuses.every((st) => st === "final"))
+      .map(([wk]) => Number(wk))
+      .sort((a, b) => a - b);
+    if (!completedWeeks.length) return;
+    const completedWeek = completedWeeks[completedWeeks.length - 1];
+
+    const { data: playerRow } = await supabase.from("players")
+      .select("last_recap_season_id, last_recap_week_seen")
+      .eq("id", state.user.id).single();
+    if (playerRow && playerRow.last_recap_season_id === seasonId && (playerRow.last_recap_week_seen || 0) >= completedWeek) {
+      return; // already shown this week's recap
+    }
+
+    const { data: tallies } = await supabase.from("picks_week_tallies")
+      .select("user_id, week_number, wins, losses")
+      .eq("season_id", seasonId);
+    const rows = tallies || [];
+
+    // Standings "as of" a given week -- same rank-with-ties logic as the
+    // Standings tab (1-2-2-4), just scoped to whatever weeks are <= maxWeek
+    // so it can be reused for both "now" and "as of last week" (the trend).
+    function standingsThrough(maxWeek) {
+      const byPlayer = {};
+      for (const r of rows) {
+        if (r.week_number > maxWeek) continue;
+        const rec = (byPlayer[r.user_id] ||= { user_id: r.user_id, wins: 0, losses: 0 });
+        rec.wins += r.wins;
+        rec.losses += r.losses;
+      }
+      const list = Object.values(byPlayer).filter((r) => r.wins + r.losses > 0);
+      list.sort((a, b) => (b.wins - a.wins) || (a.losses - b.losses));
+      let lastWins = null, lastPlace = 0;
+      list.forEach((r, i) => { if (r.wins !== lastWins) { lastPlace = i + 1; lastWins = r.wins; } r.place = lastPlace; });
+      return list;
+    }
+
+    const nowStandings = standingsThrough(completedWeek);
+    const myNow = nowStandings.find((r) => r.user_id === state.user.id);
+    if (!myNow) return; // haven't got a graded pick yet -- nothing to show
+
+    const priorWeek = completedWeeks.filter((w) => w < completedWeek).pop();
+    let trend = { kind: "new" };
+    if (priorWeek != null) {
+      const myPrior = standingsThrough(priorWeek).find((r) => r.user_id === state.user.id);
+      if (myPrior) {
+        const delta = myPrior.place - myNow.place;
+        trend = delta > 0 ? { kind: "up", amount: delta } : delta < 0 ? { kind: "down", amount: -delta } : { kind: "same" };
+      } else {
+        trend = { kind: "new" };
+      }
+    }
+
+    const weekRecord = rows
+      .filter((r) => r.user_id === state.user.id && r.week_number === completedWeek)
+      .reduce((acc, r) => ({ wins: acc.wins + r.wins, losses: acc.losses + r.losses }), { wins: 0, losses: 0 });
+
+    showWeekRecapModal({
+      week: completedWeek,
+      weekRecord,
+      seasonRecord: { wins: myNow.wins, losses: myNow.losses },
+      place: myNow.place,
+      totalPlayers: nowStandings.length,
+      trend,
+    });
+
+    try {
+      await supabase.from("players").update({
+        last_recap_season_id: seasonId, last_recap_week_seen: completedWeek,
+      }).eq("id", state.user.id);
+    } catch (_) { /* non-critical */ }
+  } catch (_) {
+    /* non-critical -- never block login over this */
+  }
+}
+
+function showWeekRecapModal(info) {
+  if (document.querySelector(".modal-backdrop")) return; // don't stack on top of another modal
+  const { week, weekRecord, seasonRecord, place, totalPlayers, trend } = info;
+
+  const trendHtml =
+    trend.kind === "up" ? `<span class="rank-chip up">▲${trend.amount}</span> climbed ${trend.amount} spot${trend.amount === 1 ? "" : "s"} from last week`
+    : trend.kind === "down" ? `<span class="rank-chip down">▼${trend.amount}</span> slipped ${trend.amount} spot${trend.amount === 1 ? "" : "s"} from last week`
+    : trend.kind === "same" ? `<span class="rank-chip same">–</span> holding steady vs. last week`
+    : `<span class="rank-chip same">NEW</span> your first ranked week this season`;
+
+  const wrap = document.createElement("div");
+  wrap.className = "modal-backdrop";
+  wrap.innerHTML = `
+    <div class="modal-sheet">
+      <h3 style="text-align:center; margin-top:0;">\u{1F3C8} Week ${week} Recap</h3>
+      <div class="card" style="text-align:center; margin-bottom:12px;">
+        <div class="hint">Week ${week} record</div>
+        <div style="font-size:1.6rem; font-weight:700;">${weekRecord.wins}–${weekRecord.losses}</div>
+      </div>
+      <div class="card" style="text-align:center; margin-bottom:12px;">
+        <div class="hint">Season record</div>
+        <div style="font-size:1.6rem; font-weight:700;">${seasonRecord.wins}–${seasonRecord.losses}</div>
+      </div>
+      <div class="card" style="text-align:center; margin-bottom:12px;">
+        <div class="hint">Current place</div>
+        <div style="font-size:1.6rem; font-weight:700;">${ordinal(place)} <span class="hint" style="font-size:1rem; font-weight:400;">of ${totalPlayers}</span></div>
+        <div class="hint" style="margin-top:4px;">${trendHtml}</div>
+      </div>
+      <button class="btn btn-primary" id="week-recap-close-btn">Nice!</button>
+    </div>
+  `;
+  document.body.appendChild(wrap);
+  wrap.querySelector("#week-recap-close-btn").addEventListener("click", () => wrap.remove());
+}
+
 supabase.auth.onAuthStateChange((event, session) => {
   if (event === "PASSWORD_RECOVERY") {
     state.recoveryMode = true;
@@ -250,7 +381,7 @@ supabase.auth.onAuthStateChange((event, session) => {
   state.session = session;
   state.user = session?.user ?? null;
   if (state.user && !state.recoveryMode) {
-    refreshIdentity().then(() => { render(); checkUnreadChat(); checkUnreadDm(); });
+    refreshIdentity().then(() => { render(); checkUnreadChat(); checkUnreadDm(); checkWeekRecap(); });
   } else if (!state.user) {
     state.hasUnreadChat = false;
     state.lastChatReadAt = null;
@@ -1008,6 +1139,7 @@ if (navigator.storage && navigator.storage.persist) {
   render();
   checkUnreadChat();
   checkUnreadDm();
+  checkWeekRecap();
   setInterval(checkUnreadChat, 20000);
   setInterval(checkUnreadDm, 20000);
 })();

@@ -121,3 +121,9 @@ select
 from picks p
 left join players pl on pl.id = p.user_id
 group by p.user_id, coalesce(pl.username, p.username), p.week_number, p.season_id;
+
+-- Phase G (2026-10-31, same day): end-of-week record popup (place + trend)
+-- tracks, per player, the last season/week recap they've already been
+-- shown so it only ever pops up once per newly-completed week.
+alter table players add column if not exists last_recap_season_id bigint references seasons(id);
+alter table players add column if not exists last_recap_week_seen integer;
