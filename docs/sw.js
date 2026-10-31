@@ -1,5 +1,5 @@
 // Bump this on every deploy so clients pick up new files instead of a stale cache.
-const CACHE_VERSION = "pick7-v8";
+const CACHE_VERSION = "pick7-v9";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -7,11 +7,14 @@ const APP_SHELL = [
   "./css/app.css",
   "./js/config.js",
   "./js/supabaseClient.js",
+  "./js/weekState.js",
   "./js/app.js",
   "./js/auth.js",
+  "./js/recovery.js",
   "./js/picks.js",
   "./js/leaderboard.js",
   "./js/chat.js",
+  "./js/compare.js",
   "./js/requestsVotes.js",
   "./js/push.js",
   "./icons/icon-192.png",
