@@ -578,8 +578,15 @@ async function openAccountMenu() {
   // Lets someone drag the photo around and zoom it in/out inside a circle
   // that's exactly what gets saved -- opened on top of the account menu
   // (its own stacked modal-backdrop) once a file is picked.
-  function openCropper(file) {
-    const objectUrl = URL.createObjectURL(file);
+  // `source` is either a freshly-picked File (Change Photo) or the current
+  // avatar's own URL as a string (Edit Photo, re-adjusting what's already
+  // saved without re-uploading). Supabase's "avatars" bucket serves public
+  // objects with permissive CORS, so loading the existing URL with
+  // crossOrigin="anonymous" and drawing it to canvas works the same as a
+  // freshly-picked file -- confirmed against production.
+  function openCropper(source) {
+    const isFile = source instanceof File;
+    const imageSrc = isFile ? URL.createObjectURL(source) : source;
     const circleSize = 240;
     const minZoom = 1, maxZoom = 3;
     const crop = { zoom: minZoom, panX: 0, panY: 0, baseScale: 1, naturalW: 0, naturalH: 0 };
@@ -589,7 +596,7 @@ async function openAccountMenu() {
     document.body.appendChild(cropWrap);
 
     function closeCropper() {
-      URL.revokeObjectURL(objectUrl);
+      if (isFile) URL.revokeObjectURL(imageSrc);
       cropWrap.remove();
     }
 
@@ -642,7 +649,8 @@ async function openAccountMenu() {
       msgEl.textContent = "Couldn't load that image.";
       useBtn.disabled = true;
     };
-    imgEl.src = objectUrl;
+    if (!isFile) imgEl.crossOrigin = "anonymous"; // must be set before src for a remote URL
+    imgEl.src = imageSrc;
 
     // Drag to pan -- pointer events cover touch, mouse, and trackpad alike.
     let dragging = false, startX = 0, startY = 0, startPanX = 0, startPanY = 0;
@@ -712,6 +720,7 @@ async function openAccountMenu() {
         <div style="text-align:center; margin-bottom:12px;">
           <input type="file" id="account-avatar-input" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none;">
           <div class="btn-row">
+            ${state.avatarUrl ? `<button class="btn btn-secondary" id="account-edit-photo-btn" ${menu.photoUploading ? "disabled" : ""}>Edit Photo</button>` : ""}
             <button class="btn btn-secondary" id="account-change-photo-btn" ${menu.photoUploading ? "disabled" : ""}>
               ${menu.photoUploading ? "Uploading…" : "Change Photo"}
             </button>
@@ -784,6 +793,10 @@ async function openAccountMenu() {
         <button class="btn btn-secondary" id="account-done-btn">Done</button>
       </div>
     `;
+
+    wrap.querySelector("#account-edit-photo-btn")?.addEventListener("click", () => {
+      if (state.avatarUrl) openCropper(state.avatarUrl);
+    });
 
     wrap.querySelector("#account-change-photo-btn")?.addEventListener("click", () => {
       wrap.querySelector("#account-avatar-input").click();
