@@ -483,6 +483,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     // stack a second copy on top of it.
     const modalAlreadyOpen = !!document.querySelector(".modal-backdrop");
     if (s.preview && !modalAlreadyOpen) drawPreviewModal();
+    if (s.confirmSubmit && !modalAlreadyOpen) drawConfirmSubmitModal();
     if (s.resubmit && !modalAlreadyOpen) drawResubmitModal();
     if (s.recap && !modalAlreadyOpen) drawRecapModal();
   }
@@ -671,10 +672,21 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
         changed: existingMap[gid] !== newMap[gid],
       };
     });
+    const onFileCount = Object.keys(existingMap).length;
+    const addedCount = Object.keys(newMap).filter((gid) => !(gid in existingMap)).length;
+    const changedCount = Object.keys(newMap).filter((gid) => gid in existingMap && existingMap[gid] !== newMap[gid]).length;
+    const totalCount = Object.keys(newMap).length;
+    const summaryBits = [];
+    if (addedCount) summaryBits.push(`${addedCount} new pick${addedCount === 1 ? "" : "s"}`);
+    if (changedCount) summaryBits.push(`${changedCount} changed pick${changedCount === 1 ? "" : "s"}`);
+    const summaryText = summaryBits.length
+      ? `You already have ${onFileCount} of 7 on file. This adds ${summaryBits.join(" and ")}, for ${totalCount} of 7 total.`
+      : `You already have ${onFileCount} of 7 on file. Nothing is actually changing in this submission.`;
 
     wrap.innerHTML = `
       <div class="modal-sheet">
         <h2>⚠️ You've Already Submitted This Week</h2>
+        <p class="hint"><b>${escapeHtml(summaryText)}</b></p>
         <p class="hint">Here's how your on-file picks compare to your new selections:</p>
         ${rows.map((r) => `<div class="card" style="padding:10px 12px; margin-bottom:6px;">
           <div style="font-size:0.85rem;">${escapeHtml(r.matchup)}</div>
@@ -882,28 +894,75 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
       alert("Pick at least one game before locking in your picks.");
       return;
     }
-    if (count < 7) {
-      // Partial submissions are allowed -- just make sure they know exactly
-      // how many they're about to lock in before it goes through, since
-      // it's easy to mean to come back and finish the rest later.
-      const ok = confirm(
-        `You're submitting picks for ${count} of 7 games this week. The ` +
-        `other ${7 - count} game${7 - count === 1 ? "" : "s"} will stay unpicked for ` +
-        `now -- you can come back and add to or change these any time before ` +
-        `kickoff. Submit ${count} pick${count === 1 ? "" : "s"}?`
-      );
-      if (!ok) return;
-    }
     if (s.existingPicks.length) {
+      // Already have picks on file -- always show the full on-file-vs-new
+      // comparison (it spells out the new total and exactly what's being
+      // added or changed) rather than a bare count, since "6 of 7" alone
+      // doesn't say whether that's 3 new ones on top of 3 already saved,
+      // or 6 brand new picks replacing nothing.
       s.resubmit = { existingPicks: s.existingPicks, newPicks: { ...s.selected } };
       draw();
-    } else if (isEffectivelyLocked()) {
+      return;
+    }
+    if (count < 7) {
+      // First submission this week, but not all 7 yet -- show exactly what
+      // they're about to submit (not just a number) before it goes through.
+      const gameLookup = Object.fromEntries(s.games.map((g) => [g.game_id, g]));
+      s.confirmSubmit = {
+        count,
+        rows: Object.entries(s.selected).map(([gameId, team]) => ({
+          selected_team: team,
+          matchup: `${gameLookup[gameId]?.favorite_team || ""} vs ${gameLookup[gameId]?.underdog_team || gameId}`,
+          spread: gameLookup[gameId]?.spread_value || "",
+        })),
+      };
+      draw();
+      return;
+    }
+    if (isEffectivelyLocked()) {
       // Doesn't block it -- saves it as pending instead of writing straight
       // to the real picks table, until an admin approves it.
       await queuePendingPicks(s.selected);
     } else {
       await submitPicks();
     }
+  }
+
+  // Review-and-confirm modal for a FIRST submission this week that's short
+  // of all 7 -- lists the actual matchups/teams so "what am I about to
+  // submit" is answered with the real picks, not just a count.
+  function drawConfirmSubmitModal() {
+    const wrap = document.createElement("div");
+    wrap.className = "modal-backdrop";
+    const { count, rows } = s.confirmSubmit;
+    const remaining = 7 - count;
+    wrap.innerHTML = `
+      <div class="modal-sheet">
+        <h2>\u{1F3C8} Submit ${count} of 7 Picks?</h2>
+        <p class="hint">You haven't picked all 7 games yet. Here's exactly what you're about to submit -- the other ${remaining} game${remaining === 1 ? "" : "s"} will stay unpicked for now, and you can come back to add to or change these any time before kickoff.</p>
+        ${rows.map((r) => `<div class="card" style="padding:10px 12px; margin-bottom:6px;">
+          <b>${escapeHtml(r.selected_team)}</b> &mdash; ${escapeHtml(r.matchup)} <span class="hint">(${escapeHtml(r.spread)})</span>
+        </div>`).join("")}
+        <div class="btn-row">
+          <button class="btn btn-primary" id="confirm-submit-btn">Yes, submit these ${count}</button>
+          <button class="btn btn-secondary" id="cancel-submit-btn">Keep picking</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(wrap);
+    wrap.querySelector("#confirm-submit-btn").addEventListener("click", async () => {
+      s.confirmSubmit = null;
+      wrap.remove();
+      if (isEffectivelyLocked()) {
+        await queuePendingPicks(s.selected);
+      } else {
+        await submitPicks();
+      }
+    });
+    wrap.querySelector("#cancel-submit-btn").addEventListener("click", () => {
+      s.confirmSubmit = null;
+      wrap.remove();
+    });
   }
 
   async function loadScoresOnly() {
