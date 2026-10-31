@@ -8,8 +8,13 @@ export function renderAuth(el, { supabase }) {
 
   function draw() {
     el.innerHTML = `
-      <div class="centered" style="min-height: 40vh; margin-bottom: 8px;">
-        <h1>\u{1F3C8} Pick 7 Against The Spread</h1>
+      <div style="position:relative; padding-top:28px;">
+        <div class="auth-hero-glow"></div>
+        <div style="position:relative; text-align:center; margin-bottom:22px;">
+          <div class="auth-logo-mark">\u{1F3C8}</div>
+          <h1 style="margin:0 0 4px;">Pick 7 <span class="auth-grad-text">Against The Spread</span></h1>
+          <div class="hint">Weekly picks. Season-long bragging rights.</div>
+        </div>
       </div>
       <div class="tabs">
         <button data-mode="login" class="${mode === "login" ? "active" : ""}">Log In</button>

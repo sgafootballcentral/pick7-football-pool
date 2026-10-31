@@ -570,27 +570,56 @@ export function renderPicks(el, { supabase, user, username, isAdmin }) {
     const capReached = Object.keys(s.selected).length >= 7;
     const disable = capReached && isEmpty;
 
-    return `
-      <div class="game-row">
-        <div class="matchup">
-          <div class="${favCovered ? "covered" : ""}"><span class="team">#${nums.favNum || ""} ${escapeHtml(favTeam)}${favHome ? " \u{1F3E0}" : ""}</span>${favScoreHtml}${favCovered ? " ✅" : ""}</div>
-          <div class="${undCovered ? "covered" : ""}"><span class="team">#${nums.undNum || ""} ${escapeHtml(undTeam)}${undHome ? " \u{1F3E0}" : ""}</span>${undScoreHtml}${undCovered ? " ✅" : ""}</div>
-          <div class="spread">${escapeHtml(lockedLine)}${liveMarketLine ? `<div class="spread-live">Now: ${escapeHtml(liveMarketLine)}</div>` : ""}</div>
-          ${statusHtml}
+    const myResult = s.pickResults[g.game_id];
+    let stripeClass = "";
+    if (live && live.state === "in") stripeClass = "live";
+    else if (graded && myResult === "win") stripeClass = "win";
+    else if (graded && myResult === "loss") stripeClass = "loss";
+
+    let metaRightHtml;
+    if (live && live.state === "in") {
+      metaRightHtml = `<span class="live-chip"><span class="dot"></span><span class="clock">${escapeHtml(live.clock || "LIVE")}</span></span>`;
+    } else if ((live && live.completed) || (g.status === "final" && g.home_score != null && g.away_score != null)) {
+      metaRightHtml = `<span class="final-tag">FINAL</span>`;
+    } else if (live && /DELAY|POSTPON|SUSPEND|CANCEL/.test(live.status_name || "")) {
+      metaRightHtml = `<span class="final-tag">${escapeHtml(live.clock || "Delayed")}</span>`;
+    } else {
+      metaRightHtml = `<span class="time">${escapeHtml(timeStr)}</span>`;
+    }
+
+    const pickRowHtml = viewingOtherPlayer
+      ? otherPlayerPickHtml(g, viewingOtherPlayer, otherPicksByGame, isLocked)
+      : (isLocked ? lockedPickHtml(selectedTeam, myResult) : `
+        <div class="pick-seg">
+          <div class="pick-seg-btn">
+            <input type="radio" id="pickfav_${g.game_id}" name="pick_${g.game_id}" data-pick-game="${g.game_id}" value="${escapeHtml(favTeam)}"
+              ${selectedTeam === favTeam ? "checked" : ""} ${disable && selectedTeam !== favTeam ? "disabled" : ""}>
+            <label for="pickfav_${g.game_id}">${escapeHtml(favTeam)}</label>
+          </div>
+          <div class="pick-seg-btn">
+            <input type="radio" id="pickund_${g.game_id}" name="pick_${g.game_id}" data-pick-game="${g.game_id}" value="${escapeHtml(undTeam)}"
+              ${selectedTeam === undTeam ? "checked" : ""} ${disable && selectedTeam !== undTeam ? "disabled" : ""}>
+            <label for="pickund_${g.game_id}">${escapeHtml(undTeam)}</label>
+          </div>
         </div>
-        <div class="pick-choices">
-          ${viewingOtherPlayer ? otherPlayerPickHtml(g, viewingOtherPlayer, otherPicksByGame, isLocked) : (isLocked ? lockedPickHtml(selectedTeam, s.pickResults[g.game_id]) : `
-            <label class="pick-choice ${selectedTeam === favTeam ? "selected" : ""}">
-              <input type="radio" name="pick_${g.game_id}" data-pick-game="${g.game_id}" value="${escapeHtml(favTeam)}"
-                ${selectedTeam === favTeam ? "checked" : ""} ${disable && selectedTeam !== favTeam ? "disabled" : ""}>
-              ${escapeHtml(favTeam)}
-            </label>
-            <label class="pick-choice ${selectedTeam === undTeam ? "selected" : ""}">
-              <input type="radio" name="pick_${g.game_id}" data-pick-game="${g.game_id}" value="${escapeHtml(undTeam)}"
-                ${selectedTeam === undTeam ? "checked" : ""} ${disable && selectedTeam !== undTeam ? "disabled" : ""}>
-              ${escapeHtml(undTeam)}
-            </label>
-          `)}
+      `);
+
+    return `
+      <div class="game-card">
+        <div class="game-card-stripe ${stripeClass}"></div>
+        <div class="game-card-body">
+          <div class="game-card-top">
+            <div class="game-card-matchup">
+              <span class="${favCovered ? "covered" : ""}">#${nums.favNum || ""} ${escapeHtml(favTeam)}${favHome ? " \u{1F3E0}" : ""}</span>${favScoreHtml}${favCovered ? " ✅" : ""}
+              <span class="vs">at</span>
+              <span class="${undCovered ? "covered" : ""}">#${nums.undNum || ""} ${escapeHtml(undTeam)}${undHome ? " \u{1F3E0}" : ""}</span>${undScoreHtml}${undCovered ? " ✅" : ""}
+            </div>
+            <div class="game-card-meta">
+              <span class="spread">${escapeHtml(lockedLine)}</span>${metaRightHtml}
+              ${liveMarketLine ? `<div class="spread-live">Now: ${escapeHtml(liveMarketLine)}</div>` : ""}
+            </div>
+          </div>
+          ${pickRowHtml}
         </div>
       </div>
     `;

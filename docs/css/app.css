@@ -493,3 +493,127 @@ tr.cmp-me { background: var(--bg-elevated); }
 .cmp-spread { color: var(--text-dim); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; }
 .h2h-row { border-left: 3px solid transparent; }
 .h2h-row.h2h-agree { border-left: 3px solid var(--accent); }
+
+/* ===== Redesign additions (compact picks, podium, h2h, poll bars, pill tabs, login hero, profile/DM) ===== */
+
+:root {
+  --accent-2: #ff7a59;
+}
+
+.tabs { border-bottom: none; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 11px; padding: 3px; margin-bottom: 14px; }
+.tabs button { border-radius: 8px; border-bottom: none; padding: 9px 4px; }
+.tabs button.active { background: var(--accent); color: #fff; }
+
+/* Compact game card + segmented pick control (Picks tab) */
+.game-card { display: flex; background: var(--bg-card); border: 1px solid var(--border); border-radius: 11px; overflow: hidden; margin-bottom: 7px; }
+.game-card-stripe { width: 3px; background: linear-gradient(180deg, #4f7fff, var(--accent-dim)); flex: 0 0 auto; }
+.game-card-stripe.live { background: linear-gradient(180deg, #e4b43b, #2d2d2d); }
+.game-card-stripe.win { background: var(--win); }
+.game-card-stripe.loss { background: var(--loss); }
+.game-card-body { flex: 1; padding: 8px 11px; min-width: 0; }
+.game-card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 6px; }
+.game-card-matchup { font-size: 12px; font-weight: 700; line-height: 1.35; }
+.game-card-matchup .vs { color: var(--text-dim); font-weight: 500; }
+.game-card-matchup .score { font-weight: 700; }
+.game-card-matchup .score.dim { color: var(--text-dim); font-weight: 500; }
+.game-card-matchup .covered { color: var(--win); }
+.game-card-meta { text-align: right; flex: 0 0 auto; white-space: nowrap; }
+.game-card-meta .spread { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; color: var(--text-dim); }
+.game-card-meta .time { font-size: 9px; color: var(--text-dim); margin-left: 6px; }
+.game-card-meta .spread-live { font-size: 9px; color: var(--accent); font-weight: 700; margin-top: 2px; }
+.game-card-meta .live-chip { display: inline-flex; align-items: center; gap: 4px; background: rgba(255,75,75,0.15); border-radius: 5px; padding: 2px 6px; }
+.game-card-meta .live-chip .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); display: inline-block; }
+.game-card-meta .live-chip .clock { font-size: 9px; color: var(--accent); font-weight: 700; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.game-card-meta .final-tag { font-size: 9px; color: var(--text-dim); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.pick-seg { display: flex; gap: 4px; background: var(--bg-elevated); border-radius: 7px; padding: 2px; }
+.pick-seg-btn { position: relative; flex: 1; }
+.pick-seg-btn input[type="radio"] { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+.pick-seg-btn label { display: block; text-align: center; padding: 5px 4px; border-radius: 5px; font-weight: 600; font-size: 10.5px; color: var(--text-dim); cursor: pointer; }
+.pick-seg-btn input[type="radio"]:checked + label { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; font-weight: 700; }
+.pick-seg-btn input[type="radio"]:disabled + label { opacity: 0.45; cursor: default; }
+
+.game-card-pickrow { display: flex; align-items: center; justify-content: space-between; background: var(--bg-elevated); border-radius: 7px; padding: 5px 9px; font-size: 10.5px; }
+.game-card-pickrow .label { color: var(--text-dim); }
+.game-card-pickrow .value { font-weight: 700; }
+.game-card-pickrow.win-bg { background: rgba(46,204,113,0.1); }
+.game-card-pickrow .value.win { color: var(--win); }
+.game-card-pickrow .value.loss { color: var(--loss); }
+
+.progress-fill { background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+
+/* Leaderboard podium + rank change + tappable rows */
+.podium { display: flex; align-items: flex-end; justify-content: center; gap: 10px; padding: 6px 2px 2px; }
+.podium-item { display: flex; flex-direction: column; align-items: center; gap: 6px; flex: 1; max-width: 118px; background: none; border: none; font: inherit; color: inherit; cursor: pointer; }
+.podium-avatar-wrap { position: relative; }
+.podium-medal { position: absolute; top: -10px; left: 50%; transform: translateX(-50%); font-size: 18px; }
+.podium-item.second .podium-medal, .podium-item.third .podium-medal { left: auto; right: -6px; transform: none; font-size: 15px; }
+.podium-name { font-size: 12px; font-weight: 700; text-align: center; line-height: 1.2; }
+.podium-item.first .podium-name { font-size: 13px; font-weight: 800; }
+.podium-record { font-size: 10.5px; color: var(--text-dim); }
+.podium-platform { width: 100%; border-radius: 10px 10px 0 0; display: flex; align-items: flex-start; justify-content: center; padding-top: 8px; font-weight: 800; }
+.podium-item.first .podium-platform { height: 90px; font-size: 22px; background: linear-gradient(180deg,#3a2f12,var(--bg-card)); color: var(--gold); }
+.podium-item.second .podium-platform { height: 62px; font-size: 18px; background: linear-gradient(180deg,#2a3140,var(--bg-card)); color: var(--silver); }
+.podium-item.third .podium-platform { height: 46px; font-size: 16px; background: linear-gradient(180deg,#332218,var(--bg-card)); color: var(--bronze); }
+
+.rank-chip { font-size: 10.5px; font-weight: 700; white-space: nowrap; }
+.rank-chip.up { color: var(--win); }
+.rank-chip.down { color: var(--loss); }
+.rank-chip.same { color: var(--text-dim); }
+tr.standings-me { background: rgba(255,75,75,0.07); }
+tr.standings-clickable { cursor: pointer; }
+tr.standings-clickable:active { background: var(--bg-elevated); }
+
+/* Player profile sheet */
+.profile-head { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-bottom: 14px; }
+.profile-avatar-xl { width: 84px; height: 84px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 28px; overflow: hidden; }
+.profile-avatar-xl img { width: 100%; height: 100%; object-fit: cover; display: block; }
+table.profile-weeks { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+table.profile-weeks th, table.profile-weeks td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--border); }
+table.profile-weeks th { color: var(--text-dim); font-weight: 600; font-size: 0.74rem; text-transform: uppercase; }
+
+/* Compare: head-to-head summary */
+.h2h-summary { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.h2h-side { display: flex; flex-direction: column; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.h2h-vs { display: flex; flex-direction: column; align-items: center; gap: 5px; flex: 0 0 auto; }
+.h2h-vs-label { font-size: 11px; font-weight: 800; color: var(--text-dim); letter-spacing: 0.06em; }
+.h2h-agree-chip { background: rgba(255,75,75,0.14); border: 1px solid var(--accent); border-radius: 999px; padding: 3px 9px; font-size: 10px; font-weight: 700; color: var(--accent); white-space: nowrap; }
+.h2h-avatar-lg { width: 46px; height: 46px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 14px; overflow: hidden; border: 2px solid var(--border); }
+.h2h-avatar-lg img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.h2h-avatar-lg.me { border-color: var(--accent); }
+
+/* Requests & Votes: inline result bars + status chips */
+.poll-option-row { position: relative; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin-bottom: 8px; cursor: pointer; }
+.poll-option-row.selected { border-color: var(--accent); }
+.poll-option-fill { position: absolute; inset: 0; background: rgba(255,255,255,0.05); transition: width 0.2s ease; }
+.poll-option-row.selected .poll-option-fill { background: rgba(255,75,75,0.16); }
+.poll-option-content { position: relative; display: flex; align-items: center; justify-content: space-between; padding: 11px 13px; gap: 8px; }
+.poll-option-content .label { display: flex; align-items: center; gap: 9px; font-size: 12.5px; font-weight: 600; }
+.poll-option-row.selected .poll-option-content .label { font-weight: 700; }
+.poll-option-content .pct { font-size: 11.5px; font-weight: 700; color: var(--text-dim); flex: 0 0 auto; }
+.poll-radio-dot { width: 15px; height: 15px; border-radius: 50%; border: 2px solid var(--border); display: inline-block; box-sizing: border-box; flex: 0 0 auto; }
+.poll-option-row.selected .poll-radio-dot { border: 5px solid var(--accent); }
+
+.status-chip { font-size: 10px; font-weight: 700; border-radius: 999px; padding: 3px 9px; white-space: nowrap; }
+.status-chip.accepted { background: rgba(46,204,113,0.15); color: var(--win); }
+.status-chip.pending { background: rgba(255,255,255,0.08); color: var(--text-dim); }
+.status-chip.denied { background: rgba(231,76,60,0.15); color: var(--loss); }
+
+/* Log in / sign up hero */
+.auth-hero-glow { position: absolute; top: -90px; left: 50%; transform: translateX(-50%); width: 320px; height: 320px; border-radius: 50%; background: radial-gradient(circle, rgba(255,75,75,0.22), rgba(255,75,75,0) 70%); pointer-events: none; z-index: 0; }
+.auth-logo-mark { width: 64px; height: 64px; border-radius: 20px; margin: 0 auto 14px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); display: flex; align-items: center; justify-content: center; font-size: 30px; box-shadow: 0 12px 30px -10px rgba(255,75,75,0.55); }
+.auth-grad-text { background: linear-gradient(135deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+/* Direct messages thread (opened from a player's profile sheet) */
+.dm-list { display: flex; flex-direction: column; gap: 10px; max-height: 50vh; overflow-y: auto; margin-bottom: 10px; padding-bottom: 2px; }
+.dm-msg { max-width: 82%; }
+.dm-msg.mine { align-self: flex-end; text-align: right; }
+.dm-msg .bubble { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 8px 12px; display: inline-block; text-align: left; font-size: 0.88rem; }
+.dm-msg.mine .bubble { background: linear-gradient(135deg, var(--accent-dim), #3a1515); border-color: var(--accent); }
+.dm-msg .meta { font-size: 0.68rem; color: var(--text-dim); margin-bottom: 2px; }
+.dm-input-row { display: flex; gap: 8px; }
+.dm-input-row textarea { flex: 1; resize: none; min-height: 40px; max-height: 100px; font-family: inherit; background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text); border-radius: 10px; padding: 9px 11px; box-sizing: border-box; }
+.dm-input-row .btn { width: auto; padding: 9px 14px; }
+
+/* Chat: gradient tint on your own messages, matching the accent gradient used elsewhere */
+.chat-msg.mine .bubble { background: linear-gradient(135deg, var(--accent-dim), #3a1515); }

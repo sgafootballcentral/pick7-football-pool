@@ -59,23 +59,34 @@ export function renderRequestsVotes(el, { supabase, user }) {
   function openPollHtml(poll) {
     const options = s.optionsByPoll[poll.id] || [];
     const myVote = s.myVoteByPoll[poll.id];
+    const tally = s.tallyByPoll[poll.id] || {};
+    const total = Object.values(tally).reduce((a, b) => a + b, 0);
     return `
       <div class="card">
         <div style="font-weight:600;">${escapeHtml(poll.title)}</div>
         ${poll.description ? `<div class="hint" style="margin-top:2px;">${escapeHtml(poll.description)}</div>` : ""}
         ${pollClosesHtml(poll)}
-        <div class="pick-choices" style="flex-direction:column; margin-top:10px;">
-          ${options.map((o) => `
-            <label class="pick-choice ${myVote === o.id ? "selected" : ""}" style="width:100%;">
-              <input type="radio" name="poll_${poll.id}" data-vote-poll="${poll.id}" value="${o.id}" ${myVote === o.id ? "checked" : ""}>
-              ${escapeHtml(o.label)}
-            </label>
-          `).join("")}
+        <div style="margin-top:10px;">
+          ${options.map((o) => {
+            const count = tally[o.id] || 0;
+            const pct = total ? Math.round((count / total) * 100) : 0;
+            const selected = myVote === o.id;
+            return `
+              <label class="poll-option-row ${selected ? "selected" : ""}">
+                <input type="radio" name="poll_${poll.id}" data-vote-poll="${poll.id}" value="${o.id}" ${selected ? "checked" : ""} style="position:absolute; opacity:0; width:1px; height:1px;">
+                <div class="poll-option-fill" style="width:${pct}%;"></div>
+                <div class="poll-option-content">
+                  <span class="label"><span class="poll-radio-dot"></span>${escapeHtml(o.label)}</span>
+                  <span class="pct">${pct}%</span>
+                </div>
+              </label>
+            `;
+          }).join("")}
         </div>
-        <div class="btn-row" style="margin-top:10px;">
-          <button class="btn btn-primary" data-submit-vote="${poll.id}">${myVote ? "Update my vote" : "Submit vote"}</button>
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-top:10px;">
+          <div class="hint" style="font-size:10.5px;">${total} vote${total === 1 ? "" : "s"} so far</div>
+          <button class="btn btn-primary" data-submit-vote="${poll.id}" style="width:auto; padding:8px 16px;">${myVote ? "Update my vote" : "Submit vote"}</button>
         </div>
-        ${tallyHtml(poll)}
       </div>
     `;
   }
@@ -108,9 +119,14 @@ export function renderRequestsVotes(el, { supabase, user }) {
     } else if (req.status === "denied" && req.denial_reason) {
       followUp = `<div class="hint" style="margin-top:6px;">Admin note: ${escapeHtml(req.denial_reason)}</div>`;
     }
+    const chipClass = req.status === "accepted" ? "accepted" : req.status === "denied" ? "denied" : "pending";
+    const chipLabel = req.status === "accepted" ? "Approved" : req.status === "denied" ? "Denied" : "Pending";
     return `
       <div class="card">
-        <div style="font-weight:600;">${escapeHtml(req.title)} — ${statusLabel(req.status)}</div>
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+          <div style="font-weight:600;">${escapeHtml(req.title)}</div>
+          <span class="status-chip ${chipClass}">${chipLabel}</span>
+        </div>
         ${req.description ? `<div class="hint" style="margin-top:2px;">${escapeHtml(req.description)}</div>` : ""}
         ${followUp}
       </div>
