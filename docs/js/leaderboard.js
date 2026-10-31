@@ -107,24 +107,29 @@ export function renderLeaderboard(el, { supabase, user, username }) {
 
     const weekOptions = Array.from({ length: 16 }, (_, i) => i + 1);
 
-    // A tie shares a place (1-2-2-4, see above), so "top 3" means the top 3
-    // DISTINCT place values, not simply the first 3 sorted rows -- a 3-way
-    // tie for 2nd must show all three players on the 2nd-place tier, never
-    // split two of them onto the podium and bump the third into the table
-    // while still (correctly) showing a "2" rank badge there.
-    const distinctPlaces = [...new Set(standings.map((r) => r.place))].sort((a, b) => a - b).slice(0, 3);
-    const podiumGroups = distinctPlaces.map((pl) => standings.filter((r) => r.place === pl));
-    const restPlayers = standings.filter((r) => !distinctPlaces.includes(r.place));
-    const tierNames = ["first", "second", "third"];
+    // The podium is for actual places 1, 2 and 3 ONLY -- never "whichever
+    // 3 distinct place values happen to be smallest". A tie swallows places:
+    // a 3-way tie for 1st leaves no place 2 or 3 at all (the next player is
+    // 4th), and a 3-way tie for 2nd leaves no place 3 (the next player is
+    // 5th) -- in both cases nobody belongs on the podium beyond whatever
+    // place groups genuinely exist, and everyone else starts the table
+    // below, however their actual place number reads.
+    const TIER_BY_PLACE = { 1: "first", 2: "second", 3: "third" };
+    const groupsByPlace = {};
+    for (const pl of [1, 2, 3]) {
+      const players = standings.filter((r) => r.place === pl);
+      if (players.length) groupsByPlace[pl] = { place: pl, tier: TIER_BY_PLACE[pl], players };
+    }
+    const podiumGroups = Object.values(groupsByPlace);
+    const restPlayers = standings.filter((r) => r.place > 3);
     // Visual layout convention: 2nd on the left, 1st in the center, 3rd on
-    // the right -- only when all three tiers are actually present.
-    const visualOrder = podiumGroups.length === 3 ? [1, 0, 2] : podiumGroups.map((_, i) => i);
+    // the right -- any place without a group (swallowed by a tie above it)
+    // is simply omitted rather than leaving an empty slot.
+    const visualOrder = [2, 1, 3].map((pl) => groupsByPlace[pl]).filter(Boolean);
 
-    function podiumTierHtml(groupIdx) {
-      const players = podiumGroups[groupIdx];
-      if (!players || !players.length) return `<div class="podium-item" style="visibility:hidden;"></div>`;
-      const tier = tierNames[groupIdx];
-      const medal = MEDALS[groupIdx + 1];
+    function podiumTierHtml(group) {
+      const { tier, players } = group;
+      const medal = MEDALS[group.place];
       return `
         <div class="podium-item ${tier}">
           <div class="podium-players-stack">
