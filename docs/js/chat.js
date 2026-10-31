@@ -1,4 +1,4 @@
-import { escapeHtml, avatarInnerHtml, fetchAvatarsByUsername } from "./app.js";
+import { escapeHtml, avatarInnerHtml, fetchAvatarsByUsername, fetchCurrentUsernames } from "./app.js";
 
 function storagePathFromUrl(url) {
   if (!url) return null;
@@ -12,13 +12,13 @@ function storagePathFromUrl(url) {
 // user can switch their OS/browser keyboard into emoji mode and type one.
 const REACTION_EMOJIS = ["\u{1F44D}", "\u2764\uFE0F", "\u{1F602}", "\u{1F62E}", "\u{1F622}", "\u{1F525}"];
 
-function buildReactionsByMessage(rows, myUserId) {
+function buildReactionsByMessage(rows, myUserId, currentUsernames) {
   const map = {};
   for (const r of rows || []) {
     const byEmoji = (map[r.message_id] ||= {});
     const entry = (byEmoji[r.emoji] ||= { count: 0, mine: false, usernames: [] });
     entry.count++;
-    entry.usernames.push(r.username || "Someone");
+    entry.usernames.push((currentUsernames || {})[r.user_id] || r.username || "Someone");
     if (r.user_id === myUserId) entry.mine = true;
   }
   return map;
@@ -36,6 +36,7 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
   const s = {
     loading: true, error: "", messages: [], autoRefresh: true, intervalSec: 5, pendingFile: null,
     reactionsByMessage: {}, openPickerFor: null, pickerShowInput: null, avatarsByUsername: {},
+    currentUsernames: {},
   };
   let timer = null;
 
@@ -287,11 +288,12 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
         weekday: "short", month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York",
       });
     } catch (_) {}
+    const liveName = s.currentUsernames[m.user_id] || m.username || "Unknown";
     return `
       <div class="chat-msg ${mine ? "mine" : ""}">
         <div class="meta player-with-avatar">
-          <span class="avatar-circle-sm">${avatarInnerHtml(s.avatarsByUsername[m.username]?.url, s.avatarsByUsername[m.username]?.monogram, m.username)}</span>
-          ${escapeHtml(m.username)} &middot; ${escapeHtml(timeStr)}
+          <span class="avatar-circle-sm">${avatarInnerHtml(s.avatarsByUsername[liveName]?.url, s.avatarsByUsername[liveName]?.monogram, liveName)}</span>
+          ${escapeHtml(liveName)} &middot; ${escapeHtml(timeStr)}
         </div>
         <div class="bubble" data-msg-id="${m.id}">
           ${m.message ? `<div>${escapeHtml(m.message)}</div>` : ""}
@@ -386,7 +388,7 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
       if (msgErr) throw msgErr;
       if (reactErr) throw reactErr;
       const newMessages = msgData || [];
-      const newReactions = buildReactionsByMessage(reactData, user.id);
+      const newReactions = buildReactionsByMessage(reactData, user.id, s.currentUsernames);
       // Reactions changing (someone else's tap) doesn't add/remove a message
       // row, so the message-id signature alone would miss it -- compare both.
       const changed = messagesSignature(newMessages) !== messagesSignature(s.messages)
@@ -424,6 +426,10 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
   // finishes last triggers the redraw that actually shows the avatars.
   fetchAvatarsByUsername(supabase).then((m) => {
     s.avatarsByUsername = m;
+    if (!s.loading) drawMessages();
+  });
+  fetchCurrentUsernames(supabase).then((m) => {
+    s.currentUsernames = m;
     if (!s.loading) drawMessages();
   });
   loadMessages(true).then(setupAutoRefresh);
