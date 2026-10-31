@@ -25,7 +25,11 @@ function formatLockAt(iso) {
   });
 }
 
-export function renderCompare(el, { supabase, username }) {
+export function renderCompare(el, { supabase, username, currentSeason }) {
+  const seasonId = currentSeason?.id ?? null;
+  function withSeason(query) {
+    return seasonId ? query.eq("season_id", seasonId) : query;
+  }
   const s = {
     loading: true,
     error: "",
@@ -273,11 +277,11 @@ export function renderCompare(el, { supabase, username }) {
   async function loadWeek() {
     s.loading = true; draw();
     try {
-      const { data: games, error: gErr } = await supabase.from("games").select("*").eq("week_number", s.week);
+      const { data: games, error: gErr } = await withSeason(supabase.from("games").select("*").eq("week_number", s.week));
       if (gErr) throw gErr;
       s.games = games || [];
 
-      const { data: weekPicks, error: pErr } = await supabase.from("picks").select("*").eq("week_number", s.week);
+      const { data: weekPicks, error: pErr } = await withSeason(supabase.from("picks").select("*").eq("week_number", s.week));
       if (pErr) throw pErr;
       s.picksByUsername = {};
       for (const p of weekPicks || []) {
@@ -291,7 +295,7 @@ export function renderCompare(el, { supabase, username }) {
       }
 
       try {
-        const { data: lockRow } = await supabase.from("week_pick_locks").select("*").eq("week_number", s.week).maybeSingle();
+        const { data: lockRow } = await withSeason(supabase.from("week_pick_locks").select("*").eq("week_number", s.week)).maybeSingle();
         s.weekLock = lockRow || null;
       } catch (_) {
         s.weekLock = null;
@@ -309,7 +313,7 @@ export function renderCompare(el, { supabase, username }) {
   (async function init() {
     try {
       const [{ data: rows, error: wErr }, avatars, currentUsernames] = await Promise.all([
-        supabase.from("games").select("week_number"),
+        withSeason(supabase.from("games").select("week_number")),
         fetchAvatarsByUsername(supabase),
         fetchCurrentUsernames(supabase),
       ]);
