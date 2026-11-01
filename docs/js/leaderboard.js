@@ -98,6 +98,12 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
       if (delta < 0) return `<span class="rank-chip down">▼${-delta}</span>`;
       return `<span class="rank-chip same">–</span>`;
     }
+    // Stash each player's trend chip on their standings row -- since
+    // `standings` entries are the very same objects stored in `byPlayer`
+    // (Object.values doesn't clone), this makes the trend available to
+    // drawProfileModal(byPlayer) too, without threading extra state
+    // through a function that only ever receives byPlayer.
+    standings.forEach((r) => { r.trendHtml = rankChipHtml(r); });
 
     // The view already has (at most) one row per player per week, so this
     // is a direct lookup rather than a re-aggregation.
@@ -205,19 +211,21 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
 
       <div style="overflow-x:auto;">
         <table class="standings">
-          <thead><tr><th>Rank</th><th>Player</th><th>Overall</th><th>Week ${s.selectedWeek}</th><th>Win %</th><th>Trend</th></tr></thead>
+          <thead><tr><th>Rank</th><th>Player</th><th>Overall</th><th>Week ${s.selectedWeek}</th><th>Win %</th></tr></thead>
           <tbody>
             ${(restPlayers.length ? restPlayers : standings).map((r) => {
               const wk = weekByPlayer[r.user_id] || { wins: 0, losses: 0 };
               const rankClass = r.place <= 3 ? `rank-${r.place}` : "";
               const isMe = r.user_id === user.id;
               return `<tr class="standings-clickable ${isMe ? "standings-me" : ""}" data-open-profile="${escapeHtml(r.user_id)}" data-open-profile-name="${escapeHtml(r.username)}">
-                <td class="${rankClass}">${MEDALS[r.place] || r.place}</td>
+                <td class="${rankClass} rank-cell">
+                  <div class="rank-num">${MEDALS[r.place] || r.place}</div>
+                  ${rankChipHtml(r)}
+                </td>
                 <td><span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[r.username]?.url, s.avatars[r.username]?.monogram, r.username)}</span>${escapeHtml(r.username)}${isMe ? ` <span class="hint">(you)</span>` : ""}${unreadDmSenders?.[r.user_id] ? `<span class="dm-unread-dot" title="New message"></span>` : ""}</span></td>
                 <td>${r.wins} | ${r.losses}</td>
                 <td>${wk.wins} | ${wk.losses}</td>
                 <td>${(r.winPct * 100).toFixed(1)}%</td>
-                <td>${rankChipHtml(r)}</td>
               </tr>`;
             }).join("")}
           </tbody>
@@ -268,7 +276,7 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
         <div class="profile-head">
           <span class="avatar-circle-lg profile-avatar-xl">${avatarInnerHtml(s.avatars[uname]?.url, s.avatars[uname]?.monogram, uname)}</span>
           <h2 style="margin:0;">${escapeHtml(uname)}${isMe ? ` <span class="hint">(you)</span>` : ""}</h2>
-          <div class="hint">${rec.wins}–${rec.losses} overall · ${rec.wins + rec.losses ? ((rec.wins / (rec.wins + rec.losses)) * 100).toFixed(1) : "0.0"}% win rate</div>
+          <div class="hint">${rec.wins}–${rec.losses} overall · ${rec.wins + rec.losses ? ((rec.wins / (rec.wins + rec.losses)) * 100).toFixed(1) : "0.0"}% win rate${rec.trendHtml ? ` · ${rec.trendHtml}` : ""}</div>
         </div>
         ${weeks.length ? `
           <table class="profile-weeks">

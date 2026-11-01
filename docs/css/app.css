@@ -334,7 +334,20 @@ input, select, textarea {
 
 table.standings { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 table.standings th, table.standings td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); }
-table.standings th { color: var(--text-dim); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; }
+table.standings th { color: var(--text-dim); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; white-space: nowrap; }
+/* Trend now lives inside the Rank cell (stacked under the rank number)
+   instead of its own column -- on a phone-width screen, five padded
+   columns plus a long username didn't fit, so Trend used to sit just
+   past the right edge of the screen, invisible until you rotated to
+   landscape. Folding it into Rank removes a whole column, and the
+   tighter padding/font below on narrow screens gives Player more room. */
+table.standings .rank-cell { white-space: nowrap; }
+table.standings .rank-cell .rank-num { font-weight: 700; }
+table.standings .rank-cell .rank-chip { display: block; font-size: 9px; margin-top: 1px; }
+@media (max-width: 420px) {
+  table.standings { font-size: 0.8rem; }
+  table.standings th, table.standings td { padding: 7px 4px; }
+}
 .rank-1 { color: var(--gold); font-weight: 700; }
 .rank-2 { color: var(--silver); font-weight: 700; }
 .rank-3 { color: var(--bronze); font-weight: 700; }
