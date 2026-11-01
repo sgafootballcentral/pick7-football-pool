@@ -139,26 +139,45 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
     // into a shrunken block -- that cramped-tie look was the "confusing"
     // feedback the earlier flat redesign was reacting to; this keeps the
     // podium silhouette the user liked while fixing that specific case.
+    // Solo place: the full avatar-above-name card (unchanged). Tied place:
+    // a compact row -- small avatar beside name + a single condensed
+    // stat line -- so a 3-4 way tie reads as a mini leaderboard within
+    // that one riser instead of a wide, shrunken wrap of cards.
+    function podiumPlayerHtml(r, tied) {
+      const dmDot = unreadDmSenders?.[r.user_id] ? `<span class="dm-unread-dot" title="New message"></span>` : "";
+      if (tied) {
+        return `
+          <button type="button" class="podium-player" data-open-profile="${escapeHtml(r.user_id)}" data-open-profile-name="${escapeHtml(r.username)}">
+            <span class="avatar-circle-lg podium-avatar">${avatarInnerHtml(s.avatars[r.username]?.url, s.avatars[r.username]?.monogram, r.username)}</span>
+            <div class="podium-player-info">
+              <div class="podium-name">${escapeHtml(r.username)}${dmDot}</div>
+              <div class="podium-record">${r.wins}–${r.losses} · ${(r.winPct * 100).toFixed(1)}% · ${rankChipHtml(r)}</div>
+            </div>
+          </button>
+        `;
+      }
+      const wk = weekByPlayer[r.user_id] || { wins: 0, losses: 0 };
+      return `
+        <button type="button" class="podium-player" data-open-profile="${escapeHtml(r.user_id)}" data-open-profile-name="${escapeHtml(r.username)}">
+          <span class="avatar-circle-lg podium-avatar">${avatarInnerHtml(s.avatars[r.username]?.url, s.avatars[r.username]?.monogram, r.username)}</span>
+          <div class="podium-name">${escapeHtml(r.username)}${dmDot}</div>
+          <div class="podium-record">${r.wins}–${r.losses} <span style="opacity:0.7;">overall</span></div>
+          <div class="podium-record">${(r.winPct * 100).toFixed(1)}% win · ${rankChipHtml(r)}</div>
+          <div class="podium-record">Wk ${s.selectedWeek}: ${wk.wins}–${wk.losses}</div>
+        </button>
+      `;
+    }
+
     function podiumTierHtml(group) {
       const { tier, place, players } = group;
       const medal = MEDALS[place];
-      const tierClass = players.length > 1 ? `${tier} podium-tied` : tier;
+      const tied = players.length > 1;
+      const tierClass = tied ? `${tier} podium-tied` : tier;
       return `
         <div class="podium-item ${tierClass}">
           <div class="podium-rank-badge">${medal} ${ORDINAL_BY_PLACE[place]}</div>
           <div class="podium-players-stack">
-            ${players.map((r) => {
-              const wk = weekByPlayer[r.user_id] || { wins: 0, losses: 0 };
-              return `
-                <button type="button" class="podium-player" data-open-profile="${escapeHtml(r.user_id)}" data-open-profile-name="${escapeHtml(r.username)}">
-                  <span class="avatar-circle-lg podium-avatar">${avatarInnerHtml(s.avatars[r.username]?.url, s.avatars[r.username]?.monogram, r.username)}</span>
-                  <div class="podium-name">${escapeHtml(r.username)}${unreadDmSenders?.[r.user_id] ? `<span class="dm-unread-dot" title="New message"></span>` : ""}</div>
-                  <div class="podium-record">${r.wins}–${r.losses} <span style="opacity:0.7;">overall</span></div>
-                  <div class="podium-record">${(r.winPct * 100).toFixed(1)}% win · ${rankChipHtml(r)}</div>
-                  <div class="podium-record">Wk ${s.selectedWeek}: ${wk.wins}–${wk.losses}</div>
-                </button>
-              `;
-            }).join("")}
+            ${players.map((r) => podiumPlayerHtml(r, tied)).join("")}
           </div>
           <div class="podium-riser">${place}</div>
         </div>

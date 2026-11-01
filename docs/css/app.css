@@ -585,14 +585,20 @@ tr.cmp-me { background: var(--bg-elevated); }
 .podium-name { font-size: 12px; font-weight: 700; text-align: center; line-height: 1.2; }
 .podium-item.first .podium-name { font-size: 13.5px; font-weight: 800; }
 .podium-record { font-size: 10.5px; color: var(--text-dim); text-align: center; }
-/* A tied place has more than one avatar sharing the same riser -- shrink
-   them so a 3-4 way tie still fits comfortably on one riser width instead
-   of wrapping to multiple cramped rows. Solo places keep full size. */
-.podium-item.podium-tied .podium-avatar { width: 38px; height: 38px; font-size: 0.82rem; }
-.podium-item.first.podium-tied .podium-avatar { width: 46px; height: 46px; font-size: 0.95rem; }
-.podium-item.podium-tied .podium-name { font-size: 10.5px; }
-.podium-item.podium-tied .podium-record { font-size: 9.5px; }
-.podium-item.podium-tied .podium-players-stack { gap: 8px 10px; }
+/* A tied place has more than one player sharing the same riser. Instead
+   of stacking (or wrapping) full avatar-above-name cards, it switches to
+   a compact list of rows: small avatar beside the name/record column,
+   left-aligned -- reads like a mini leaderboard within that one spot, and
+   scales to a 3-4 way tie without spreading wide or shrinking illegibly.
+   Solo places are unaffected. */
+.podium-item.podium-tied .podium-players-stack { flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 8px; width: 100%; }
+.podium-item.podium-tied .podium-player { flex-direction: row; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; }
+.podium-item.podium-tied .podium-avatar { width: 34px; height: 34px; font-size: 0.78rem; box-shadow: none; }
+.podium-player-info { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.podium-item.podium-tied .podium-name,
+.podium-item.podium-tied .podium-record { text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.podium-item.podium-tied .podium-name { font-size: 11px; }
+.podium-item.podium-tied .podium-record { font-size: 9px; }
 .podium-riser {
   width: 100%; margin-top: 12px;
   border-radius: 12px 12px 5px 5px;
