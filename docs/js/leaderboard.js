@@ -116,6 +116,7 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
     // place groups genuinely exist, and everyone else starts the table
     // below, however their actual place number reads.
     const TIER_BY_PLACE = { 1: "first", 2: "second", 3: "third" };
+    const ORDINAL_BY_PLACE = { 1: "1st", 2: "2nd", 3: "3rd" };
     const groupsByPlace = {};
     for (const pl of [1, 2, 3]) {
       const players = standings.filter((r) => r.place === pl);
@@ -123,25 +124,30 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
     }
     const podiumGroups = Object.values(groupsByPlace);
     const restPlayers = standings.filter((r) => r.place > 3);
-    // Visual layout convention: 2nd on the left, 1st in the center, 3rd on
-    // the right -- any place without a group (swallowed by a tie above it)
-    // is simply omitted rather than leaving an empty slot.
-    const visualOrder = [2, 1, 3].map((pl) => groupsByPlace[pl]).filter(Boolean);
+    // Flat, left-to-right 1st/2nd/3rd order -- no more height-tiered
+    // "podium stand" blocks, so there's no center-emphasis reason to swap
+    // 1st into the middle anymore. Any place without a group (swallowed
+    // by a tie above it) is simply omitted rather than leaving a gap.
+    const visualOrder = [1, 2, 3].map((pl) => groupsByPlace[pl]).filter(Boolean);
 
+    // Compact, equal-height cards instead of the old tall medal-stand
+    // blocks -- those made a big tie (several avatars stacked inside a
+    // short 2nd/3rd block) look cramped and uneven next to a single
+    // player in a tall 1st block, which is the "confusing" feedback this
+    // redesign addresses. Rank is now shown with a small badge and subtle
+    // gold/silver/bronze accent instead of block height.
     function podiumTierHtml(group) {
-      const { tier, players } = group;
-      const medal = MEDALS[group.place];
+      const { tier, place, players } = group;
+      const medal = MEDALS[place];
       return `
         <div class="podium-item ${tier}">
+          <div class="podium-rank-badge">${medal} ${ORDINAL_BY_PLACE[place]}</div>
           <div class="podium-players-stack">
             ${players.map((r) => {
               const wk = weekByPlayer[r.user_id] || { wins: 0, losses: 0 };
               return `
                 <button type="button" class="podium-player" data-open-profile="${escapeHtml(r.user_id)}" data-open-profile-name="${escapeHtml(r.username)}">
-                  <div class="podium-avatar-wrap">
-                    <span class="avatar-circle-lg" style="${tier === "first" ? "width:62px;height:62px;font-size:1.3rem;" : "width:48px;height:48px;font-size:1rem;"}">${avatarInnerHtml(s.avatars[r.username]?.url, s.avatars[r.username]?.monogram, r.username)}</span>
-                    <span class="podium-medal">${medal}</span>
-                  </div>
+                  <span class="avatar-circle-lg podium-avatar">${avatarInnerHtml(s.avatars[r.username]?.url, s.avatars[r.username]?.monogram, r.username)}</span>
                   <div class="podium-name">${escapeHtml(r.username)}${unreadDmSenders?.[r.user_id] ? `<span class="dm-unread-dot" title="New message"></span>` : ""}</div>
                   <div class="podium-record">${r.wins}–${r.losses} <span style="opacity:0.7;">overall</span></div>
                   <div class="podium-record">${(r.winPct * 100).toFixed(1)}% win · ${rankChipHtml(r)}</div>
@@ -150,7 +156,6 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
               `;
             }).join("")}
           </div>
-          <div class="podium-platform">${players[0].place}</div>
         </div>
       `;
     }
