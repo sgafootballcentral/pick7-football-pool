@@ -38,8 +38,9 @@ Then: Supabase dashboard -> **Integrations** -> **Cron** -> **Jobs** ->
 **Create job**:
 - Name: `grade-games-hourly` (cron jobs can't be renamed later, but the
   name is just a label -- it's fine even if you pick a different interval)
-- Schedule: a cron expression, e.g. `*/30 * * * *` for every 30 minutes
-  (this pool currently runs every 30 minutes) or `0 * * * *` for hourly
+- Schedule: a cron expression, e.g. `*/5 * * * *` for every 5 minutes
+  (this pool currently runs every 5 minutes), `*/30 * * * *` for every 30
+  minutes, or `0 * * * *` for hourly
 - Type: **Supabase Edge Function**
 - Method: `POST`
 - Edge Function: `grade-games`
@@ -71,8 +72,9 @@ function's URL directly with the publishable key in both the `apikey` and
 ## Adjusting the cadence
 
 Edit the cron job's schedule in the dashboard (Integrations -> Cron ->
-Jobs) -- e.g. `0 * * * *` for hourly, `*/15 * * * *` for every 15 minutes.
-No code change needed. Invocation count isn't a real constraint here --
+Jobs) -- e.g. `0 * * * *` for hourly, `*/15 * * * *` for every 15 minutes,
+or `*/5 * * * *` for every 5 minutes (what this pool runs now). No code
+change needed. Invocation count isn't a real constraint here --
 even every-minute is only ~43,000/month, well under Supabase's free-tier
 500,000/month Edge Function allowance -- the only reason to not go that
 aggressive is that ESPN's own data doesn't update meaningfully faster than

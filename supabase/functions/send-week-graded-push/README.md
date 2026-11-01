@@ -3,7 +3,8 @@
 Sends a real OS-level Web Push notification to every player with push
 enabled, announcing that a week's results are final. Unlike the other push
 features in this project, this one is **never automatic** -- grading runs
-on its own schedule (`grade-games`, every 15 min via Cron), so there's no
+on its own schedule (`grade-games`, every 5 min via Cron -- 15 and 30 min
+were earlier cadences), so there's no
 single moment the code can reliably call "the week just finished." Instead,
 an admin reviews the Leaderboard page and clicks **📢 Notify Players --
 Week N Results Are In** (next to "🔥 Current Standings", only shown once
