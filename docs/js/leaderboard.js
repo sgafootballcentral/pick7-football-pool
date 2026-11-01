@@ -1,4 +1,4 @@
-import { escapeHtml, avatarInnerHtml, fetchAvatarsByUsername } from "./app.js";
+import { escapeHtml, avatarInnerHtml, fetchAvatarsByUsername, fetchLiveScores, openGameDetailModal } from "./app.js";
 import { getSharedWeek, setSharedWeek } from "./weekState.js";
 
 const MEDALS = { 1: "\u{1F947}", 2: "\u{1F948}", 3: "\u{1F949}" };
@@ -355,6 +355,10 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
       if (gErr) throw gErr;
 
       const gameLookup = Object.fromEntries((games || []).map((g) => [g.game_id, g]));
+      // Best-effort -- an empty/failed result from ESPN just means the
+      // detail popup opens without a live clock/linescore for this game,
+      // same graceful-degradation as everywhere else that uses this.
+      const liveScores = await fetchLiveScores(games || []);
       const rows = (picks || []).slice().sort((a, b) => {
         const ga = gameLookup[a.game_id], gb = gameLookup[b.game_id];
         return (ga?.kickoff_time || "").localeCompare(gb?.kickoff_time || "");
@@ -374,7 +378,7 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
               <div class="game-card" style="margin-bottom:7px;">
                 <div class="game-card-stripe ${resultClass}"></div>
                 <div class="game-card-body">
-                  <div class="game-card-top">
+                  <div class="game-card-top game-card-clickable" data-open-gamecard="${escapeHtml(p.game_id)}">
                     <div class="game-card-matchup">${escapeHtml(matchup)}</div>
                     <div class="game-card-meta"><span class="spread">${escapeHtml(spread)}</span></div>
                   </div>
@@ -392,6 +396,13 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
       `;
       panel.querySelector("#week-picks-x-btn").addEventListener("click", closeToStandings);
       panel.querySelector("#week-picks-close-btn").addEventListener("click", () => panel.remove());
+      panel.querySelectorAll("[data-open-gamecard]").forEach((headerEl) => {
+        headerEl.addEventListener("click", () => {
+          const gid = headerEl.dataset.openGamecard;
+          const g = gameLookup[gid];
+          if (g) openGameDetailModal(g, liveScores[gid]);
+        });
+      });
     } catch (e) {
       panel.innerHTML = `
         <div class="modal-sheet">

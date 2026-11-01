@@ -523,6 +523,226 @@ export function avatarInnerHtml(url, monogram, name) {
   return `<span>${escapeHtml(initialOf(name))}</span>`;
 }
 
+const GC_EASTERN_TZ = "America/New_York";
+// ESPN's scoreboard "dates" param buckets a game by its Eastern calendar
+// date, not its raw UTC date -- a night game (e.g. an 8:15pm ET kickoff,
+// already past midnight UTC) needs to be queried under the Eastern date, or
+// it's silently never found. en-CA gives YYYY-MM-DD ordering directly.
+// (Mirrors the identical helper that already lives in picks.js -- kept
+// separate rather than imported from there so this module has no
+// dependency on picks.js, just the other way around.)
+const gcEasternDateFmt = new Intl.DateTimeFormat("en-CA", {
+  timeZone: GC_EASTERN_TZ, year: "numeric", month: "2-digit", day: "2-digit",
+});
+function gcToEasternDateStr(isoTimestamp) {
+  return gcEasternDateFmt.format(new Date(isoTimestamp)).replace(/-/g, "");
+}
+
+export function formatKickoff(iso) {
+  const d = new Date(iso);
+  const dateStr = d.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", timeZone: GC_EASTERN_TZ });
+  const timeStr = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: GC_EASTERN_TZ }) + " ET";
+  return { dateStr, timeStr };
+}
+
+// Shared ESPN live-score fetch, used by both picks.js (which has its own
+// near-identical copy wired into its own refresh loop -- left alone to
+// avoid touching working code) and leaderboard.js's week-picks popup,
+// which has no live-score fetching of its own otherwise. Keyed by
+// game_id the same way picks.js's own copy is, and tolerant of a missing
+// or placeholder LIVE_SCORES_URL the same way too.
+export async function fetchLiveScores(games) {
+  const url = window.APP_CONFIG.LIVE_SCORES_URL;
+  if (!url || url.includes("YOUR-PROJECT-REF")) return {};
+
+  const byLeague = {};
+  for (const g of games) {
+    if (!g.league) continue;
+    (byLeague[g.league] ||= []).push(g);
+  }
+
+  const params = new URLSearchParams();
+  for (const [league, list] of Object.entries(byLeague)) {
+    const dates = list
+      .map((g) => g.kickoff_time)
+      .filter(Boolean)
+      .map(gcToEasternDateStr);
+    if (!dates.length) continue;
+    const min = dates.reduce((a, b) => (a < b ? a : b));
+    const max = dates.reduce((a, b) => (a > b ? a : b));
+    params.set(`${league.toLowerCase()}_dates`, `${min}-${max}`);
+  }
+  if (![...params.keys()].length) return {};
+
+  try {
+    const resp = await fetch(`${url}?${params.toString()}`, {
+      headers: {
+        apikey: window.APP_CONFIG.SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${window.APP_CONFIG.SUPABASE_ANON_KEY}`,
+      },
+    });
+    if (!resp.ok) return {};
+    const data = await resp.json();
+    return data.scores || {};
+  } catch (_) {
+    return {};
+  }
+}
+
+// ESPN-gamecast-style detail popup for a single game -- team logos, score,
+// live clock/quarter + down-and-distance + a simple field-position bar
+// while in progress, and a quarter-by-quarter line score once there's at
+// least one quarter on the board. `live` is one entry from fetchLiveScores()
+// (or undefined/empty if scores haven't loaded / ESPN had nothing for this
+// game yet) -- every section below is optional and just doesn't render
+// when the data for it isn't there, rather than showing a blank/broken row.
+export function openGameDetailModal(game, live) {
+  live = live || {};
+  const homeIsFavorite = !!game.favorite_team_home;
+  const homeTeam = homeIsFavorite ? game.favorite_team : game.underdog_team;
+  const awayTeam = homeIsFavorite ? game.underdog_team : game.favorite_team;
+
+  const isFinal = live.completed || (game.status === "final" && game.home_score != null);
+  const isLive = live.state === "in" && !isFinal;
+  const homeScore = live.home_score ?? game.home_score;
+  const awayScore = live.away_score ?? game.away_score;
+  const hasScore = homeScore != null && awayScore != null && (isLive || isFinal);
+
+  const { dateStr, timeStr } = formatKickoff(game.kickoff_time);
+
+  let centerHtml;
+  if (isLive) {
+    centerHtml = `
+      <div class="gc-clock">${escapeHtml(live.clock || "LIVE")}</div>
+      ${live.period ? `<div class="gc-period">${ordinalPeriod(live.period)}</div>` : ""}
+    `;
+  } else if (isFinal) {
+    centerHtml = `<div class="gc-clock">FINAL</div>`;
+  } else {
+    centerHtml = `<div class="gc-clock">${escapeHtml(timeStr)}</div><div class="gc-period">${escapeHtml(dateStr)}</div>`;
+  }
+
+  const situationHtml = isLive && (live.down_distance_text || live.possession_text)
+    ? `
+      <div class="gc-situation ${live.is_redzone ? "gc-redzone" : ""}">
+        ${live.down_distance_text ? `<div class="gc-situation-main">${escapeHtml(live.down_distance_text)}</div>` : ""}
+        ${live.possession_text ? `<div class="gc-situation-sub">${escapeHtml(live.possession_text)}</div>` : ""}
+      </div>
+      ${typeof live.yard_line === "number" ? fieldBarHtml(live.yard_line, live.possession_side) : ""}
+    `
+    : "";
+
+  const hasLinescores = Array.isArray(live.home_linescores) && Array.isArray(live.away_linescores)
+    && (live.home_linescores.length > 0 || live.away_linescores.length > 0);
+  const linescoreHtml = hasLinescores ? linescoreTableHtml(live, awayTeam, homeTeam, homeIsFavorite) : "";
+
+  const metaRows = [];
+  if (!isLive && !isFinal) metaRows.push(["Kickoff", `${dateStr} · ${timeStr}`]);
+  if (live.broadcasts?.length) metaRows.push(["Broadcast", live.broadcasts.join(", ")]);
+  else if (game.tv_network) metaRows.push(["Broadcast", game.tv_network]);
+  if (live.venue) metaRows.push(["Venue", `${live.venue.name}${live.venue.city ? ` — ${live.venue.city}${live.venue.state ? `, ${live.venue.state}` : ""}` : ""}`]);
+  // ESPN's weather.display is sometimes just a bare number (not actual
+  // conditions text, e.g. humidity or cloud cover with no label) -- when
+  // that's all there is, showing it next to temperature reads as a
+  // confusing second, unexplained number, so only tack it on when it's
+  // not itself just a number.
+  if (live.weather?.display || live.weather?.temperature != null) {
+    const d = live.weather?.display || "";
+    const isBareNumber = /^\d+$/.test(d.trim());
+    const tempPart = live.weather?.temperature != null ? `${live.weather.temperature}°` : "";
+    const descPart = d && !isBareNumber ? d : "";
+    metaRows.push(["Weather", [tempPart, descPart].filter(Boolean).join(" · ")]);
+  }
+  const spreadLine = game.spread_value || live.line;
+  if (spreadLine) metaRows.push(["Spread", spreadLine]);
+
+  const wrap = document.createElement("div");
+  wrap.className = "modal-backdrop";
+  wrap.innerHTML = `
+    <div class="modal-sheet gc-sheet">
+      <button class="modal-close-x" id="gc-close-x" aria-label="Close">&times;</button>
+      <div class="gc-teams">
+        ${gcTeamHtml(awayTeam, live.away_logo, awayScore, live.away_record, hasScore)}
+        <div class="gc-center">${centerHtml}</div>
+        ${gcTeamHtml(homeTeam, live.home_logo, homeScore, live.home_record, hasScore)}
+      </div>
+      ${situationHtml}
+      ${linescoreHtml}
+      ${metaRows.length ? `
+        <div class="gc-meta">
+          ${metaRows.map(([label, val]) => `<div class="gc-meta-row"><span class="label">${escapeHtml(label)}</span><span class="value">${escapeHtml(val)}</span></div>`).join("")}
+        </div>
+      ` : ""}
+      <button class="btn btn-secondary" id="gc-close-btn" style="margin-top:14px;">Close</button>
+    </div>
+  `;
+  document.body.appendChild(wrap);
+  const close = () => wrap.remove();
+  wrap.querySelector("#gc-close-x").addEventListener("click", close);
+  wrap.querySelector("#gc-close-btn").addEventListener("click", close);
+}
+
+function ordinalPeriod(n) {
+  if (n === 1) return "1st";
+  if (n === 2) return "2nd";
+  if (n === 3) return "3rd";
+  if (n === 4) return "4th";
+  return n > 4 ? (n === 5 ? "OT" : `${n - 4}OT`) : `${n}th`;
+}
+
+function gcTeamHtml(name, logo, score, record, hasScore) {
+  return `
+    <div class="gc-team">
+      ${logo ? `<img class="gc-logo" src="${escapeHtml(logo)}" alt="">` : `<div class="gc-logo gc-logo-fallback">${escapeHtml((name || "?").charAt(0))}</div>`}
+      ${hasScore ? `<div class="gc-score">${escapeHtml(String(score))}</div>` : ""}
+      <div class="gc-team-name">${escapeHtml(name || "TBD")}</div>
+      ${record ? `<div class="gc-team-record">${escapeHtml(record)}</div>` : ""}
+    </div>
+  `;
+}
+
+// Simple, honest approximation of ESPN's field-position bar: not an exact
+// visual match (it doesn't flip which end is which based on home/away),
+// just "how far the possessing team has driven toward the end zone
+// they're attacking," which is what the down/distance + possession text
+// above it already communicates in words.
+function fieldBarHtml(yardLine, possessionSide) {
+  const pct = Math.max(2, Math.min(98, yardLine));
+  return `
+    <div class="gc-fieldbar">
+      <div class="gc-fieldbar-track">
+        <div class="gc-fieldbar-arrow ${possessionSide || ""}" style="left:${pct}%;">▶</div>
+      </div>
+      <div class="gc-fieldbar-ticks"><span>20</span><span>50</span><span>20</span></div>
+    </div>
+  `;
+}
+
+function linescoreTableHtml(live, awayTeam, homeTeam, homeIsFavorite) {
+  const awayScores = live.away_linescores || [];
+  const homeScores = live.home_linescores || [];
+  const periods = Math.max(awayScores.length, homeScores.length, 4);
+  const headers = Array.from({ length: periods }, (_, i) => (i < 4 ? String(i + 1) : (i === 4 ? "OT" : `${i - 3}OT`)));
+  const awayLogo = live.away_logo, homeLogo = live.home_logo;
+  const rowHtml = (name, logo, perPeriod, total) => `
+    <tr>
+      <td class="gc-ls-team">${logo ? `<img src="${escapeHtml(logo)}" alt="">` : ""}${escapeHtml(name || "")}</td>
+      ${headers.map((_, i) => `<td>${perPeriod[i] != null ? escapeHtml(String(perPeriod[i])) : "–"}</td>`).join("")}
+      <td class="gc-ls-total">${total != null ? escapeHtml(String(total)) : "–"}</td>
+    </tr>
+  `;
+  const sumOrNull = (arr) => (arr.length ? arr.reduce((a, b) => a + (Number(b) || 0), 0) : null);
+  return `
+    <table class="gc-linescore">
+      <thead><tr><th></th>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}<th>T</th></tr></thead>
+      <tbody>
+        ${rowHtml(awayTeam, awayLogo, awayScores, live.away_score ?? sumOrNull(awayScores))}
+        ${rowHtml(homeTeam, homeLogo, homeScores, live.home_score ?? sumOrNull(homeScores))}
+      </tbody>
+    </table>
+  `;
+}
+
 // Avatar circle (top bar) -> a bottom-sheet account menu, same modal pattern
 // picks.js already uses for its own modals: appended straight to
 // document.body (so renderChrome()'s root.innerHTML rewrites never touch

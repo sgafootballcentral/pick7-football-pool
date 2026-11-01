@@ -8,7 +8,20 @@
 //
 // Request:  GET /get-live-scores?nfl_dates=YYYYMMDD-YYYYMMDD&cfb_dates=YYYYMMDD-YYYYMMDD
 //           (include whichever league params are relevant; both are optional)
-// Response: { "scores": { "espn_<id>": { home_score, away_score, state, completed, status_name, clock, line } } }
+// Response: { "scores": { "espn_<id>": {
+//   home_score, away_score, state, completed, status_name, clock, line,
+//   period, home_logo, away_logo, home_record, away_record,
+//   home_linescores, away_linescores (per-quarter point arrays),
+//   venue, broadcasts (full list), weather,
+//   down_distance_text, possession_text, is_redzone, possession_side, yard_line
+// } } }
+//
+// The extra fields beyond the original five are all best-effort: ESPN's
+// scoreboard response doesn't guarantee every field is present for every
+// game (a pregame matchup has no linescores or situation yet; weather is
+// frequently absent even for outdoor games), so every read below is
+// defensive (optional chaining + fallback) and the frontend is expected to
+// hide whatever section has nothing to show rather than render "undefined".
 
 const LEAGUE_URLS: Record<string, string> = {
   nfl: "https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
@@ -96,6 +109,55 @@ async function fetchLeague(league: "nfl" | "cfb", dateRange: string, scores: Rec
       let line = oddsNode?.details || "0.0";
       line = nudgeOffWholeNumber(line);
 
+      const period = competition.status?.period ?? statusType.period ?? null;
+
+      const venueNode = competition.venue || {};
+      const venue = venueNode.fullName
+        ? {
+          name: venueNode.fullName,
+          city: venueNode.address?.city || "",
+          state: venueNode.address?.state || "",
+        }
+        : null;
+
+      // ESPN puts this on the event for some sports/weeks and on the
+      // competition for others -- check both rather than picking one.
+      const weatherNode = event.weather || competition.weather || null;
+      const weather = weatherNode?.displayValue || weatherNode?.temperature != null
+        ? {
+          display: weatherNode.displayValue || "",
+          temperature: weatherNode.temperature ?? null,
+        }
+        : null;
+
+      const broadcastNode = competition.broadcasts || event.broadcasts || [];
+      const broadcasts = Array.isArray(broadcastNode)
+        ? broadcastNode.flatMap((b: any) => b?.names || []).filter(Boolean)
+        : [];
+
+      const linescoresOf = (c: any) => (c.linescores || []).map((ls: any) => ls?.value ?? ls?.displayValue ?? null);
+      const recordOf = (c: any) => (c.records || []).find((r: any) => r.type === "total")?.summary
+        || c.records?.[0]?.summary || null;
+
+      const situationNode = competition.situation || null;
+      let possessionSide: "home" | "away" | null = null;
+      if (situationNode?.possession) {
+        if (situationNode.possession === home.id) possessionSide = "home";
+        else if (situationNode.possession === away.id) possessionSide = "away";
+      }
+      const situation = situationNode
+        ? {
+          down_distance_text: situationNode.shortDownDistanceText || situationNode.downDistanceText || "",
+          possession_text: situationNode.possessionText || "",
+          is_redzone: Boolean(situationNode.isRedZone),
+          possession_side: possessionSide,
+          // 0-100 scale, distance from the possessing team's own goal line
+          // toward the opponent's -- used for a simple field-position bar,
+          // not an exact replica of ESPN's own (home/away-oriented) graphic.
+          yard_line: typeof situationNode.yardLine === "number" ? situationNode.yardLine : null,
+        }
+        : null;
+
       scores[gId] = {
         home_score: home.score ?? "0",
         away_score: away.score ?? "0",
@@ -104,6 +166,17 @@ async function fetchLeague(league: "nfl" | "cfb", dateRange: string, scores: Rec
         status_name: statusName,
         clock,
         line,
+        period,
+        home_logo: home.team?.logo || home.team?.logos?.[0]?.href || null,
+        away_logo: away.team?.logo || away.team?.logos?.[0]?.href || null,
+        home_record: recordOf(home),
+        away_record: recordOf(away),
+        home_linescores: linescoresOf(home),
+        away_linescores: linescoresOf(away),
+        venue,
+        broadcasts,
+        weather,
+        ...(situation || {}),
       };
     }
   }));

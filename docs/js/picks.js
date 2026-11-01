@@ -1,4 +1,4 @@
-import { escapeHtml } from "./app.js";
+import { escapeHtml, openGameDetailModal } from "./app.js";
 import { getSharedWeek, setSharedWeek } from "./weekState.js";
 
 const EASTERN_TZ = "America/New_York";
@@ -459,6 +459,17 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
     el.querySelector("#number-input").addEventListener("input", (e) => { s.numberInput = e.target.value; });
     el.querySelector("#preview-numbers-btn").addEventListener("click", onPreviewNumbers);
 
+    // Tapping the matchup/score header of a game card (NOT the pick
+    // buttons below it, which have their own click handling further down)
+    // opens the ESPN-gamecast-style detail popup for that one game.
+    el.querySelectorAll("[data-open-gamecard]").forEach((headerEl) => {
+      headerEl.addEventListener("click", () => {
+        const gid = headerEl.dataset.openGamecard;
+        const g = s.games.find((game) => game.game_id === gid);
+        if (g) openGameDetailModal(g, s.scores[gid]);
+      });
+    });
+
     el.querySelectorAll("[data-pick-game]").forEach((input) => {
       // "click" (not "change") on purpose -- clicking an already-checked
       // radio never fires "change" (its checked state doesn't move), so
@@ -614,7 +625,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
       <div class="game-card">
         <div class="game-card-stripe ${stripeClass}"></div>
         <div class="game-card-body">
-          <div class="game-card-top">
+          <div class="game-card-top game-card-clickable" data-open-gamecard="${escapeHtml(g.game_id)}">
             <div class="game-card-matchup">
               <span class="${favCovered ? "covered" : ""}">#${nums.favNum || ""} ${escapeHtml(favTeam)}${favHome ? " \u{1F3E0}" : ""}</span>${favScoreHtml}${favCovered ? " ✅" : ""}
               <span class="vs">at</span>
