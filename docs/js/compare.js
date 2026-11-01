@@ -1,4 +1,4 @@
-import { escapeHtml, avatarInnerHtml, fetchAvatarsByUsername, fetchCurrentUsernames } from "./app.js";
+import { escapeHtml, avatarInnerHtml, fetchAvatarsByUsername, fetchCurrentUsernames, fetchLiveScores, openGameDetailModal } from "./app.js";
 import { getSharedWeek, setSharedWeek } from "./weekState.js";
 
 // Same chronological numbering scheme picks.js uses (favorite=odd,
@@ -40,6 +40,7 @@ export function renderCompare(el, { supabase, username, currentSeason }) {
     avatars: {}, // username -> avatar_url, fetched once (doesn't depend on week)
     currentUsernames: {}, // user_id -> current display name, fetched once (doesn't depend on week)
     weekLock: null, // week_pick_locks row for s.week, or null
+    scores: {}, // ESPN live/final data for s.games, keyed by game_id -- see fetchLiveScores()
     mode: "grid", // "grid" | "h2h"
     h2hA: "",
     h2hB: "",
@@ -104,7 +105,7 @@ export function renderCompare(el, { supabase, username, currentSeason }) {
         <table class="standings cmp-grid">
           <thead><tr>
             <th>Player</th>
-            ${orderedGames.map((g, i) => `<th title="${escapeHtml(g.display_text || "")} (${escapeHtml(g.spread_value || "")})">G${i + 1}</th>`).join("")}
+            ${orderedGames.map((g, i) => `<th class="cmp-game-th" data-open-gamecard="${escapeHtml(g.game_id)}" title="${escapeHtml(g.display_text || "")} (${escapeHtml(g.spread_value || "")})">G${i + 1}</th>`).join("")}
             <th>W-L</th>
           </tr></thead>
           <tbody>${rows.join("")}</tbody>
@@ -161,7 +162,7 @@ export function renderCompare(el, { supabase, username, currentSeason }) {
         if (same) agree++;
       }
       return `
-        <div class="card h2h-row ${same ? "h2h-agree" : ""}">
+        <div class="card h2h-row ${same ? "h2h-agree" : ""}" data-open-gamecard="${escapeHtml(g.game_id)}">
           <div class="hint">${escapeHtml(g.display_text || "")} <span class="cmp-spread">(${escapeHtml(g.spread_value || "")})</span></div>
           <div style="display:flex; justify-content:space-between; margin-top:6px; gap:10px;">
             <div style="flex:1;">${a?.selected_team ? `${escapeHtml(a.selected_team)}${resultBadge(a.result)}` : `<span class="hint">No pick</span>`}</div>
@@ -272,6 +273,17 @@ export function renderCompare(el, { supabase, username, currentSeason }) {
       s.h2hB = e.target.value;
       draw();
     });
+
+    // Works the same in both modes -- a game column header in the grid or
+    // a game row in head-to-head -- since both carry the same
+    // data-open-gamecard attribute with the game's game_id.
+    el.querySelectorAll("[data-open-gamecard]").forEach((cardEl) => {
+      cardEl.addEventListener("click", () => {
+        const gid = cardEl.dataset.openGamecard;
+        const g = s.games.find((game) => game.game_id === gid);
+        if (g) openGameDetailModal(g, s.scores[gid]);
+      });
+    });
   }
 
   async function loadWeek() {
@@ -280,6 +292,10 @@ export function renderCompare(el, { supabase, username, currentSeason }) {
       const { data: games, error: gErr } = await withSeason(supabase.from("games").select("*").eq("week_number", s.week));
       if (gErr) throw gErr;
       s.games = games || [];
+      // Best-effort, same as everywhere else that calls this -- an
+      // empty/failed result just means the detail popup opens without a
+      // live clock/linescore for whichever game got clicked.
+      s.scores = await fetchLiveScores(s.games);
 
       const { data: weekPicks, error: pErr } = await withSeason(supabase.from("picks").select("*").eq("week_number", s.week));
       if (pErr) throw pErr;
