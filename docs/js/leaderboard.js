@@ -152,13 +152,18 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
     function podiumPlayerHtml(r, tied) {
       const dmDot = unreadDmSenders?.[r.user_id] ? `<span class="dm-unread-dot" title="New message"></span>` : "";
       if (tied) {
+        // Trend sits in its own flex slot, OUTSIDE the name/record column
+        // that truncates with an ellipsis -- otherwise on a narrow tied
+        // card the trend chip was exactly what got clipped off the end
+        // of "7–3 · 70.0% · ▼1", making it look like trend wasn't there.
         return `
           <button type="button" class="podium-player" data-open-profile="${escapeHtml(r.user_id)}" data-open-profile-name="${escapeHtml(r.username)}">
             <span class="avatar-circle-lg podium-avatar">${avatarInnerHtml(s.avatars[r.username]?.url, s.avatars[r.username]?.monogram, r.username)}</span>
             <div class="podium-player-info">
               <div class="podium-name">${escapeHtml(r.username)}${dmDot}</div>
-              <div class="podium-record">${r.wins}–${r.losses} · ${(r.winPct * 100).toFixed(1)}% · ${rankChipHtml(r)}</div>
+              <div class="podium-record">${r.wins}–${r.losses} · ${(r.winPct * 100).toFixed(1)}%</div>
             </div>
+            <span class="podium-trend">${rankChipHtml(r)}</span>
           </button>
         `;
       }
