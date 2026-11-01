@@ -142,8 +142,9 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
     function podiumTierHtml(group) {
       const { tier, place, players } = group;
       const medal = MEDALS[place];
+      const tierClass = players.length > 1 ? `${tier} podium-tied` : tier;
       return `
-        <div class="podium-item ${tier}">
+        <div class="podium-item ${tierClass}">
           <div class="podium-rank-badge">${medal} ${ORDINAL_BY_PLACE[place]}</div>
           <div class="podium-players-stack">
             ${players.map((r) => {
