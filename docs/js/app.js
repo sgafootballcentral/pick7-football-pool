@@ -743,6 +743,302 @@ function linescoreTableHtml(live, awayTeam, homeTeam, homeIsFavorite) {
   `;
 }
 
+// ===== Shared player-profile popup (Compare + Chat tabs) =====
+// Mirrors the profile sheet / week-picks drill-down / DM thread already
+// built into leaderboard.js's Standings tab. leaderboard.js keeps its own
+// copy rather than switching to this one -- it already has every player's
+// full-season picks loaded for the podium/trend logic, plus a trend chip
+// this version doesn't compute, so re-deriving that here would be wasted
+// work and a regression risk for no benefit (same "don't touch a tab's
+// already-working copy" split used for fetchLiveScores/formatKickoff
+// above). Compare and Chat had no profile popup of their own, so they call
+// this self-contained version instead: it fetches whatever it needs
+// itself (just this one player's picks), rather than depending on the
+// caller having preloaded every player's data.
+let profileModalState = null; // { userId, username, seasonId, avatarsByUsername, wrap }
+let profileDmState = null; // { otherId, otherUsername, avatarsByUsername, messages, loading, error, wrap, timer }
+
+export async function openPlayerProfileModal(userId, username, avatarsByUsername, seasonId) {
+  closePlayerProfileModal();
+  const wrap = document.createElement("div");
+  wrap.className = "modal-backdrop";
+  const isMe = userId === state.user?.id;
+  wrap.innerHTML = `
+    <div class="modal-sheet">
+      <div class="profile-head">
+        <span class="avatar-circle-lg profile-avatar-xl">${avatarInnerHtml(avatarsByUsername?.[username]?.url, avatarsByUsername?.[username]?.monogram, username)}</span>
+        <h2 style="margin:0;">${escapeHtml(username)}${isMe ? ` <span class="hint">(you)</span>` : ""}</h2>
+        <div class="hint" id="profile-record-line">Loading…</div>
+      </div>
+      <div id="profile-weeks-slot"><div class="centered" style="min-height:0; padding:14px 0;"><div class="loading-spinner"></div></div></div>
+      <div class="btn-row" style="margin-top:14px;">
+        ${!isMe ? `<button class="btn btn-primary" id="profile-message-btn">\u{1F4AC} Message ${escapeHtml(username)}</button>` : ""}
+        <button class="btn btn-secondary" id="profile-close-btn">Close</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(wrap);
+  profileModalState = { userId, username, seasonId, avatarsByUsername, wrap };
+
+  wrap.querySelector("#profile-close-btn").addEventListener("click", closePlayerProfileModal);
+  wrap.querySelector("#profile-message-btn")?.addEventListener("click", () => {
+    closePlayerProfileModal();
+    openPlayerDmThread(userId, username, avatarsByUsername);
+  });
+
+  try {
+    let picksQuery = supabase.from("picks").select("week_number, result").eq("user_id", userId);
+    if (seasonId != null) picksQuery = picksQuery.eq("season_id", seasonId);
+    const { data: picks, error } = await picksQuery;
+    if (error) throw error;
+
+    const byWeek = {};
+    let wins = 0, losses = 0;
+    for (const p of picks || []) {
+      if (p.result !== "win" && p.result !== "loss") continue;
+      const wk = (byWeek[p.week_number] ||= { wins: 0, losses: 0 });
+      if (p.result === "win") { wk.wins++; wins++; } else { wk.losses++; losses++; }
+    }
+    const weeks = Object.keys(byWeek).map(Number).sort((a, b) => a - b).map((wn) => ({ week_number: wn, ...byWeek[wn] }));
+
+    if (!profileModalState || profileModalState.wrap !== wrap) return; // closed/replaced while this was loading
+    const pct = wins + losses ? ((wins / (wins + losses)) * 100).toFixed(1) : "0.0";
+    wrap.querySelector("#profile-record-line").textContent = `${wins}–${losses} overall · ${pct}% win rate`;
+    wrap.querySelector("#profile-weeks-slot").innerHTML = weeks.length ? `
+      <table class="profile-weeks">
+        <thead><tr><th>Week</th><th>W</th><th>L</th></tr></thead>
+        <tbody>${weeks.map((w) => `<tr class="standings-clickable" data-week="${w.week_number}"><td>${w.week_number}</td><td>${w.wins}</td><td>${w.losses}</td></tr>`).join("")}</tbody>
+      </table>
+      <div class="hint" style="text-align:center; margin-top:6px;">Tap a week to see those picks.</div>
+    ` : `<div class="hint" style="text-align:center;">No graded weeks yet.</div>`;
+    wrap.querySelectorAll("tr[data-week]").forEach((row) => {
+      row.addEventListener("click", () => {
+        openPlayerWeekPicksModal(userId, username, Number(row.dataset.week), seasonId, wrap);
+      });
+    });
+  } catch (e) {
+    if (!profileModalState || profileModalState.wrap !== wrap) return;
+    wrap.querySelector("#profile-record-line").textContent = "";
+    wrap.querySelector("#profile-weeks-slot").innerHTML = `<div class="error-msg" style="text-align:center;">Couldn't load this player's picks: ${escapeHtml(e.message || String(e))}</div>`;
+  }
+}
+
+function closePlayerProfileModal() {
+  profileModalState?.wrap?.remove();
+  profileModalState = null;
+}
+
+// Same drill-down a week row opens from leaderboard.js's own profile sheet
+// -- matchup, picked team, spread, graded result, with a click-through to
+// the gamecast popup for any game in the list.
+async function openPlayerWeekPicksModal(userId, uname, weekNumber, seasonId, profileWrap) {
+  const panel = document.createElement("div");
+  panel.className = "modal-backdrop";
+  document.body.appendChild(panel);
+
+  // The X goes all the way back to the profile sheet's caller -- it closes
+  // both this popup and the profile sheet underneath it, not just itself.
+  function closeToProfile() {
+    panel.remove();
+    profileWrap?.remove();
+    if (profileModalState?.wrap === profileWrap) profileModalState = null;
+  }
+
+  panel.innerHTML = `
+    <div class="modal-sheet">
+      <button class="modal-close-x" id="week-picks-x-btn" aria-label="Close">&times;</button>
+      <h3 style="text-align:center; margin-top:0;">${escapeHtml(uname)} -- Week ${weekNumber}</h3>
+      <div class="hint" style="text-align:center;">Loading…</div>
+    </div>
+  `;
+  panel.querySelector("#week-picks-x-btn").addEventListener("click", closeToProfile);
+
+  try {
+    let picksQuery = supabase.from("picks").select("*").eq("user_id", userId).eq("week_number", weekNumber);
+    let gamesQuery = supabase.from("games").select("*").eq("week_number", weekNumber);
+    if (seasonId != null) {
+      picksQuery = picksQuery.eq("season_id", seasonId);
+      gamesQuery = gamesQuery.eq("season_id", seasonId);
+    }
+    const [{ data: picks, error: pErr }, { data: games, error: gErr }] = await Promise.all([picksQuery, gamesQuery]);
+    if (pErr) throw pErr;
+    if (gErr) throw gErr;
+
+    const gameLookup = Object.fromEntries((games || []).map((g) => [g.game_id, g]));
+    const liveScores = await fetchLiveScores(games || []);
+    const rows = (picks || []).slice().sort((a, b) => {
+      const ga = gameLookup[a.game_id], gb = gameLookup[b.game_id];
+      return (ga?.kickoff_time || "").localeCompare(gb?.kickoff_time || "");
+    });
+
+    panel.innerHTML = `
+      <div class="modal-sheet">
+        <button class="modal-close-x" id="week-picks-x-btn" aria-label="Close">&times;</button>
+        <h3 style="text-align:center; margin-top:0;">${escapeHtml(uname)} -- Week ${weekNumber}</h3>
+        ${rows.length ? rows.map((p) => {
+          const g = gameLookup[p.game_id];
+          const matchup = g ? `${g.favorite_team} vs ${g.underdog_team}` : p.game_id;
+          const spread = p.spread_at_pick || g?.spread_value || "";
+          const resultClass = p.result === "win" ? "win" : p.result === "loss" ? "loss" : "";
+          const resultLabel = p.result === "win" ? "✓ Win" : p.result === "loss" ? "✗ Loss" : "Pending";
+          return `
+            <div class="game-card" style="margin-bottom:7px;">
+              <div class="game-card-stripe ${resultClass}"></div>
+              <div class="game-card-body">
+                <div class="game-card-top game-card-clickable" data-open-gamecard="${escapeHtml(p.game_id)}">
+                  <div class="game-card-matchup">${escapeHtml(matchup)}</div>
+                  <div class="game-card-meta"><span class="spread">${escapeHtml(spread)}</span></div>
+                </div>
+                <div class="game-card-pickrow ${resultClass === "win" ? "win-bg" : ""}">
+                  <span class="label">Picked</span>
+                  <span class="value">${escapeHtml(p.selected_team)}</span>
+                  <span class="value ${resultClass}">${resultLabel}</span>
+                </div>
+              </div>
+            </div>
+          `;
+        }).join("") : `<div class="hint" style="text-align:center;">No picks on file for this week.</div>`}
+        <button class="btn btn-secondary" id="week-picks-close-btn" style="margin-top:10px;">Close</button>
+      </div>
+    `;
+    panel.querySelector("#week-picks-x-btn").addEventListener("click", closeToProfile);
+    panel.querySelector("#week-picks-close-btn").addEventListener("click", () => panel.remove());
+    panel.querySelectorAll("[data-open-gamecard]").forEach((headerEl) => {
+      headerEl.addEventListener("click", () => {
+        const gid = headerEl.dataset.openGamecard;
+        const g = gameLookup[gid];
+        if (g) openGameDetailModal(g, liveScores[gid]);
+      });
+    });
+  } catch (e) {
+    panel.innerHTML = `
+      <div class="modal-sheet">
+        <button class="modal-close-x" id="week-picks-x-btn" aria-label="Close">&times;</button>
+        <h3 style="text-align:center; margin-top:0;">${escapeHtml(uname)} -- Week ${weekNumber}</h3>
+        <div class="error-msg" style="text-align:center;">Couldn't load picks: ${escapeHtml(e.message || String(e))}</div>
+        <button class="btn btn-secondary" id="week-picks-close-btn" style="margin-top:10px;">Close</button>
+      </div>
+    `;
+    panel.querySelector("#week-picks-x-btn").addEventListener("click", closeToProfile);
+    panel.querySelector("#week-picks-close-btn").addEventListener("click", () => panel.remove());
+  }
+}
+
+async function openPlayerDmThread(otherId, otherUsername, avatarsByUsername) {
+  if (profileDmState?.timer) clearInterval(profileDmState.timer);
+  profileDmState?.wrap?.remove();
+  markDmRead(otherId);
+  profileDmState = { otherId, otherUsername, avatarsByUsername, messages: [], loading: true, error: null, wrap: null, timer: null };
+  drawPlayerDmModal();
+  await loadPlayerDm();
+  if (profileDmState) profileDmState.timer = setInterval(loadPlayerDm, 4000);
+}
+
+function closePlayerDmThread() {
+  if (profileDmState?.timer) clearInterval(profileDmState.timer);
+  profileDmState?.wrap?.remove();
+  profileDmState = null;
+}
+
+async function loadPlayerDm() {
+  if (!profileDmState) return;
+  const { otherId } = profileDmState;
+  try {
+    const { data, error } = await supabase.from("direct_messages").select("*")
+      .or(`and(sender_id.eq.${state.user.id},recipient_id.eq.${otherId}),and(sender_id.eq.${otherId},recipient_id.eq.${state.user.id})`)
+      .order("created_at", { ascending: true });
+    if (error) throw error;
+    if (!profileDmState) return;
+    profileDmState.messages = data || [];
+    profileDmState.loading = false;
+    redrawPlayerDmModal();
+  } catch (e) {
+    if (!profileDmState) return;
+    profileDmState.loading = false;
+    profileDmState.error = e.message || "Couldn't load messages.";
+    redrawPlayerDmModal();
+  }
+}
+
+function playerDmMsgHtml(m) {
+  const mine = m.sender_id === state.user.id;
+  let timeStr = "";
+  try {
+    timeStr = new Date(m.created_at).toLocaleString("en-US", {
+      month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York",
+    });
+  } catch (_) {}
+  return `
+    <div class="dm-msg ${mine ? "mine" : ""}">
+      <div class="meta">${mine ? "You" : escapeHtml(profileDmState.otherUsername)} · ${escapeHtml(timeStr)}</div>
+      <div class="bubble">${escapeHtml(m.message)}</div>
+    </div>
+  `;
+}
+
+function drawPlayerDmModal() {
+  const wrap = document.createElement("div");
+  wrap.className = "modal-backdrop";
+  profileDmState.wrap = wrap;
+  renderPlayerDmInner(wrap);
+  document.body.appendChild(wrap);
+}
+
+function renderPlayerDmInner(wrap) {
+  const { otherUsername, messages, loading, error, avatarsByUsername } = profileDmState;
+  wrap.innerHTML = `
+    <div class="modal-sheet">
+      <h2 style="display:flex; align-items:center; gap:8px;">
+        <span class="avatar-circle-sm">${avatarInnerHtml(avatarsByUsername?.[otherUsername]?.url, avatarsByUsername?.[otherUsername]?.monogram, otherUsername)}</span>
+        ${escapeHtml(otherUsername)}
+      </h2>
+      ${error ? `<div class="error-msg">${escapeHtml(error)}</div>` : ""}
+      <div class="dm-list" id="dm-list">
+        ${loading ? `<div class="centered" style="min-height:0; padding:20px 0;"><div class="loading-spinner"></div></div>` : (
+          messages.length ? messages.map(playerDmMsgHtml).join("") : `<div class="hint" style="text-align:center;">No messages yet — say hi!</div>`
+        )}
+      </div>
+      <div class="dm-input-row">
+        <textarea id="dm-text-input" placeholder="Message ${escapeHtml(otherUsername)}…" rows="1"></textarea>
+        <button class="btn btn-primary" id="dm-send-btn">Send</button>
+      </div>
+      <button class="btn btn-secondary" id="dm-close-btn" style="margin-top:10px;">Close</button>
+    </div>
+  `;
+  const list = wrap.querySelector("#dm-list");
+  if (list) list.scrollTop = list.scrollHeight + 1000;
+
+  wrap.querySelector("#dm-close-btn").addEventListener("click", closePlayerDmThread);
+  const sendBtn = wrap.querySelector("#dm-send-btn");
+  const textInput = wrap.querySelector("#dm-text-input");
+  const send = async () => {
+    const text = (textInput.value || "").trim();
+    if (!text || !profileDmState) return;
+    sendBtn.disabled = true;
+    try {
+      const { error: insErr } = await supabase.from("direct_messages").insert({
+        sender_id: state.user.id, recipient_id: profileDmState.otherId, message: text,
+      });
+      if (insErr) throw insErr;
+      textInput.value = "";
+      await loadPlayerDm();
+    } catch (e) {
+      profileDmState.error = "Couldn't send: " + (e.message || e);
+      redrawPlayerDmModal();
+    } finally {
+      sendBtn.disabled = false;
+    }
+  };
+  sendBtn.addEventListener("click", send);
+  textInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  });
+}
+
+function redrawPlayerDmModal() {
+  if (profileDmState?.wrap) renderPlayerDmInner(profileDmState.wrap);
+}
+
 // Avatar circle (top bar) -> a bottom-sheet account menu, same modal pattern
 // picks.js already uses for its own modals: appended straight to
 // document.body (so renderChrome()'s root.innerHTML rewrites never touch

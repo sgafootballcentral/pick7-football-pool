@@ -1,4 +1,4 @@
-import { escapeHtml, avatarInnerHtml, fetchAvatarsByUsername, fetchCurrentUsernames, fetchLiveScores, openGameDetailModal } from "./app.js";
+import { escapeHtml, avatarInnerHtml, fetchAvatarsByUsername, fetchCurrentUsernames, fetchLiveScores, openGameDetailModal, openPlayerProfileModal } from "./app.js";
 import { getSharedWeek, setSharedWeek } from "./weekState.js";
 
 // Same chronological numbering scheme picks.js uses (favorite=odd,
@@ -39,6 +39,7 @@ export function renderCompare(el, { supabase, username, currentSeason }) {
     picksByUsername: {}, // username -> [picks rows] for s.week
     avatars: {}, // username -> avatar_url, fetched once (doesn't depend on week)
     currentUsernames: {}, // user_id -> current display name, fetched once (doesn't depend on week)
+    userIdByUsername: {}, // display name -> user_id, rebuilt each week load (see loadWeek())
     weekLock: null, // week_pick_locks row for s.week, or null
     scores: {}, // ESPN live/final data for s.games, keyed by game_id -- see fetchLiveScores()
     mode: "grid", // "grid" | "h2h"
@@ -94,7 +95,7 @@ export function renderCompare(el, { supabase, username, currentSeason }) {
       });
       const isMe = p === username;
       return `<tr class="${isMe ? "cmp-me" : ""}">
-        <td class="cmp-player"><span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[p]?.url, s.avatars[p]?.monogram, p)}</span>${escapeHtml(p)}</span>${isMe ? " <span class=\"hint\">(you)</span>" : ""}</td>
+        <td class="cmp-player"><span class="player-with-avatar player-name-clickable" data-open-profile="${escapeHtml(s.userIdByUsername[p] || "")}" data-open-profile-name="${escapeHtml(p)}"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[p]?.url, s.avatars[p]?.monogram, p)}</span>${escapeHtml(p)}</span>${isMe ? " <span class=\"hint\">(you)</span>" : ""}</td>
         ${cells.join("")}
         <td class="cmp-record">${wins}-${losses}</td>
       </tr>`;
@@ -177,7 +178,7 @@ export function renderCompare(el, { supabase, username, currentSeason }) {
       ${pickerRow}
       <div class="card">
         <div class="h2h-summary">
-          <div class="h2h-side">
+          <div class="h2h-side player-name-clickable" data-open-profile="${escapeHtml(s.userIdByUsername[s.h2hA] || "")}" data-open-profile-name="${escapeHtml(s.h2hA)}">
             <span class="h2h-avatar-lg ${s.h2hA === username ? "me" : ""}">${avatarInnerHtml(s.avatars[s.h2hA]?.url, s.avatars[s.h2hA]?.monogram, s.h2hA)}</span>
             <div style="font-size:12px; font-weight:700; text-align:center;">${escapeHtml(s.h2hA)}</div>
             <div class="hint" style="font-size:11px;">${aWins}-${aLosses}</div>
@@ -186,7 +187,7 @@ export function renderCompare(el, { supabase, username, currentSeason }) {
             <div class="h2h-vs-label">VS</div>
             <div class="h2h-agree-chip">Agree ${agree}/${comparable}</div>
           </div>
-          <div class="h2h-side">
+          <div class="h2h-side player-name-clickable" data-open-profile="${escapeHtml(s.userIdByUsername[s.h2hB] || "")}" data-open-profile-name="${escapeHtml(s.h2hB)}">
             <span class="h2h-avatar-lg ${s.h2hB === username ? "me" : ""}">${avatarInnerHtml(s.avatars[s.h2hB]?.url, s.avatars[s.h2hB]?.monogram, s.h2hB)}</span>
             <div style="font-size:12px; font-weight:700; text-align:center;">${escapeHtml(s.h2hB)}</div>
             <div class="hint" style="font-size:11px;">${bWins}-${bLosses}</div>
@@ -194,8 +195,8 @@ export function renderCompare(el, { supabase, username, currentSeason }) {
         </div>
       </div>
       <div style="display:flex; justify-content:space-between; padding:0 4px;">
-        <span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[s.h2hA]?.url, s.avatars[s.h2hA]?.monogram, s.h2hA)}</span><b>${escapeHtml(s.h2hA)}</b></span>
-        <span class="player-with-avatar"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[s.h2hB]?.url, s.avatars[s.h2hB]?.monogram, s.h2hB)}</span><b>${escapeHtml(s.h2hB)}</b></span>
+        <span class="player-with-avatar player-name-clickable" data-open-profile="${escapeHtml(s.userIdByUsername[s.h2hA] || "")}" data-open-profile-name="${escapeHtml(s.h2hA)}"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[s.h2hA]?.url, s.avatars[s.h2hA]?.monogram, s.h2hA)}</span><b>${escapeHtml(s.h2hA)}</b></span>
+        <span class="player-with-avatar player-name-clickable" data-open-profile="${escapeHtml(s.userIdByUsername[s.h2hB] || "")}" data-open-profile-name="${escapeHtml(s.h2hB)}"><span class="avatar-circle-sm">${avatarInnerHtml(s.avatars[s.h2hB]?.url, s.avatars[s.h2hB]?.monogram, s.h2hB)}</span><b>${escapeHtml(s.h2hB)}</b></span>
       </div>
       ${gameRows || `<div class="card hint">Neither ${escapeHtml(s.h2hA)} nor ${escapeHtml(s.h2hB)} has picked any games yet for Week ${s.week}.</div>`}
     `;
@@ -284,6 +285,16 @@ export function renderCompare(el, { supabase, username, currentSeason }) {
         if (g) openGameDetailModal(g, s.scores[gid]);
       });
     });
+
+    // A player's name, wherever it shows up (grid row, H2H picker side),
+    // opens the same profile sheet the Standings tab uses.
+    el.querySelectorAll("[data-open-profile]").forEach((nameEl) => {
+      nameEl.addEventListener("click", () => {
+        const userId = nameEl.dataset.openProfile;
+        const uname = nameEl.dataset.openProfileName;
+        if (userId) openPlayerProfileModal(userId, uname, s.avatars, seasonId);
+      });
+    });
   }
 
   async function loadWeek() {
@@ -300,6 +311,7 @@ export function renderCompare(el, { supabase, username, currentSeason }) {
       const { data: weekPicks, error: pErr } = await withSeason(supabase.from("picks").select("*").eq("week_number", s.week));
       if (pErr) throw pErr;
       s.picksByUsername = {};
+      s.userIdByUsername = {};
       for (const p of weekPicks || []) {
         // Resolve through the live user_id -> name map first -- the
         // snapshot username on the pick row itself can be stale if
@@ -308,6 +320,7 @@ export function renderCompare(el, { supabase, username, currentSeason }) {
         // under a name nobody recognizes anymore.
         const uname = s.currentUsernames[p.user_id] || p.username || "Unknown";
         (s.picksByUsername[uname] ||= []).push(p);
+        s.userIdByUsername[uname] = p.user_id;
       }
 
       try {

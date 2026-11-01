@@ -1,4 +1,4 @@
-import { escapeHtml, avatarInnerHtml, fetchAvatarsByUsername, fetchCurrentUsernames } from "./app.js";
+import { escapeHtml, avatarInnerHtml, fetchAvatarsByUsername, fetchCurrentUsernames, openPlayerProfileModal } from "./app.js";
 
 function storagePathFromUrl(url) {
   if (!url) return null;
@@ -36,7 +36,8 @@ function reactionsSignature(map) {
   }).join("|");
 }
 
-export function renderChat(el, { supabase, user, username, isAdmin }) {
+export function renderChat(el, { supabase, user, username, isAdmin, currentSeason }) {
+  const seasonId = currentSeason?.id ?? null;
   const s = {
     loading: true, error: "", messages: [], autoRefresh: true, intervalSec: 5, pendingFile: null,
     reactionsByMessage: {}, openPickerFor: null, pickerShowInput: null, avatarsByUsername: {},
@@ -175,6 +176,16 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
       btn.addEventListener("click", () => onDeleteMessage(btn.dataset.deleteMsg, btn.dataset.imageUrl || ""));
     });
 
+    // A message's sender name opens the same profile sheet the Standings
+    // and Compare tabs use.
+    scope.querySelectorAll("[data-open-profile]").forEach((nameEl) => {
+      nameEl.addEventListener("click", () => {
+        const userId = nameEl.dataset.openProfile;
+        const uname = nameEl.dataset.openProfileName;
+        if (userId) openPlayerProfileModal(userId, uname, s.avatarsByUsername, seasonId);
+      });
+    });
+
     // Long-press: pointerdown starts a timer; pointermove past a small
     // threshold (a scroll, not a press-and-hold) or pointerup/cancel before
     // it fires cancels it. Covers touch and mouse alike via Pointer Events,
@@ -306,9 +317,10 @@ export function renderChat(el, { supabase, user, username, isAdmin }) {
     const liveName = s.currentUsernames[m.user_id] || m.username || "Unknown";
     return `
       <div class="chat-msg ${mine ? "mine" : ""}">
-        <div class="meta player-with-avatar">
-          <span class="avatar-circle-sm">${avatarInnerHtml(s.avatarsByUsername[liveName]?.url, s.avatarsByUsername[liveName]?.monogram, liveName)}</span>
-          ${escapeHtml(liveName)} &middot; ${escapeHtml(timeStr)}
+        <div class="meta">
+          <span class="player-with-avatar player-name-clickable" data-open-profile="${escapeHtml(m.user_id)}" data-open-profile-name="${escapeHtml(liveName)}">
+            <span class="avatar-circle-sm">${avatarInnerHtml(s.avatarsByUsername[liveName]?.url, s.avatarsByUsername[liveName]?.monogram, liveName)}</span>${escapeHtml(liveName)}
+          </span> &middot; ${escapeHtml(timeStr)}
         </div>
         <div class="bubble" data-msg-id="${m.id}">
           ${m.message ? `<div>${escapeHtml(m.message)}</div>` : ""}
