@@ -605,7 +605,7 @@ tr.cmp-me { background: var(--bg-elevated); }
    scales to a 3-4 way tie without spreading wide or shrinking illegibly.
    Solo places are unaffected. */
 .podium-item.podium-tied .podium-players-stack { flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 8px; width: 100%; }
-.podium-item.podium-tied .podium-player { flex-direction: row; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; }
+.podium-item.podium-tied .podium-player { flex-direction: row; align-items: flex-start; justify-content: flex-start; gap: 8px; width: 100%; }
 .podium-item.podium-tied .podium-avatar { width: 34px; height: 34px; font-size: 0.78rem; box-shadow: none; }
 .podium-player-info { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1 1 auto; }
 .podium-item.podium-tied .podium-name,
@@ -616,7 +616,7 @@ tr.cmp-me { background: var(--bg-elevated); }
    never the thing an ellipsis eats when the name/record column runs out
    of room -- on a narrow tied card that used to clip the trend chip
    right off the end of the line, making it look missing. */
-.podium-item.podium-tied .podium-trend { flex: none; margin-left: auto; padding-left: 4px; }
+.podium-item.podium-tied .podium-trend { flex: none; margin-left: auto; padding-left: 4px; padding-top: 1px; }
 .podium-item.podium-tied .podium-trend .rank-chip { font-size: 10px; }
 .podium-riser {
   width: 100%; margin-top: 12px;

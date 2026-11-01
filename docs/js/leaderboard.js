@@ -151,6 +151,7 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
     // that one riser instead of a wide, shrunken wrap of cards.
     function podiumPlayerHtml(r, tied) {
       const dmDot = unreadDmSenders?.[r.user_id] ? `<span class="dm-unread-dot" title="New message"></span>` : "";
+      const wk = weekByPlayer[r.user_id] || { wins: 0, losses: 0 };
       if (tied) {
         // Trend sits in its own flex slot, OUTSIDE the name/record column
         // that truncates with an ellipsis -- otherwise on a narrow tied
@@ -162,12 +163,12 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
             <div class="podium-player-info">
               <div class="podium-name">${escapeHtml(r.username)}${dmDot}</div>
               <div class="podium-record">${r.wins}–${r.losses} · ${(r.winPct * 100).toFixed(1)}%</div>
+              <div class="podium-record">Wk ${s.selectedWeek}: ${wk.wins}–${wk.losses}</div>
             </div>
             <span class="podium-trend">${rankChipHtml(r)}</span>
           </button>
         `;
       }
-      const wk = weekByPlayer[r.user_id] || { wins: 0, losses: 0 };
       return `
         <button type="button" class="podium-player" data-open-profile="${escapeHtml(r.user_id)}" data-open-profile-name="${escapeHtml(r.username)}">
           <span class="avatar-circle-lg podium-avatar">${avatarInnerHtml(s.avatars[r.username]?.url, s.avatars[r.username]?.monogram, r.username)}</span>
