@@ -528,6 +528,11 @@ table.cmp-grid th.cmp-game-th { cursor: pointer; }
 table.cmp-grid th.cmp-game-th:active { background: var(--bg-elevated); }
 .cmp-player { font-weight: 600; white-space: nowrap; }
 .cmp-cell { text-align: center; font-size: 0.78rem; }
+/* A picked team's name is also clickable, opening the same gamecast detail
+   popup as the column header -- so on a long/wide grid you don't have to
+   scroll back up to the header to see what's happening in that game. */
+.cmp-cell-clickable { cursor: pointer; border-radius: 4px; }
+.cmp-cell-clickable:active { background: var(--bg-elevated); }
 .cmp-empty { color: var(--text-dim); }
 .cmp-win { color: var(--win); }
 .cmp-loss { color: var(--loss); }

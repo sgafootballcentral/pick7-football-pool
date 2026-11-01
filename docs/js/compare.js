@@ -90,7 +90,7 @@ export function renderCompare(el, { supabase, username, currentSeason }) {
         if (pk.result === "win") wins++;
         else if (pk.result === "loss") losses++;
         const cls = pk.result === "win" ? "cmp-win" : pk.result === "loss" ? "cmp-loss" : "";
-        return `<td class="cmp-cell ${cls}">${escapeHtml(pk.selected_team)}${resultBadge(pk.result)}</td>`;
+        return `<td class="cmp-cell cmp-cell-clickable ${cls}" data-open-gamecard="${escapeHtml(g.game_id)}">${escapeHtml(pk.selected_team)}${resultBadge(pk.result)}</td>`;
       });
       const isMe = p === username;
       return `<tr class="${isMe ? "cmp-me" : ""}">
@@ -111,7 +111,7 @@ export function renderCompare(el, { supabase, username, currentSeason }) {
           <tbody>${rows.join("")}</tbody>
         </table>
       </div>
-      <div class="hint" style="margin-top:8px;">Hover (or tap) a column header to see that game's matchup and spread. ✅/❌ shows once a pick is graded.</div>
+      <div class="hint" style="margin-top:8px;">Tap a column header or any pick to see that game's matchup, spread, and live detail. ✅/❌ shows once a pick is graded.</div>
     `;
   }
 

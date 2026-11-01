@@ -1,5 +1,5 @@
 // Bump this on every deploy so clients pick up new files instead of a stale cache.
-const CACHE_VERSION = "pick7-v23";
+const CACHE_VERSION = "pick7-v24";
 const APP_SHELL = [
   "./",
   "./index.html",
