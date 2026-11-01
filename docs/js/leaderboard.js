@@ -124,18 +124,21 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
     }
     const podiumGroups = Object.values(groupsByPlace);
     const restPlayers = standings.filter((r) => r.place > 3);
-    // Flat, left-to-right 1st/2nd/3rd order -- no more height-tiered
-    // "podium stand" blocks, so there's no center-emphasis reason to swap
-    // 1st into the middle anymore. Any place without a group (swallowed
-    // by a tie above it) is simply omitted rather than leaving a gap.
-    const visualOrder = [1, 2, 3].map((pl) => groupsByPlace[pl]).filter(Boolean);
+    // Classic podium order -- 2nd on the left, 1st centered, 3rd on the
+    // right -- now that height is back as a visual cue (the riser block
+    // below each card), centering the champion reads correctly again.
+    // Any place without a group (swallowed by a tie above it) is simply
+    // omitted rather than leaving a gap.
+    const visualOrder = [2, 1, 3].map((pl) => groupsByPlace[pl]).filter(Boolean);
 
-    // Compact, equal-height cards instead of the old tall medal-stand
-    // blocks -- those made a big tie (several avatars stacked inside a
-    // short 2nd/3rd block) look cramped and uneven next to a single
-    // player in a tall 1st block, which is the "confusing" feedback this
-    // redesign addresses. Rank is now shown with a small badge and subtle
-    // gold/silver/bronze accent instead of block height.
+    // True podium silhouette: a colored "riser" block per place, height
+    // tiered by rank (1st tallest), anchored to a shared baseline so the
+    // steps actually line up like a real award podium. The player card
+    // above the riser is the same shape for every place, so a big tie
+    // (several avatars) just wraps into a row instead of being squeezed
+    // into a shrunken block -- that cramped-tie look was the "confusing"
+    // feedback the earlier flat redesign was reacting to; this keeps the
+    // podium silhouette the user liked while fixing that specific case.
     function podiumTierHtml(group) {
       const { tier, place, players } = group;
       const medal = MEDALS[place];
@@ -156,6 +159,7 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
               `;
             }).join("")}
           </div>
+          <div class="podium-riser">${place}</div>
         </div>
       `;
     }
