@@ -13,6 +13,13 @@ window.APP_CONFIG = {
   // "https://YOUR-PROJECT-REF.supabase.co/functions/v1/get-live-scores"
   LIVE_SCORES_URL: "https://ccuodbluyunwdwybmtmb.supabase.co/functions/v1/get-live-scores",
 
+  // Set after you deploy the get-team-schedule Edge Function (see
+  // supabase/functions/get-team-schedule/README.md). Powers "tap a team to
+  // see their schedule" in the gamecast popup -- this hits ESPN directly
+  // for a team's FULL season schedule, since our own games table only has
+  // whatever weeks this pool has synced so far.
+  TEAM_SCHEDULE_URL: "https://ccuodbluyunwdwybmtmb.supabase.co/functions/v1/get-team-schedule",
+
   // Your existing Streamlit app -- where the real Admin tools (weekly ESPN
   // sync, grading, exports, player management) still live. Admins see a
   // shortcut to this in the PWA's top bar.

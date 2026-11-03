@@ -683,7 +683,7 @@ export function openGameDetailModal(game, live) {
   wrap.querySelectorAll("[data-open-team-schedule]").forEach((teamEl) => {
     teamEl.addEventListener("click", () => {
       const teamName = teamEl.dataset.openTeamSchedule;
-      if (teamName) openTeamScheduleModal(teamName, game.season_id ?? null);
+      if (teamName) openTeamScheduleModal(teamName, game.league, seasonYearFromKickoff(game.kickoff_time), game.season_id ?? null);
     });
   });
 }
@@ -753,13 +753,82 @@ function linescoreTableHtml(live, awayTeam, homeTeam, homeIsFavorite) {
   `;
 }
 
+// CFB/NFL seasons span two calendar years (a season that starts in August
+// finishes with January bowls/playoffs the following year), and ESPN's
+// `season` query param wants the year the season is labeled by -- so a
+// January/February kickoff belongs to the PREVIOUS calendar year's season.
+function seasonYearFromKickoff(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const m = d.getUTCMonth(); // 0 = Jan
+  return m <= 1 ? d.getUTCFullYear() - 1 : d.getUTCFullYear();
+}
+
+// Server-side proxy to ESPN's own team-schedule API (see
+// supabase/functions/get-team-schedule) -- unlike fetchLiveScores() above,
+// which only covers whatever games are already in this pool's `games`
+// table, this returns a team's FULL season, including weeks this pool
+// hasn't synced yet.
+async function fetchTeamSchedule(teamName, league, seasonYear) {
+  const url = window.APP_CONFIG.TEAM_SCHEDULE_URL;
+  if (!url || url.includes("YOUR-PROJECT-REF") || !teamName) return null;
+  const params = new URLSearchParams({ team: teamName, league: (league || "cfb").toLowerCase() });
+  if (seasonYear) params.set("season", String(seasonYear));
+  try {
+    const resp = await fetch(`${url}?${params.toString()}`, {
+      headers: {
+        apikey: window.APP_CONFIG.SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${window.APP_CONFIG.SUPABASE_ANON_KEY}`,
+      },
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch (_) {
+    return null;
+  }
+}
+
+// Turns one of ESPN's own schedule events into a game-shaped object good
+// enough for openGameDetailModal() and teamScheduleRowHtml() to treat
+// exactly like a real row from our `games` table -- so every row in the
+// schedule list is click-through-able the same way, whether or not this
+// pool ever included that particular game. There's no real point-spread
+// "favorite" here (ESPN's basic schedule endpoint doesn't carry odds), so
+// favorite_team is just set to whichever side is actually home; it only
+// ever controls left/right display order, and spread_value is left blank
+// so no spread row renders for it.
+function syntheticGameFromEspn(eg, teamName, league) {
+  const opponent = eg.opponent || "TBD";
+  const isLive = eg.state === "in" && !eg.completed;
+  return {
+    game_id: `espn_${eg.espn_id}`,
+    league,
+    week_number: eg.week_number,
+    kickoff_time: eg.kickoff_time,
+    status: eg.completed ? "final" : isLive ? "in_progress" : "scheduled",
+    favorite_team: eg.home ? teamName : opponent,
+    underdog_team: eg.home ? opponent : teamName,
+    favorite_team_home: eg.home,
+    home_score: eg.home ? eg.team_score : eg.opp_score,
+    away_score: eg.home ? eg.opp_score : eg.team_score,
+    spread_value: null,
+    tv_network: eg.broadcasts?.[0] || null,
+    season_id: null,
+  };
+}
+
 // Tapping a team's name/logo in the gamecast popup (any of the places that
 // popup opens -- Picks, Standings' week-picks drill-down, Compare) opens
-// that team's full schedule: every game of theirs on file, each still
-// click-through-able to its own gamecast popup. Scoped to the clicked
-// game's season (when it has one) so an old season's games don't bleed
-// into a current-season lookup.
-async function openTeamScheduleModal(teamName, seasonId) {
+// that team's full schedule. ESPN's own schedule is the source of truth
+// for *which* games exist and in what order -- this pool's own `games`
+// table only has whatever weeks have been synced so far, which is why an
+// earlier version of this looked incomplete. A row that matches a game
+// already in this pool still uses that real row (so it keeps its actual
+// spread and TV info); every other row is synthesized from ESPN alone.
+// Either way the row opens the same gamecast popup, with a fresh live/final
+// score fetched only for the one game actually clicked.
+async function openTeamScheduleModal(teamName, league, seasonYear, localSeasonId) {
   const panel = document.createElement("div");
   panel.className = "modal-backdrop";
   document.body.appendChild(panel);
@@ -780,35 +849,56 @@ async function openTeamScheduleModal(teamName, seasonId) {
     // safe to drop straight into a PostgREST .or() filter string.
     let favQuery = supabase.from("games").select("*").eq("favorite_team", teamName);
     let dogQuery = supabase.from("games").select("*").eq("underdog_team", teamName);
-    if (seasonId != null) {
-      favQuery = favQuery.eq("season_id", seasonId);
-      dogQuery = dogQuery.eq("season_id", seasonId);
+    if (localSeasonId != null) {
+      favQuery = favQuery.eq("season_id", localSeasonId);
+      dogQuery = dogQuery.eq("season_id", localSeasonId);
     }
-    const [{ data: asFav, error: e1 }, { data: asDog, error: e2 }] = await Promise.all([favQuery, dogQuery]);
-    if (e1) throw e1;
-    if (e2) throw e2;
+    const [{ data: asFav }, { data: asDog }, scheduleResp] = await Promise.all([
+      favQuery,
+      dogQuery,
+      fetchTeamSchedule(teamName, league, seasonYear),
+    ]);
 
-    const games = [...(asFav || []), ...(asDog || [])].sort((a, b) => (a.kickoff_time || "").localeCompare(b.kickoff_time || ""));
-    // Best-effort, same as every other live-score fetch in this app -- an
-    // empty/failed result just means these rows show their last-known
-    // (possibly stale or missing) score instead of a live/final one.
-    const liveScores = await fetchLiveScores(games);
+    const localByEspnId = {};
+    for (const g of [...(asFav || []), ...(asDog || [])]) {
+      const m = /^espn_(.+)$/.exec(g.game_id || "");
+      if (m) localByEspnId[m[1]] = g;
+    }
+
+    const espnGames = scheduleResp?.games || [];
+    // ESPN lookup can come back empty (a team name this pool uses that
+    // ESPN's teams list doesn't resolve, or ESPN itself hiccupping) --
+    // fall back to whatever this pool already has on file so the popup
+    // still shows *something* rather than nothing.
+    const games = espnGames.length
+      ? espnGames.map((eg) => localByEspnId[eg.espn_id] || syntheticGameFromEspn(eg, teamName, league))
+      : Object.values(localByEspnId).sort((a, b) => (a.kickoff_time || "").localeCompare(b.kickoff_time || ""));
+    const gamesById = Object.fromEntries(games.map((g) => [g.game_id, g]));
 
     panel.innerHTML = `
       <div class="modal-sheet">
         <button class="modal-close-x" id="team-sched-x-btn" aria-label="Close">&times;</button>
         <h3 style="text-align:center; margin-top:0;">${escapeHtml(teamName)} -- Schedule</h3>
-        ${games.length ? games.map((g) => teamScheduleRowHtml(g, teamName, liveScores[g.game_id])).join("") : `<div class="hint" style="text-align:center;">No games on file for ${escapeHtml(teamName)}.</div>`}
+        ${games.length ? games.map((g) => teamScheduleRowHtml(g, teamName)).join("") : `<div class="hint" style="text-align:center;">No schedule found for ${escapeHtml(teamName)}.</div>`}
         <button class="btn btn-secondary" id="team-sched-close-btn" style="margin-top:10px;">Close</button>
       </div>
     `;
     panel.querySelector("#team-sched-x-btn").addEventListener("click", close);
     panel.querySelector("#team-sched-close-btn").addEventListener("click", close);
     panel.querySelectorAll("[data-open-gamecard]").forEach((rowEl) => {
-      rowEl.addEventListener("click", () => {
+      rowEl.addEventListener("click", async () => {
         const gid = rowEl.dataset.openGamecard;
-        const g = games.find((game) => game.game_id === gid);
-        if (g) openGameDetailModal(g, liveScores[gid]);
+        const g = gamesById[gid];
+        if (!g) return;
+        // Lazy, per-click live-score fetch -- no need to pull live data
+        // for every game in the schedule just to show a static list.
+        let live = {};
+        try {
+          live = (await fetchLiveScores([g]))[gid] || {};
+        } catch (_) {
+          live = {};
+        }
+        openGameDetailModal(g, live);
       });
     });
   } catch (e) {
@@ -825,31 +915,28 @@ async function openTeamScheduleModal(teamName, seasonId) {
   }
 }
 
-function teamScheduleRowHtml(g, teamName, live) {
-  live = live || {};
+function teamScheduleRowHtml(g, teamName) {
   const isHome = g.favorite_team === teamName ? !!g.favorite_team_home : !g.favorite_team_home;
   const opponent = g.favorite_team === teamName ? g.underdog_team : g.favorite_team;
 
-  const isFinal = live.completed || (g.status === "final" && g.home_score != null);
-  const isLive = live.state === "in" && !isFinal;
-  const homeScore = live.home_score ?? g.home_score;
-  const awayScore = live.away_score ?? g.away_score;
-  const teamScore = isHome ? homeScore : awayScore;
-  const oppScore = isHome ? awayScore : homeScore;
-  const hasScore = teamScore != null && oppScore != null && (isLive || isFinal);
+  const isFinal = g.status === "final" && g.home_score != null;
+  const isLive = g.status === "in_progress" && !isFinal;
+  const teamScore = isHome ? g.home_score : g.away_score;
+  const oppScore = isHome ? g.away_score : g.home_score;
+  const hasScore = teamScore != null && oppScore != null && (isFinal || isLive);
 
   const resultClass = isFinal && hasScore ? (teamScore > oppScore ? "win" : teamScore < oppScore ? "loss" : "") : "";
   const resultLabel = isFinal && hasScore ? (teamScore > oppScore ? "W" : teamScore < oppScore ? "L" : "T") : "";
 
   const { dateStr, timeStr } = formatKickoff(g.kickoff_time);
-  const statusLabel = isFinal ? "Final" : isLive ? (live.clock || "Live") : `${dateStr} · ${timeStr}`;
+  const statusLabel = isFinal ? "Final" : isLive ? "Live" : `${dateStr} · ${timeStr}`;
 
   return `
     <div class="game-card" style="margin-bottom:7px;">
       <div class="game-card-stripe ${resultClass}"></div>
       <div class="game-card-body">
         <div class="game-card-top game-card-clickable" data-open-gamecard="${escapeHtml(g.game_id)}">
-          <div class="game-card-matchup">Wk ${escapeHtml(String(g.week_number))}: ${isHome ? "vs" : "@"} ${escapeHtml(opponent || "TBD")}</div>
+          <div class="game-card-matchup">${g.week_number != null ? `Wk ${escapeHtml(String(g.week_number))}: ` : ""}${isHome ? "vs" : "@"} ${escapeHtml(opponent || "TBD")}</div>
           <div class="game-card-meta"><span class="spread">${escapeHtml(g.spread_value || "")}</span></div>
         </div>
         <div class="game-card-pickrow ${resultClass === "win" ? "win-bg" : ""}">
