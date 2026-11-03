@@ -680,6 +680,12 @@ export function openGameDetailModal(game, live) {
   const close = () => wrap.remove();
   wrap.querySelector("#gc-close-x").addEventListener("click", close);
   wrap.querySelector("#gc-close-btn").addEventListener("click", close);
+  wrap.querySelectorAll("[data-open-team-schedule]").forEach((teamEl) => {
+    teamEl.addEventListener("click", () => {
+      const teamName = teamEl.dataset.openTeamSchedule;
+      if (teamName) openTeamScheduleModal(teamName, game.season_id ?? null);
+    });
+  });
 }
 
 function ordinalPeriod(n) {
@@ -691,8 +697,12 @@ function ordinalPeriod(n) {
 }
 
 function gcTeamHtml(name, logo, score, record, hasScore) {
+  // Clickable (to pull up that team's schedule) only once there's an
+  // actual team to look up -- "TBD" placeholder slots for a not-yet-set
+  // matchup have nothing to show.
+  const clickable = !!name && name !== "TBD";
   return `
-    <div class="gc-team">
+    <div class="gc-team${clickable ? " gc-team-clickable" : ""}"${clickable ? ` data-open-team-schedule="${escapeHtml(name)}"` : ""}>
       ${logo ? `<img class="gc-logo" src="${escapeHtml(logo)}" alt="">` : `<div class="gc-logo gc-logo-fallback">${escapeHtml((name || "?").charAt(0))}</div>`}
       ${hasScore ? `<div class="gc-score">${escapeHtml(String(score))}</div>` : ""}
       <div class="gc-team-name">${escapeHtml(name || "TBD")}</div>
@@ -740,6 +750,114 @@ function linescoreTableHtml(live, awayTeam, homeTeam, homeIsFavorite) {
         ${rowHtml(homeTeam, homeLogo, homeScores, live.home_score ?? sumOrNull(homeScores))}
       </tbody>
     </table>
+  `;
+}
+
+// Tapping a team's name/logo in the gamecast popup (any of the places that
+// popup opens -- Picks, Standings' week-picks drill-down, Compare) opens
+// that team's full schedule: every game of theirs on file, each still
+// click-through-able to its own gamecast popup. Scoped to the clicked
+// game's season (when it has one) so an old season's games don't bleed
+// into a current-season lookup.
+async function openTeamScheduleModal(teamName, seasonId) {
+  const panel = document.createElement("div");
+  panel.className = "modal-backdrop";
+  document.body.appendChild(panel);
+  const close = () => panel.remove();
+
+  panel.innerHTML = `
+    <div class="modal-sheet">
+      <button class="modal-close-x" id="team-sched-x-btn" aria-label="Close">&times;</button>
+      <h3 style="text-align:center; margin-top:0;">${escapeHtml(teamName)} -- Schedule</h3>
+      <div class="hint" style="text-align:center;">Loading…</div>
+    </div>
+  `;
+  panel.querySelector("#team-sched-x-btn").addEventListener("click", close);
+
+  try {
+    // Two separate eq() queries rather than one .or() -- team names can
+    // contain characters (periods, parentheses, ampersands) that aren't
+    // safe to drop straight into a PostgREST .or() filter string.
+    let favQuery = supabase.from("games").select("*").eq("favorite_team", teamName);
+    let dogQuery = supabase.from("games").select("*").eq("underdog_team", teamName);
+    if (seasonId != null) {
+      favQuery = favQuery.eq("season_id", seasonId);
+      dogQuery = dogQuery.eq("season_id", seasonId);
+    }
+    const [{ data: asFav, error: e1 }, { data: asDog, error: e2 }] = await Promise.all([favQuery, dogQuery]);
+    if (e1) throw e1;
+    if (e2) throw e2;
+
+    const games = [...(asFav || []), ...(asDog || [])].sort((a, b) => (a.kickoff_time || "").localeCompare(b.kickoff_time || ""));
+    // Best-effort, same as every other live-score fetch in this app -- an
+    // empty/failed result just means these rows show their last-known
+    // (possibly stale or missing) score instead of a live/final one.
+    const liveScores = await fetchLiveScores(games);
+
+    panel.innerHTML = `
+      <div class="modal-sheet">
+        <button class="modal-close-x" id="team-sched-x-btn" aria-label="Close">&times;</button>
+        <h3 style="text-align:center; margin-top:0;">${escapeHtml(teamName)} -- Schedule</h3>
+        ${games.length ? games.map((g) => teamScheduleRowHtml(g, teamName, liveScores[g.game_id])).join("") : `<div class="hint" style="text-align:center;">No games on file for ${escapeHtml(teamName)}.</div>`}
+        <button class="btn btn-secondary" id="team-sched-close-btn" style="margin-top:10px;">Close</button>
+      </div>
+    `;
+    panel.querySelector("#team-sched-x-btn").addEventListener("click", close);
+    panel.querySelector("#team-sched-close-btn").addEventListener("click", close);
+    panel.querySelectorAll("[data-open-gamecard]").forEach((rowEl) => {
+      rowEl.addEventListener("click", () => {
+        const gid = rowEl.dataset.openGamecard;
+        const g = games.find((game) => game.game_id === gid);
+        if (g) openGameDetailModal(g, liveScores[gid]);
+      });
+    });
+  } catch (e) {
+    panel.innerHTML = `
+      <div class="modal-sheet">
+        <button class="modal-close-x" id="team-sched-x-btn" aria-label="Close">&times;</button>
+        <h3 style="text-align:center; margin-top:0;">${escapeHtml(teamName)} -- Schedule</h3>
+        <div class="error-msg" style="text-align:center;">Couldn't load schedule: ${escapeHtml(e.message || String(e))}</div>
+        <button class="btn btn-secondary" id="team-sched-close-btn" style="margin-top:10px;">Close</button>
+      </div>
+    `;
+    panel.querySelector("#team-sched-x-btn").addEventListener("click", close);
+    panel.querySelector("#team-sched-close-btn").addEventListener("click", close);
+  }
+}
+
+function teamScheduleRowHtml(g, teamName, live) {
+  live = live || {};
+  const isHome = g.favorite_team === teamName ? !!g.favorite_team_home : !g.favorite_team_home;
+  const opponent = g.favorite_team === teamName ? g.underdog_team : g.favorite_team;
+
+  const isFinal = live.completed || (g.status === "final" && g.home_score != null);
+  const isLive = live.state === "in" && !isFinal;
+  const homeScore = live.home_score ?? g.home_score;
+  const awayScore = live.away_score ?? g.away_score;
+  const teamScore = isHome ? homeScore : awayScore;
+  const oppScore = isHome ? awayScore : homeScore;
+  const hasScore = teamScore != null && oppScore != null && (isLive || isFinal);
+
+  const resultClass = isFinal && hasScore ? (teamScore > oppScore ? "win" : teamScore < oppScore ? "loss" : "") : "";
+  const resultLabel = isFinal && hasScore ? (teamScore > oppScore ? "W" : teamScore < oppScore ? "L" : "T") : "";
+
+  const { dateStr, timeStr } = formatKickoff(g.kickoff_time);
+  const statusLabel = isFinal ? "Final" : isLive ? (live.clock || "Live") : `${dateStr} · ${timeStr}`;
+
+  return `
+    <div class="game-card" style="margin-bottom:7px;">
+      <div class="game-card-stripe ${resultClass}"></div>
+      <div class="game-card-body">
+        <div class="game-card-top game-card-clickable" data-open-gamecard="${escapeHtml(g.game_id)}">
+          <div class="game-card-matchup">Wk ${escapeHtml(String(g.week_number))}: ${isHome ? "vs" : "@"} ${escapeHtml(opponent || "TBD")}</div>
+          <div class="game-card-meta"><span class="spread">${escapeHtml(g.spread_value || "")}</span></div>
+        </div>
+        <div class="game-card-pickrow ${resultClass === "win" ? "win-bg" : ""}">
+          <span class="label">${escapeHtml(statusLabel)}</span>
+          <span class="value ${resultClass}">${hasScore ? `${resultLabel ? `${resultLabel} ` : ""}${teamScore}-${oppScore}` : "—"}</span>
+        </div>
+      </div>
+    </div>
   `;
 }
 

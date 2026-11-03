@@ -606,6 +606,12 @@ tr.cmp-me { background: var(--bg-elevated); }
 .gc-sheet { padding-top: 26px; }
 .gc-teams { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 10px; }
 .gc-team { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
+/* A team's logo/name in the gamecast popup opens that team's full
+   schedule -- press feedback on the whole block, underline just the name
+   on hover so it doesn't look like the score/record are clickable too. */
+.gc-team-clickable { cursor: pointer; border-radius: 8px; padding: 2px 4px; margin: -2px -4px; }
+.gc-team-clickable:active { background: rgba(255,255,255,0.04); }
+.gc-team-clickable:hover .gc-team-name { text-decoration: underline; }
 .gc-logo { width: 46px; height: 46px; object-fit: contain; }
 .gc-logo-fallback { width: 46px; height: 46px; border-radius: 50%; background: var(--bg-card); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1.2rem; color: var(--text-dim); }
 .gc-score { font-size: 1.9rem; font-weight: 800; line-height: 1; }
