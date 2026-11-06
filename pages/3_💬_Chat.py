@@ -146,7 +146,26 @@ def confirm_clear_chat():
 
     if confirm_clicked:
         try:
-            all_msgs = supabase.table("chat_messages").select("image_url").execute().data
+            # Paginated instead of a single unscoped select() -- Supabase's
+            # PostgREST API silently caps any unfiltered select at 1000 rows,
+            # so a single-shot fetch here would leave older messages' images
+            # orphaned in storage (never deleted) once the chat passed 1000
+            # messages, with no error to signal it happened.
+            all_msgs = []
+            offset = 0
+            page_size = 1000
+            while True:
+                batch = (
+                    supabase.table("chat_messages")
+                    .select("image_url")
+                    .range(offset, offset + page_size - 1)
+                    .execute()
+                    .data
+                )
+                all_msgs.extend(batch)
+                if len(batch) < page_size:
+                    break
+                offset += page_size
             image_paths = [p for p in (storage_path_from_url(m.get("image_url")) for m in all_msgs) if p]
             if image_paths:
                 try:
@@ -188,8 +207,30 @@ if st.session_state.get("pending_clear_chat"):
 st.divider()
 
 EASTERN_TZ = ZoneInfo("America/New_York")
-messages = supabase.table("chat_messages").select("*").order("created_at").execute().data
-all_reactions = supabase.table("chat_reactions").select("*").execute().data
+# Scoped to the most recent 500 messages instead of an unfiltered select() --
+# that select silently truncates at Supabase's 1000-row API cap, and with no
+# ordering guarantee on which 1000 come back, a long-running chat risked
+# showing an arbitrary/incomplete slice (or, once replies were added,
+# breaking parent-lookup for messages whose parent fell outside the cap).
+# Fetching the newest 500 (then re-sorting oldest-first for display) keeps
+# the page small and correct regardless of how much chat history piles up.
+messages = (
+    supabase.table("chat_messages")
+    .select("*")
+    .order("created_at", desc=True)
+    .limit(500)
+    .execute()
+    .data
+)
+messages = list(reversed(messages))
+message_ids = [m["id"] for m in messages]
+# Reactions scoped to just the messages actually being displayed, rather
+# than every reaction ever made -- same unbounded-growth risk as above,
+# and reactions have no use once their message has scrolled out of view.
+all_reactions = (
+    supabase.table("chat_reactions").select("*").in_("message_id", message_ids).execute().data
+    if message_ids else []
+)
 
 reactions_by_message = {}
 for r in all_reactions:

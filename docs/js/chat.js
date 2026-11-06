@@ -264,9 +264,11 @@ export function renderChat(el, { supabase, user, username, isAdmin, currentSeaso
       // Only one reaction per person per message -- clear whatever this
       // user already has here before adding the new one. Re-picking the
       // same emoji they already had just removes it, with no replacement.
-      await supabase.from("chat_reactions").delete().eq("message_id", mid).eq("user_id", user.id);
+      const { error: delErr } = await supabase.from("chat_reactions").delete().eq("message_id", mid).eq("user_id", user.id);
+      if (delErr) throw delErr;
       if (!mine) {
-        await supabase.from("chat_reactions").insert({ message_id: mid, user_id: user.id, username, emoji });
+        const { error: insErr } = await supabase.from("chat_reactions").insert({ message_id: mid, user_id: user.id, username, emoji });
+        if (insErr) throw insErr;
       }
       await loadMessages(false, true);
     } catch (e) {
@@ -392,8 +394,24 @@ export function renderChat(el, { supabase, user, username, isAdmin, currentSeaso
   async function onClearAll() {
     if (!confirm("This will permanently delete every message in this chat, including any uploaded images/gifs. This cannot be undone. Continue?")) return;
     try {
-      const { data: allMsgs } = await supabase.from("chat_messages").select("image_url");
-      const paths = (allMsgs || []).map((m) => storagePathFromUrl(m.image_url)).filter(Boolean);
+      // Paginated instead of a single unscoped select() -- Supabase's API
+      // caps an unfiltered select at 1000 rows, which would silently leave
+      // older messages' images behind in storage once the chat passed that
+      // many messages, with no error to signal it happened.
+      let allMsgs = [];
+      {
+        let offset = 0;
+        const pageSize = 1000;
+        for (;;) {
+          const { data: batch, error: pageErr } = await supabase
+            .from("chat_messages").select("image_url").range(offset, offset + pageSize - 1);
+          if (pageErr) throw pageErr;
+          allMsgs = allMsgs.concat(batch || []);
+          if (!batch || batch.length < pageSize) break;
+          offset += pageSize;
+        }
+      }
+      const paths = allMsgs.map((m) => storagePathFromUrl(m.image_url)).filter(Boolean);
       if (paths.length) {
         try { await supabase.storage.from("chat-images").remove(paths); } catch (_) {}
       }
@@ -420,16 +438,23 @@ export function renderChat(el, { supabase, user, username, isAdmin, currentSeaso
 
   async function loadMessages(preserveScroll, backgroundOnly) {
     try {
-      const [{ data: msgData, error: msgErr }, { data: reactData, error: reactErr }] = await Promise.all([
-        supabase.from("chat_messages").select("*").order("created_at", { ascending: false }).limit(CHAT_HISTORY_LIMIT),
-        supabase.from("chat_reactions").select("*"),
-      ]);
+      const { data: msgData, error: msgErr } = await supabase
+        .from("chat_messages").select("*").order("created_at", { ascending: false }).limit(CHAT_HISTORY_LIMIT);
       if (msgErr) throw msgErr;
-      if (reactErr) throw reactErr;
       // Query comes back newest-first (so .limit() keeps the RECENT
       // messages, not the oldest ones) -- reverse back to oldest-first for
       // display, since that's what chatMsgHtml/scrollToBottom expect.
       const newMessages = (msgData || []).slice().reverse();
+      // Reactions scoped to just the messages we're actually displaying,
+      // instead of every reaction ever made in the chat's history -- that
+      // unscoped select had the same unbounded-growth/1000-row-cap risk as
+      // the messages query above, and reactions on messages outside the
+      // current window are never shown anyway.
+      const msgIds = newMessages.map((m) => m.id);
+      const { data: reactData, error: reactErr } = msgIds.length
+        ? await supabase.from("chat_reactions").select("*").in("message_id", msgIds)
+        : { data: [], error: null };
+      if (reactErr) throw reactErr;
       const newReactions = buildReactionsByMessage(reactData, user.id, s.currentUsernames);
       // Reactions changing (someone else's tap) doesn't add/remove a message
       // row, so the message-id signature alone would miss it -- compare both.
