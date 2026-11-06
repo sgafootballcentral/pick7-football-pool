@@ -131,17 +131,30 @@ Deno.serve(async (req) => {
       if (!selfSubs || selfSubs.length === 0) {
         selfResult.skipped = "submitter has no push subscription";
       } else {
-        const { data: games, error: gamesErr } = await supabase
+        // Scoped by season_id too, not just week_number -- every other
+        // season-aware query path in the app does this, and without it a
+        // second season reusing week numbers would pull in (or mix
+        // together) the wrong season's games/picks here. record.season_id
+        // comes from the pick_submissions row that triggered this function;
+        // guarded with `if` rather than always chaining .eq() so older
+        // submissions rows (if any lack a season_id) keep working as before.
+        let gamesQuery = supabase
           .from("games")
           .select("game_id,kickoff_time,favorite_team,underdog_team")
           .eq("week_number", record.week_number);
-        if (gamesErr) throw gamesErr;
-
-        const { data: picks, error: picksErr } = await supabase
+        let picksQuery = supabase
           .from("picks")
           .select("game_id,selected_team")
           .eq("week_number", record.week_number)
           .eq("user_id", record.user_id);
+        if (record.season_id != null) {
+          gamesQuery = gamesQuery.eq("season_id", record.season_id);
+          picksQuery = picksQuery.eq("season_id", record.season_id);
+        }
+        const { data: games, error: gamesErr } = await gamesQuery;
+        if (gamesErr) throw gamesErr;
+
+        const { data: picks, error: picksErr } = await picksQuery;
         if (picksErr) throw picksErr;
 
         const sortedGames = [...(games || [])].sort(gameSortKey);
