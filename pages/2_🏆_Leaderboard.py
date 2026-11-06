@@ -254,26 +254,29 @@ if is_admin:
                 st.rerun()
 
 try:
-    # Pull every pick's graded result -- this is now written directly onto each pick
-    # by the Admin "Grade Finished Games" step, using the spread that pick actually
-    # locked in, so it stays correct even if a week's games get re-synced later.
-    picks_data = supabase.table("picks").select("username, result, week_number").execute().data
+    # Pull from picks_week_tallies (a view that pre-groups picks by
+    # user/week, already used by the PWA's own leaderboard) instead of the
+    # raw picks table directly. The raw table has passed Supabase's default
+    # 1000-row API cap, so a plain unfiltered select on it silently
+    # truncates and produces wrong, randomly-shifting totals -- whoever's
+    # rows happen to fall past row 1000 just vanishes from the standings.
+    # The view avoids this by aggregating server-side, so only one small
+    # row per player per week ever crosses the wire.
+    tallies_data = supabase.table("picks_week_tallies").select("username, week_number, wins, losses").execute().data
 
-    if not picks_data:
+    if not tallies_data:
         st.info("No player picks have been submitted yet in this league.")
     else:
-        df_picks = pd.DataFrame(picks_data)
-        df_graded = df_picks[df_picks["result"].isin(["win", "loss"])]
+        df_tallies = pd.DataFrame(tallies_data)
+        df_graded = df_tallies[(df_tallies["wins"] > 0) | (df_tallies["losses"] > 0)]
 
         if df_graded.empty:
             st.info("🏈 Total standings will update here as soon as the commissioner grades completed games.")
             st.subheader("Active League Roster")
-            st.dataframe(df_picks[["username"]].drop_duplicates().reset_index(drop=True), use_container_width=True)
+            st.dataframe(df_tallies[["username"]].drop_duplicates().reset_index(drop=True), use_container_width=True)
         else:
-            standings = df_graded.groupby("username")["result"].agg(
-                Wins=lambda r: (r == "win").sum(),
-                Losses=lambda r: (r == "loss").sum(),
-            ).reset_index()
+            standings = df_graded.groupby("username")[["wins", "losses"]].sum().reset_index()
+            standings = standings.rename(columns={"wins": "Wins", "losses": "Losses"})
             standings["Win %"] = (standings["Wins"] / (standings["Wins"] + standings["Losses"])).round(3)
 
             # Rank by total WINS (not win %) -- someone who skips a week shouldn't
@@ -306,10 +309,9 @@ try:
             if week_df.empty:
                 week_record = pd.DataFrame(columns=["Player", "WeekWins", "WeekLosses"])
             else:
-                week_record = week_df.groupby("username")["result"].agg(
-                    WeekWins=lambda r: (r == "win").sum(),
-                    WeekLosses=lambda r: (r == "loss").sum(),
-                ).reset_index().rename(columns={"username": "Player"})
+                week_record = week_df.groupby("username")[["wins", "losses"]].sum().reset_index().rename(
+                    columns={"username": "Player", "wins": "WeekWins", "losses": "WeekLosses"}
+                )
 
             display_standings = standings.merge(week_record, on="Player", how="left")
             display_standings["WeekWins"] = display_standings["WeekWins"].fillna(0).astype(int)
