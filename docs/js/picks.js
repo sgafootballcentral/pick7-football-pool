@@ -811,25 +811,31 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
 
   async function submitPicks() {
     const gameLookup = Object.fromEntries(s.games.map((g) => [g.game_id, g]));
-    await withSeason(supabase.from("picks").delete().eq("user_id", user.id).eq("week_number", s.week));
     const rows = Object.entries(s.selected).map(([gameId, team]) => ({
       user_id: user.id, username, week_number: s.week,
       game_id: gameId, selected_team: team,
       spread_at_pick: gameLookup[gameId]?.spread_value || "",
       ...(seasonId ? { season_id: seasonId } : {}),
     }));
-    // One request for every pick instead of looping insert() per row --
-    // besides being up to 7x faster, a loop left a real failure mode: the
-    // delete above had already run, so a dropped connection partway
-    // through the loop (easy on a phone's signal) silently left whoever
-    // hit it with fewer picks saved than they actually submitted.
+    // Upsert keyed on the picks table's own (user_id, week_number, game_id)
+    // unique constraint instead of delete-then-insert -- the old order left
+    // a real failure mode: the delete already ran, so a dropped connection
+    // or a failed insert right after (easy on a phone's signal) could leave
+    // whoever hit it with NO picks saved for the week despite having picks
+    // on file a moment before. Upserting first means a failure here leaves
+    // the previous picks untouched; only after it succeeds do we clean up
+    // any previously-picked games that are no longer selected.
     if (rows.length) {
-      const { error: insErr } = await supabase.from("picks").insert(rows);
-      if (insErr) {
-        alert("Couldn't save your picks -- please try again: " + (insErr.message || insErr));
+      const { error: upErr } = await supabase.from("picks").upsert(rows, { onConflict: "user_id,week_number,game_id" });
+      if (upErr) {
+        alert("Couldn't save your picks -- please try again: " + (upErr.message || upErr));
         return;
       }
     }
+    const keepIds = rows.map((r) => r.game_id);
+    let cleanup = supabase.from("picks").delete().eq("user_id", user.id).eq("week_number", s.week);
+    cleanup = keepIds.length ? cleanup.not("game_id", "in", `(${keepIds.join(",")})`) : cleanup;
+    await cleanup;
     // One row per submission event (not per pick) -- a Database Webhook on
     // this table's INSERT is what triggers the admin push notification,
     // see supabase/functions/send-picks-push. Non-critical if it fails --
@@ -1003,10 +1009,24 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
   }
 
   async function loadWeek() {
+    // Guard against overlapping calls -- loadWeek is async with several
+    // awaits, and nothing used to stop an older call (started for a week
+    // the player has since switched away from, e.g. a slow connection or a
+    // fast double-click on the selector) from resolving AFTER a newer call
+    // and overwriting its freshly-loaded games/picks with stale data. That
+    // left the dropdown showing the just-picked week while every game on
+    // screen -- and whatever the player then selected or submitted -- was
+    // silently still the OLD week's. targetWeek freezes which week THIS
+    // call is for; stillCurrent() checks whether s.week has since moved on,
+    // and every mutation below is skipped once it has.
+    const targetWeek = s.week;
+    const stillCurrent = () => s.week === targetWeek;
+
     s.loading = true; draw();
     try {
-      const { data: games, error: gErr } = await withSeason(supabase.from("games").select("*").eq("week_number", s.week));
+      const { data: games, error: gErr } = await withSeason(supabase.from("games").select("*").eq("week_number", targetWeek));
       if (gErr) throw gErr;
+      if (!stillCurrent()) return;
       s.games = games || [];
       s.selected = {};
 
@@ -1017,8 +1037,9 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
       // identical to "nobody's picked yet"), which made a real problem here
       // look exactly like normal, empty data -- log it now so it's visible
       // in the console instead of just quietly showing nothing.
-      const { data: weekPicks, error: pErr } = await withSeason(supabase.from("picks").select("*").eq("week_number", s.week));
+      const { data: weekPicks, error: pErr } = await withSeason(supabase.from("picks").select("*").eq("week_number", targetWeek));
       if (pErr) console.error("Couldn't load this week's picks:", pErr);
+      if (!stillCurrent()) return;
       const weekPicksAll = weekPicks || [];
       s.existingPicks = weekPicksAll.filter((p) => p.user_id === user.id);
       s.pickResults = {};
@@ -1036,16 +1057,20 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
       // \u{1F512} Admin pick lock for this week, and my own exception requests
       // against it (if any) -- see the ADMIN PICK LOCK block in draw().
       try {
-        const { data: lockRow } = await withSeason(supabase.from("week_pick_locks").select("*").eq("week_number", s.week)).maybeSingle();
+        const { data: lockRow } = await withSeason(supabase.from("week_pick_locks").select("*").eq("week_number", targetWeek)).maybeSingle();
+        if (!stillCurrent()) return;
         s.weekLock = lockRow || null;
       } catch (_) {
+        if (!stillCurrent()) return;
         s.weekLock = null;
       }
       try {
         const { data: exceptions } = await withSeason(supabase.from("pick_lock_exceptions").select("*")
-          .eq("week_number", s.week).eq("user_id", user.id)).order("requested_at", { ascending: false });
+          .eq("week_number", targetWeek).eq("user_id", user.id)).order("requested_at", { ascending: false });
+        if (!stillCurrent()) return;
         s.myExceptions = exceptions || [];
       } catch (_) {
+        if (!stillCurrent()) return;
         s.myExceptions = [];
       }
 
@@ -1059,10 +1084,13 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
         }
       }
 
-      s.scores = await fetchLiveScores(s.games);
+      const scores = await fetchLiveScores(s.games);
+      if (!stillCurrent()) return;
+      s.scores = scores;
       s.loading = false;
       draw();
     } catch (e) {
+      if (!stillCurrent()) return;
       s.loading = false;
       s.error = e.message || "Couldn't load this week's games.";
       draw();

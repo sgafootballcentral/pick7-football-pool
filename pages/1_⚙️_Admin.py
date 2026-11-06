@@ -1031,14 +1031,35 @@ with tab_picks:
                 with col_approve:
                     if st.button("✅ Approve", key=f"approve_exc_{exc['id']}"):
                         if payload:
-                            supabase.table("picks").delete().eq("user_id", exc["user_id"]).eq("week_number", exc["week_number"]).execute()
-                            for p in payload:
-                                supabase.table("picks").insert({
+                            # Upsert (keyed on the picks table's own
+                            # (user_id, week_number, game_id) unique
+                            # constraint) instead of delete-then-insert-in-
+                            # a-loop -- the old order deleted the player's
+                            # existing picks FIRST, so a failure partway
+                            # through the insert loop could leave them with
+                            # fewer picks on file than before, with nothing
+                            # to roll back. A single upsert writes all of
+                            # them or none of them; stale rows for any game
+                            # no longer in this payload are cleaned up only
+                            # after it succeeds.
+                            new_game_ids = [p.get("game_id") for p in payload]
+                            upsert_payload = [
+                                {
                                     "user_id": exc["user_id"], "username": exc.get("username"),
                                     "week_number": exc["week_number"], "game_id": p.get("game_id"),
                                     "selected_team": p.get("selected_team"),
                                     "spread_at_pick": p.get("spread_at_pick", ""),
-                                }).execute()
+                                }
+                                for p in payload
+                            ]
+                            supabase.table("picks").upsert(upsert_payload, on_conflict="user_id,week_number,game_id").execute()
+                            delete_query = (
+                                supabase.table("picks").delete()
+                                .eq("user_id", exc["user_id"]).eq("week_number", exc["week_number"])
+                            )
+                            if new_game_ids:
+                                delete_query = delete_query.not_.in_("game_id", new_game_ids)
+                            delete_query.execute()
                         supabase.table("pick_lock_exceptions").update({
                             "status": "approved",
                             "reviewed_by": user_id,

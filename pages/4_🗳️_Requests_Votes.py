@@ -134,11 +134,16 @@ with tab_vote:
                     if existing_vote and existing_vote["option_id"] == chosen_option_id:
                         st.info("That's already your vote.")
                     else:
-                        if existing_vote:
-                            supabase.table("poll_votes").delete().eq("poll_id", poll["id"]).eq("user_id", user.id).execute()
-                        supabase.table("poll_votes").insert({
-                            "poll_id": poll["id"], "option_id": chosen_option_id, "user_id": user.id,
-                        }).execute()
+                        # Upsert keyed on poll_votes' own (poll_id, user_id)
+                        # unique constraint instead of delete-then-insert --
+                        # the old order meant a dropped connection or failed
+                        # insert right after the delete could leave someone
+                        # changing their vote with NO vote on file at all,
+                        # despite having one a moment before.
+                        supabase.table("poll_votes").upsert(
+                            {"poll_id": poll["id"], "option_id": chosen_option_id, "user_id": user.id},
+                            on_conflict="poll_id,user_id",
+                        ).execute()
                         st.success("Vote recorded.")
                         st.rerun()
 

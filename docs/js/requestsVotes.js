@@ -196,12 +196,15 @@ export function renderRequestsVotes(el, { supabase, user }) {
     if (existing === optionId) { return; }
 
     try {
-      if (existing) {
-        const { error: delErr } = await supabase.from("poll_votes").delete().eq("poll_id", pollId).eq("user_id", user.id);
-        if (delErr) throw delErr;
-      }
-      const { error: insErr } = await supabase.from("poll_votes").insert({ poll_id: pollId, option_id: optionId, user_id: user.id });
-      if (insErr) throw insErr;
+      // Upsert keyed on poll_votes' own (poll_id, user_id) unique
+      // constraint instead of delete-then-insert -- the old order meant a
+      // dropped connection or a failed insert right after the delete could
+      // leave someone changing their vote with NO vote on file at all,
+      // despite having one a moment before.
+      const { error: upErr } = await supabase
+        .from("poll_votes")
+        .upsert({ poll_id: pollId, option_id: optionId, user_id: user.id }, { onConflict: "poll_id,user_id" });
+      if (upErr) throw upErr;
       s.error = "";
       await loadAll();
     } catch (e) {

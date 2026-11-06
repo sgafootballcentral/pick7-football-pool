@@ -94,6 +94,36 @@ def compute_game_numbers(week_games):
     return numbers
 
 
+def save_picks_atomically(new_picks, game_lookup, week_number, user_id, username):
+    """Writes this player's picks for a week as a single upsert, keyed on
+    the picks table's own (user_id, week_number, game_id) unique
+    constraint, instead of the old delete-everything-then-insert-in-a-loop
+    pattern. That pattern deleted the player's existing picks FIRST, so if
+    any one of the 7 follow-up inserts failed partway through (a dropped
+    connection, a transient Supabase error), the player was left with
+    fewer picks on file than before -- the old ones were already gone, and
+    nothing rolled back or retried. A single upsert either writes all 7 new
+    picks or writes none of them (it's one statement), so a failure here
+    can never leave the player with an incomplete set. The stale-row
+    cleanup (removing any previously-picked game that isn't part of this
+    new selection) only runs after the upsert has already succeeded.
+    """
+    new_game_ids = [p["game_id"] for p in new_picks]
+    payload = [
+        {
+            "user_id": user_id, "username": username, "week_number": week_number,
+            "game_id": p["game_id"], "selected_team": p["selected_team"],
+            "spread_at_pick": game_lookup.get(p["game_id"], {}).get("spread_value", ""),
+        }
+        for p in new_picks
+    ]
+    supabase.table("picks").upsert(payload, on_conflict="user_id,week_number,game_id").execute()
+    delete_query = supabase.table("picks").delete().eq("user_id", user_id).eq("week_number", week_number)
+    if new_game_ids:
+        delete_query = delete_query.not_.in_("game_id", new_game_ids)
+    delete_query.execute()
+
+
 @st.cache_data(ttl=60)
 def fetch_live_scores(games_for_week):
     """Pull live/final scores from ESPN for whatever leagues/dates this week's
@@ -262,13 +292,7 @@ def confirm_resubmit(existing_picks_raw, new_picks, game_lookup):
                 queue_picks_pending(new_picks, game_lookup)
             else:
                 try:
-                    supabase.table("picks").delete().eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute()
-                    for p in new_picks:
-                        supabase.table("picks").insert({
-                            "user_id": user.id, "username": username, "week_number": CURRENT_WEEK,
-                            "game_id": p["game_id"], "selected_team": p["selected_team"],
-                            "spread_at_pick": game_lookup.get(p["game_id"], {}).get("spread_value", ""),
-                        }).execute()
+                    save_picks_atomically(new_picks, game_lookup, CURRENT_WEEK, user.id, username)
                     # One row per submission event (not per pick) -- a Database
                     # Webhook on this table's INSERT is what triggers the admin
                     # push notification, see supabase/functions/send-picks-push.
@@ -1231,13 +1255,7 @@ else:
                 queue_picks_pending(chosen_picks, game_lookup)
             else:
                 try:
-                    supabase.table("picks").delete().eq("user_id", user.id).eq("week_number", CURRENT_WEEK).execute()
-                    for p in chosen_picks:
-                        supabase.table("picks").insert({
-                            "user_id": user.id, "username": username, "week_number": CURRENT_WEEK,
-                            "game_id": p["game_id"], "selected_team": p["selected_team"],
-                            "spread_at_pick": game_lookup.get(p["game_id"], {}).get("spread_value", ""),
-                        }).execute()
+                    save_picks_atomically(chosen_picks, game_lookup, CURRENT_WEEK, user.id, username)
                     # One row per submission event (not per pick) -- a Database
                     # Webhook on this table's INSERT is what triggers the admin
                     # push notification, see supabase/functions/send-picks-push.
