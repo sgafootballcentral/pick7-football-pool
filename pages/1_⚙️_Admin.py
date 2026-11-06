@@ -2209,8 +2209,14 @@ with tab_exports:
     st.subheader("📥 Export Season Tracker (.xlsx)")
     st.caption("A running week-by-week win/loss breakdown for every player, in the same style as your old sheet.")
 
-    all_week_status_rows = supabase.table("games").select("week_number, status").execute().data
-    graded_weeks = sorted({g["week_number"] for g in all_week_status_rows if g.get("status") == "final"})
+    # game_week_status pre-aggregates one row per week (with any_final
+    # already computed server-side) instead of one row per game -- same
+    # reason picks_week_tallies exists: an unfiltered pull of the whole
+    # games table would silently truncate at Supabase's 1000-row API cap
+    # once it grows past that, the same way the Leaderboard page's picks
+    # query already did.
+    all_week_status_rows = supabase.table("game_week_status").select("week_number, any_final").execute().data
+    graded_weeks = sorted({g["week_number"] for g in all_week_status_rows if g.get("any_final")})
 
     if not graded_weeks:
         st.info("No graded weeks yet -- use 'Grade Finished Games' above first.")

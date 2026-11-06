@@ -342,7 +342,11 @@ export function renderCompare(el, { supabase, username, currentSeason }) {
   (async function init() {
     try {
       const [{ data: rows, error: wErr }, avatars, currentUsernames] = await Promise.all([
-        withSeason(supabase.from("games").select("week_number")),
+        // game_week_status pre-aggregates one row per week instead of one
+        // row per game -- an unfiltered pull of the whole games table would
+        // eventually hit the same Supabase 1000-row API cap that already
+        // silently truncated the Leaderboard page's old picks query.
+        withSeason(supabase.from("game_week_status").select("week_number")),
         fetchAvatarsByUsername(supabase),
         fetchCurrentUsernames(supabase),
       ]);

@@ -77,7 +77,12 @@ EASTERN_TZ = ZoneInfo("America/New_York")
 st.title("🆚 Compare Picks")
 st.caption("See how your picks stack up against everyone else's -- once the week locks.")
 
-available_week_rows = supabase.table("games").select("week_number").execute().data
+# game_week_status pre-aggregates one row per week instead of one row
+# per game -- same reason picks_week_tallies exists: an unfiltered pull
+# of the whole games table would silently truncate at Supabase's
+# 1000-row API cap once it grows past that, the same way the
+# Leaderboard page's picks query already did.
+available_week_rows = supabase.table("game_week_status").select("week_number").execute().data
 available_weeks = sorted({w["week_number"] for w in available_week_rows}, reverse=True)
 
 if not available_weeks:

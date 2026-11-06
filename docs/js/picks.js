@@ -1071,7 +1071,11 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
 
   (async function init() {
     try {
-      const { data: rows, error: wErr } = await withSeason(supabase.from("games").select("week_number"));
+      // game_week_status pre-aggregates one row per week instead of one row
+      // per game -- an unfiltered pull of the whole games table would
+      // eventually hit the same Supabase 1000-row API cap that already
+      // silently truncated the Leaderboard page's old picks query.
+      const { data: rows, error: wErr } = await withSeason(supabase.from("game_week_status").select("week_number"));
       if (wErr) throw wErr;
       const weeks = [...new Set((rows || []).map((r) => r.week_number))].sort((a, b) => b - a);
       s.weeks = weeks;
