@@ -809,7 +809,15 @@ function syntheticGameFromEspn(eg, teamName, league) {
     status: eg.completed ? "final" : isLive ? "in_progress" : "scheduled",
     favorite_team: eg.home ? teamName : opponent,
     underdog_team: eg.home ? opponent : teamName,
-    favorite_team_home: eg.home,
+    // `favorite_team` above is ALWAYS assigned to whichever side is
+    // actually home (teamName when this team hosted, the opponent when it
+    // didn't) -- so this flag must always point at that same slot.
+    // Setting it to `eg.home` instead (whether THIS team specifically is
+    // home) broke every synthesized AWAY game: e.g. Boston College's loss
+    // at Cincinnati (BC 15, Cincinnati 34) got favorite_team="Cincinnati"
+    // with favorite_team_home=false, which flipped teamScheduleRowHtml's
+    // isHome math and displayed it as a 34-15 BC win.
+    favorite_team_home: true,
     home_score: eg.home ? eg.team_score : eg.opp_score,
     away_score: eg.home ? eg.opp_score : eg.team_score,
     spread_value: null,
