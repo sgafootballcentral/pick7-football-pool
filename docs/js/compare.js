@@ -298,18 +298,31 @@ export function renderCompare(el, { supabase, username, currentSeason }) {
   }
 
   async function loadWeek() {
+    // Guard against overlapping calls -- same fix as picks.js's loadWeek.
+    // Without this, an older call (for a week the viewer has since switched
+    // away from) could resolve AFTER a newer one and overwrite its
+    // freshly-loaded games/picks with stale data, leaving the week selector
+    // showing the just-picked week while the grid/H2H below was silently
+    // still the OLD week's.
+    const targetWeek = s.week;
+    const stillCurrent = () => s.week === targetWeek;
+
     s.loading = true; draw();
     try {
-      const { data: games, error: gErr } = await withSeason(supabase.from("games").select("*").eq("week_number", s.week));
+      const { data: games, error: gErr } = await withSeason(supabase.from("games").select("*").eq("week_number", targetWeek));
       if (gErr) throw gErr;
+      if (!stillCurrent()) return;
       s.games = games || [];
       // Best-effort, same as everywhere else that calls this -- an
       // empty/failed result just means the detail popup opens without a
       // live clock/linescore for whichever game got clicked.
-      s.scores = await fetchLiveScores(s.games);
+      const scores = await fetchLiveScores(s.games);
+      if (!stillCurrent()) return;
+      s.scores = scores;
 
-      const { data: weekPicks, error: pErr } = await withSeason(supabase.from("picks").select("*").eq("week_number", s.week));
+      const { data: weekPicks, error: pErr } = await withSeason(supabase.from("picks").select("*").eq("week_number", targetWeek));
       if (pErr) throw pErr;
+      if (!stillCurrent()) return;
       s.picksByUsername = {};
       s.userIdByUsername = {};
       for (const p of weekPicks || []) {
@@ -324,15 +337,18 @@ export function renderCompare(el, { supabase, username, currentSeason }) {
       }
 
       try {
-        const { data: lockRow } = await withSeason(supabase.from("week_pick_locks").select("*").eq("week_number", s.week)).maybeSingle();
+        const { data: lockRow } = await withSeason(supabase.from("week_pick_locks").select("*").eq("week_number", targetWeek)).maybeSingle();
+        if (!stillCurrent()) return;
         s.weekLock = lockRow || null;
       } catch (_) {
+        if (!stillCurrent()) return;
         s.weekLock = null;
       }
 
       s.loading = false;
       draw();
     } catch (e) {
+      if (!stillCurrent()) return;
       s.loading = false;
       s.error = e.message || "Couldn't load this week's picks.";
       draw();
