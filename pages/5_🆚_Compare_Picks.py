@@ -147,9 +147,20 @@ if not unlocked:
     st.stop()
 
 week_picks = supabase.table("picks").select("*").eq("week_number", CURRENT_WEEK).execute().data or []
+
+# Resolve through the live id -> username map on `players`, not the
+# snapshot username stored on each pick row -- that snapshot goes stale
+# the moment someone renames, which used to split one player's picks
+# across two different rows/columns here (their old name and their new
+# one) instead of keeping them together under whoever they are now.
+# Same fix already applied to docs/js/compare.js and the Leaderboard.
+current_usernames_resp = supabase.table("players").select("id, username").execute().data or []
+current_username_by_id = {row["id"]: row["username"] for row in current_usernames_resp if row.get("username")}
+
 picks_by_username = {}
 for p in week_picks:
-    picks_by_username.setdefault(p.get("username", "Unknown"), []).append(p)
+    uname = current_username_by_id.get(p.get("user_id")) or p.get("username", "Unknown")
+    picks_by_username.setdefault(uname, []).append(p)
 
 if not picks_by_username:
     st.info(f"No picks have been submitted yet for Week {CURRENT_WEEK}.")
