@@ -628,7 +628,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
           <div class="game-card-top game-card-clickable" data-open-gamecard="${escapeHtml(g.game_id)}">
             <div class="game-card-matchup">
               <span class="${favCovered ? "covered" : ""}">#${nums.favNum || ""} ${escapeHtml(favTeam)}${favHome ? " \u{1F3E0}" : ""}</span>${favScoreHtml}${favCovered ? " ✅" : ""}
-              <span class="vs">at</span>
+              <span class="vs">${undHome ? "at" : "vs"}</span>
               <span class="${undCovered ? "covered" : ""}">#${nums.undNum || ""} ${escapeHtml(undTeam)}${undHome ? " \u{1F3E0}" : ""}</span>${undScoreHtml}${undCovered ? " ✅" : ""}
             </div>
             <div class="game-card-meta">
