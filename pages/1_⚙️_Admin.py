@@ -3016,6 +3016,93 @@ with tab_requests:
                     st.write(f"{marker}{opt['label']} — {count} vote(s)")
 
 with tab_leagues:
+    # 17b. EDIT LEAGUE -- any admin of CURRENT_LEAGUE can rename it and edit
+    # its current season's settings (picks per week, which sports it syncs
+    # from, default pick-lock). Season length is the one field locked to
+    # the account's global super admin, since changing it can add or
+    # remove weeks that already have games or picks scheduled -- mirrors
+    # update_league_settings()'s own server-side gating exactly.
+    st.subheader("✏️ Edit " + CURRENT_LEAGUE["name"])
+    _edit_season = get_current_season()
+    if not _edit_season:
+        st.error("No current season for this league.")
+    else:
+        _edit_name = st.text_input("League name:", value=CURRENT_LEAGUE["name"], key="edit_league_name")
+
+        st.markdown("**Current Season**")
+        st.caption("These apply to the season already in progress — changing them doesn't touch past weeks' games or picks.")
+
+        _edit_mode_label = st.radio(
+            "Picks per week:", options=["Exactly N games", "Every game"],
+            index=0 if _edit_season.get("pick_count_mode", "exact") == "exact" else 1,
+            key="edit_league_pick_mode", horizontal=True,
+        )
+        _edit_pick_mode = "exact" if _edit_mode_label == "Exactly N games" else "all"
+        _edit_pick_exact = st.number_input(
+            'Games per week (if "Exactly N games"):', min_value=1,
+            value=int(_edit_season.get("pick_count_exact") or 7), key="edit_league_pick_exact",
+        )
+
+        _edit_sync_current = _edit_season.get("sync_leagues") or ["NFL", "CFB"]
+        _edit_sync_nfl = st.checkbox("🏈 NFL", value="NFL" in _edit_sync_current, key="edit_league_sync_nfl")
+        _edit_sync_cfb = st.checkbox("🎓 College Football", value="CFB" in _edit_sync_current, key="edit_league_sync_cfb")
+
+        _edit_lock_offset_val = _edit_season.get("default_lock_offset_minutes")
+        _edit_lock_offset_str = st.text_input(
+            "Default pick-lock (minutes before kickoff, optional):",
+            value="" if _edit_lock_offset_val is None else str(_edit_lock_offset_val),
+            key="edit_league_lock_offset",
+        )
+
+        st.markdown("**Season Length**")
+        if IS_SUPER_ADMIN:
+            st.caption("Changing this can add or remove weeks that may already have games or picks scheduled.")
+            _edit_season_weeks = st.number_input(
+                "Number of weeks this season runs:", min_value=1,
+                value=int(_edit_season.get("season_weeks") or 16), key="edit_league_season_weeks",
+            )
+        else:
+            st.caption("🔒 Only the account's super admin can change this, since it can add or remove weeks that may already have games or picks scheduled.")
+            st.number_input(
+                "Number of weeks this season runs:", min_value=1,
+                value=int(_edit_season.get("season_weeks") or 16), key="edit_league_season_weeks_locked", disabled=True,
+            )
+            _edit_season_weeks = None
+
+        if st.button("Save Changes", key="save_league_settings_btn"):
+            _lock_offset_str_stripped = _edit_lock_offset_str.strip()
+            _edit_lock_offset_minutes = None
+            if not _edit_name.strip():
+                st.error("League name cannot be blank.")
+            elif not _edit_sync_nfl and not _edit_sync_cfb:
+                st.error("Pick at least one league to sync games from.")
+            elif _lock_offset_str_stripped and not _lock_offset_str_stripped.lstrip("-").isdigit():
+                st.error("Default pick-lock must be a whole number of minutes.")
+            else:
+                if _lock_offset_str_stripped:
+                    _edit_lock_offset_minutes = int(_lock_offset_str_stripped)
+                _edit_sync_list = []
+                if _edit_sync_nfl:
+                    _edit_sync_list.append("NFL")
+                if _edit_sync_cfb:
+                    _edit_sync_list.append("CFB")
+                try:
+                    supabase.rpc("update_league_settings", {
+                        "p_league_id": CURRENT_LEAGUE_ID,
+                        "p_name": _edit_name.strip(),
+                        "p_pick_count_mode": _edit_pick_mode,
+                        "p_pick_count_exact": int(_edit_pick_exact),
+                        "p_sync_leagues": _edit_sync_list,
+                        "p_default_lock_offset_minutes": _edit_lock_offset_minutes,
+                        "p_season_weeks": int(_edit_season_weeks) if _edit_season_weeks is not None else None,
+                    }).execute()
+                    st.success("League settings saved!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Database error: {e}")
+
+    st.write("---")
+
     # 18. LEAGUES -- super-admin only. Create new leagues, see every league
     # with its invite code (and an SMS link to share it), and manage each
     # one's roster with a promote/demote-admin toggle -- this is what makes
