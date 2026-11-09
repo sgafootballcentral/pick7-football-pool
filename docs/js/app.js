@@ -126,7 +126,11 @@ async function refreshIdentity() {
 // new signups should start out playing too.
 async function refreshCurrentSeason() {
   try {
-    const { data: season } = await supabase.from("seasons").select("id, year, label").eq("is_current", true).single();
+    const { data: season } = await supabase
+      .from("seasons")
+      .select("id, year, label, pick_count_mode, pick_count_exact, sync_leagues, season_weeks, default_lock_offset_minutes")
+      .eq("is_current", true)
+      .single();
     state.currentSeason = season || null;
   } catch (_) {
     state.currentSeason = null;
@@ -1764,6 +1768,12 @@ async function openAccountMenu() {
     let saving = false;
     let msg = "";
 
+    // Defaults mirror today's hardcoded behavior exactly, so leaving every
+    // field alone reproduces the current season's rules -- only change what
+    // the new season should actually do differently (e.g. the CFB Playoffs:
+    // "every game", CFB only, a short season).
+    let pickCountMode = "exact";
+
     function panelRedraw() {
       panel.innerHTML = `
         <div class="modal-sheet">
@@ -1780,6 +1790,35 @@ async function openAccountMenu() {
             <label>Label (optional)</label>
             <input type="text" id="start-season-label" placeholder="${nextYear} Season">
           </div>
+          <div class="field">
+            <label>Season length (weeks)</label>
+            <input type="number" id="start-season-weeks" value="16" min="1">
+          </div>
+          <div class="field">
+            <label>Sync games from</label>
+            <div>
+              <label style="font-weight:normal; margin-right:14px;"><input type="checkbox" id="start-season-league-nfl" checked> NFL</label>
+              <label style="font-weight:normal;"><input type="checkbox" id="start-season-league-cfb" checked> CFB</label>
+            </div>
+          </div>
+          <div class="field">
+            <label>How many games does everyone pick each week?</label>
+            <div style="margin-bottom:8px;">
+              <label style="font-weight:normal; display:block; margin-bottom:4px;">
+                <input type="radio" name="start-season-pick-mode" id="start-season-pick-exact" value="exact" ${pickCountMode === "exact" ? "checked" : ""}>
+                Exactly <input type="number" id="start-season-pick-count" value="7" min="1" style="width:60px; display:inline-block;" ${pickCountMode === "exact" ? "" : "disabled"}> games
+              </label>
+              <label style="font-weight:normal; display:block;">
+                <input type="radio" name="start-season-pick-mode" id="start-season-pick-all" value="all" ${pickCountMode === "all" ? "checked" : ""}>
+                Every game that week (good for single-elimination playoffs)
+              </label>
+            </div>
+          </div>
+          <div class="field">
+            <label>Auto-lock picks before kickoff (optional)</label>
+            <input type="number" id="start-season-lock-offset" placeholder="minutes before the week's first kickoff" min="0">
+            <div class="hint">Leave blank to keep setting each week's lock time by hand, like today.</div>
+          </div>
           <div class="hint" style="min-height:1.2em; margin-bottom:10px;">${msg ? escapeHtml(msg) : ""}</div>
           <div class="btn-row">
             <button class="btn btn-secondary" id="start-season-cancel-btn" ${saving ? "disabled" : ""}>Cancel</button>
@@ -1789,12 +1828,38 @@ async function openAccountMenu() {
           </div>
         </div>
       `;
+      panel.querySelector("#start-season-pick-exact")?.addEventListener("change", () => { pickCountMode = "exact"; panelRedraw(); });
+      panel.querySelector("#start-season-pick-all")?.addEventListener("change", () => { pickCountMode = "all"; panelRedraw(); });
       panel.querySelector("#start-season-cancel-btn")?.addEventListener("click", () => panel.remove());
       panel.querySelector("#start-season-confirm-btn")?.addEventListener("click", async () => {
         const year = parseInt(panel.querySelector("#start-season-year").value, 10);
         const label = (panel.querySelector("#start-season-label").value || "").trim();
+        const seasonWeeks = parseInt(panel.querySelector("#start-season-weeks").value, 10);
+        const pickCountExact = parseInt(panel.querySelector("#start-season-pick-count").value, 10);
+        const lockOffsetRaw = (panel.querySelector("#start-season-lock-offset").value || "").trim();
+        const lockOffset = lockOffsetRaw === "" ? null : parseInt(lockOffsetRaw, 10);
+        const syncLeagues = [
+          panel.querySelector("#start-season-league-nfl").checked ? "NFL" : null,
+          panel.querySelector("#start-season-league-cfb").checked ? "CFB" : null,
+        ].filter(Boolean);
+
         if (!year) {
           msg = "Enter a valid year.";
+          panelRedraw();
+          return;
+        }
+        if (!seasonWeeks || seasonWeeks < 1) {
+          msg = "Enter a valid season length (at least 1 week).";
+          panelRedraw();
+          return;
+        }
+        if (!syncLeagues.length) {
+          msg = "Pick at least one league to sync games from.";
+          panelRedraw();
+          return;
+        }
+        if (pickCountMode === "exact" && (!pickCountExact || pickCountExact < 1)) {
+          msg = "Enter how many games each player picks (at least 1).";
           panelRedraw();
           return;
         }
@@ -1803,7 +1868,15 @@ async function openAccountMenu() {
         msg = "";
         panelRedraw();
         try {
-          await supabase.rpc("start_new_season", { p_year: year, p_label: label || null });
+          await supabase.rpc("start_new_season", {
+            p_year: year,
+            p_label: label || null,
+            p_pick_count_mode: pickCountMode,
+            p_pick_count_exact: pickCountMode === "exact" ? pickCountExact : 7,
+            p_sync_leagues: syncLeagues,
+            p_season_weeks: seasonWeeks,
+            p_default_lock_offset_minutes: lockOffset,
+          });
           await refreshCurrentSeason();
           panel.remove();
           redraw();

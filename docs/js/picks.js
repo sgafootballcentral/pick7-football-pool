@@ -264,6 +264,16 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
   function withSeason(query) {
     return seasonId ? query.eq("season_id", seasonId) : query;
   }
+  // How many picks are required this week: a fixed number (today's
+  // behavior, and still the default), or every game on the slate -- e.g.
+  // for a playoff season where every game gets picked. Driven by the
+  // current season's pick_count_mode/pick_count_exact (see season-setup
+  // options). A function, not a cached value, so it stays correct as
+  // s.games changes across week switches.
+  function requiredPickCount() {
+    const mode = currentSeason?.pick_count_mode ?? "exact";
+    return mode === "all" ? s.games.length : (currentSeason?.pick_count_exact ?? 7);
+  }
   const s = {
     loading: true,
     error: "",
@@ -304,7 +314,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
     }
 
     const count = Object.keys(s.selected).length;
-    const pct = Math.min((count / 7) * 100, 100);
+    const pct = Math.min((count / requiredPickCount()) * 100, 100);
     const numbersMap = computeGameNumbers(s.games);
 
     // \u{1F512} ADMIN PICK LOCK -- mirrors app.py: an admin can freeze all pick
@@ -395,14 +405,14 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
 
       <div class="sticky-bar">
         <div style="text-align:center; font-weight:600;">
-          \u{1F3C8} ${count} of 7 games selected
+          \u{1F3C8} ${count} of ${requiredPickCount()} games selected
           <div class="progress-track"><div class="progress-fill" style="width:${pct}%;"></div></div>
         </div>
         <div class="btn-row" style="margin-top:8px;">
           <button class="btn btn-primary" id="lock-btn">Lock In Weekly Picks</button>
           <button class="btn btn-secondary" id="refresh-btn" style="flex:0 0 auto; width:auto; padding:11px 14px;">\u{1F504}</button>
         </div>
-        <div class="hint" style="text-align:center; margin-top:4px; font-size:0.78rem;">You don't have to pick all 7 at once -- lock in as many as you're sure about now, and come back for the rest later.</div>
+        <div class="hint" style="text-align:center; margin-top:4px; font-size:0.78rem;">You don't have to pick all ${requiredPickCount()} at once -- lock in as many as you're sure about now, and come back for the rest later.</div>
         <label class="hint" style="display:flex; align-items:center; gap:6px; margin-top:6px; justify-content:center;">
           <input type="checkbox" id="auto-refresh-toggle" ${s.autoRefresh ? "checked" : ""}> Auto-refresh scores every 60s
         </label>
@@ -412,7 +422,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
         <summary class="hint" style="cursor:pointer;">\u{1F522} Enter your picks by number instead</summary>
         <div class="card" style="margin-top:8px;">
           <div class="field">
-            <label>Your picks, comma-separated -- 1 to 7 of them (e.g. 1,5,9,12,23,78,100)</label>
+            <label>Your picks, comma-separated -- 1 to ${requiredPickCount()} of them (e.g. 1,5,9,12,23,78,100)</label>
             <input type="text" id="number-input" value="${escapeHtml(s.numberInput)}" placeholder="1,5,9,12,23,78,100">
           </div>
           ${s.numberError ? `<div class="error-msg">${escapeHtml(s.numberError)}</div>` : ""}
@@ -484,7 +494,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
           draw();
           return;
         }
-        if (count >= 7 && !(gid in s.selected)) {
+        if (count >= requiredPickCount() && !(gid in s.selected)) {
           e.preventDefault();
           return; // capped client-side too
         }
@@ -584,7 +594,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
     const nums = numbersMap[g.game_id] || {};
     const selectedTeam = s.selected[g.game_id];
     const isEmpty = !selectedTeam;
-    const capReached = Object.keys(s.selected).length >= 7;
+    const capReached = Object.keys(s.selected).length >= requiredPickCount();
     const disable = capReached && isEmpty;
 
     const myResult = s.pickResults[g.game_id];
@@ -695,8 +705,8 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
     if (addedCount) summaryBits.push(`${addedCount} new pick${addedCount === 1 ? "" : "s"}`);
     if (changedCount) summaryBits.push(`${changedCount} changed pick${changedCount === 1 ? "" : "s"}`);
     const summaryText = summaryBits.length
-      ? `You already have ${onFileCount} of 7 on file. This adds ${summaryBits.join(" and ")}, for ${totalCount} of 7 total.`
-      : `You already have ${onFileCount} of 7 on file. Nothing is actually changing in this submission.`;
+      ? `You already have ${onFileCount} of ${requiredPickCount()} on file. This adds ${summaryBits.join(" and ")}, for ${totalCount} of ${requiredPickCount()} total.`
+      : `You already have ${onFileCount} of ${requiredPickCount()} on file. Nothing is actually changing in this submission.`;
 
     wrap.innerHTML = `
       <div class="modal-sheet">
@@ -833,7 +843,12 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
       }
     }
     const keepIds = rows.map((r) => r.game_id);
+    // Scoped by season_id too, not just user_id+week_number -- week numbers
+    // repeat across seasons, so without this a cleanup delete for this
+    // week's picks could silently also delete this same player's picks for
+    // the SAME week number in a completely different season.
     let cleanup = supabase.from("picks").delete().eq("user_id", user.id).eq("week_number", s.week);
+    if (seasonId) cleanup = cleanup.eq("season_id", seasonId);
     cleanup = keepIds.length ? cleanup.not("game_id", "in", `(${keepIds.join(",")})`) : cleanup;
     await cleanup;
     // One row per submission event (not per pick) -- a Database Webhook on
@@ -937,7 +952,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
       draw();
       return;
     }
-    if (count < 7) {
+    if (count < requiredPickCount()) {
       // First submission this week, but not all 7 yet -- show exactly what
       // they're about to submit (not just a number) before it goes through.
       const gameLookup = Object.fromEntries(s.games.map((g) => [g.game_id, g]));
@@ -968,11 +983,11 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
     const wrap = document.createElement("div");
     wrap.className = "modal-backdrop";
     const { count, rows } = s.confirmSubmit;
-    const remaining = 7 - count;
+    const remaining = requiredPickCount() - count;
     wrap.innerHTML = `
       <div class="modal-sheet">
-        <h2>\u{1F3C8} Submit ${count} of 7 Picks?</h2>
-        <p class="hint">You haven't picked all 7 games yet. Here's exactly what you're about to submit -- the other ${remaining} game${remaining === 1 ? "" : "s"} will stay unpicked for now, and you can come back to add to or change these any time before kickoff.</p>
+        <h2>\u{1F3C8} Submit ${count} of ${requiredPickCount()} Picks?</h2>
+        <p class="hint">You haven't picked all ${requiredPickCount()} games yet. Here's exactly what you're about to submit -- the other ${remaining} game${remaining === 1 ? "" : "s"} will stay unpicked for now, and you can come back to add to or change these any time before kickoff.</p>
         ${rows.map((r) => `<div class="card" style="padding:10px 12px; margin-bottom:6px;">
           <b>${escapeHtml(r.selected_team)}</b> &mdash; ${escapeHtml(r.matchup)} <span class="hint">(${escapeHtml(r.spread)})</span>
         </div>`).join("")}

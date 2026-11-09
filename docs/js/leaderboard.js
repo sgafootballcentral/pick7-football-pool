@@ -112,7 +112,13 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
       if (r.week_number === s.selectedWeek) weekByPlayer[r.user_id] = { wins: r.wins, losses: r.losses };
     }
 
-    const weekOptions = Array.from({ length: 16 }, (_, i) => i + 1);
+    // Week range follows whichever season is selected above (this page can
+    // browse past seasons, not just the current one) -- falls back to the
+    // live currentSeason's length, then to 16, if the selected season isn't
+    // in s.seasons yet (e.g. still loading) or predates this column.
+    const _selectedSeasonRow = s.seasons.find((se) => se.id === s.selectedSeasonId);
+    const _weekRangeLength = _selectedSeasonRow?.season_weeks ?? currentSeason?.season_weeks ?? 16;
+    const weekOptions = Array.from({ length: _weekRangeLength }, (_, i) => i + 1);
 
     // The podium is for actual places 1, 2 and 3 ONLY -- never "whichever
     // 3 distinct place values happen to be smallest". A tie swallows places:
@@ -567,7 +573,7 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
 
   (async function init() {
     try {
-      const { data: seasons } = await supabase.from("seasons").select("id, year, label").order("year", { ascending: false });
+      const { data: seasons } = await supabase.from("seasons").select("id, year, label, season_weeks").order("year", { ascending: false });
       s.seasons = seasons || [];
       if (s.selectedSeasonId == null && s.seasons.length) s.selectedSeasonId = s.seasons[0].id;
     } catch (_) {
