@@ -523,6 +523,61 @@ def confirm_delete_player(info):
         st.rerun()
 
 
+@st.dialog("⚠️ Delete This League?")
+def confirm_delete_league(info):
+    if info["step"] == "explain":
+        st.write(
+            f"This will permanently delete **{info['league_name']}** -- its "
+            f"**{info['members_count']} member(s)**, **{info['seasons_count']} season(s)**, "
+            f"**{info['games_count']} game(s)**, **{info['picks_count']} pick(s)**, and "
+            f"**{info['chat_count']} chat message(s)**."
+        )
+        st.write("Everyone in this league will lose access to it immediately. This cannot be undone.")
+
+        col_yes, col_no = st.columns(2)
+        with col_yes:
+            continue_clicked = st.button("I Understand, Continue", type="primary", use_container_width=True)
+        with col_no:
+            cancel_clicked = st.button("Cancel", use_container_width=True, key="delete_league_explain_cancel")
+
+        if continue_clicked:
+            info["step"] = "code"
+            info["code"] = uuid.uuid4().hex[:6].upper()
+            st.session_state.pending_league_delete = info
+            st.rerun()
+        elif cancel_clicked:
+            st.session_state.pending_league_delete = None
+            st.rerun()
+    else:
+        st.write("As a second layer of protection, type this code exactly to confirm:")
+        st.code(info["code"])
+        typed_code = (st.text_input("Confirmation code:", key="delete_league_code_input") or "").strip().upper()
+        st.caption(f"Deleting **{info['league_name']}** -- this is the last step and cannot be undone.")
+
+        col_yes, col_no = st.columns(2)
+        with col_yes:
+            delete_clicked = st.button(
+                "Permanently Delete League", type="primary", use_container_width=True,
+                disabled=(typed_code != info["code"]),
+            )
+        with col_no:
+            cancel_clicked = st.button("Cancel", use_container_width=True, key="delete_league_code_cancel")
+
+        if delete_clicked and typed_code == info["code"]:
+            try:
+                supabase.rpc("delete_league", {"p_league_id": info["league_id"]}).execute()
+                st.session_state.pending_league_delete = None
+                if CURRENT_LEAGUE_ID == info["league_id"]:
+                    st.session_state.pop("current_admin_league_id", None)
+                st.success(f"{info['league_name']} has been deleted.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Database error: {e}")
+        elif cancel_clicked:
+            st.session_state.pending_league_delete = None
+            st.rerun()
+
+
 @st.dialog("✍️ Confirm Picks Submission")
 def confirm_manual_picks_save(info):
     st.write(f"You are submitting picks for **{info['player']}** — **Week {info['week']}**.")
@@ -3164,3 +3219,28 @@ with tab_leagues:
                                     "league_id", lg["id"]
                                 ).eq("user_id", member_player["id"]).execute()
                                 st.rerun()
+
+                st.write("")
+                if st.button(f"🗑️ Delete {lg['name']}", key=f"delete_league_btn_{lg['id']}"):
+                    _del_seasons = supabase.table("seasons").select("id").eq("league_id", lg["id"]).execute().data or []
+                    _del_season_ids = [s["id"] for s in _del_seasons]
+                    _del_games_count = 0
+                    _del_picks_count = 0
+                    if _del_season_ids:
+                        _del_games_count = len(supabase.table("games").select("id").in_("season_id", _del_season_ids).execute().data or [])
+                        _del_picks_count = len(supabase.table("picks").select("id").in_("season_id", _del_season_ids).execute().data or [])
+                    _del_chat_count = len(supabase.table("chat_messages").select("id").eq("league_id", lg["id"]).execute().data or [])
+                    st.session_state.pending_league_delete = {
+                        "league_id": lg["id"],
+                        "league_name": lg["name"],
+                        "members_count": len(member_rows),
+                        "seasons_count": len(_del_season_ids),
+                        "games_count": _del_games_count,
+                        "picks_count": _del_picks_count,
+                        "chat_count": _del_chat_count,
+                        "step": "explain",
+                    }
+                    st.rerun()
+
+    if st.session_state.get("pending_league_delete"):
+        confirm_delete_league(st.session_state.pending_league_delete)
