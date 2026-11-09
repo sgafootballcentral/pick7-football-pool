@@ -149,7 +149,16 @@ async function refreshLeagues() {
 // joining one), persists the choice, and reloads everything that's scoped
 // to a league -- admin status, current season, and a full re-render.
 async function setCurrentLeague(leagueId) {
-  const found = state.userLeagues.find((l) => String(l.id) === String(leagueId));
+  let found = state.userLeagues.find((l) => String(l.id) === String(leagueId));
+  if (!found && state.isSuperAdmin) {
+    // A super admin can step into any league, including one they never
+    // personally joined -- fetch it directly rather than requiring a
+    // league_members row to exist first.
+    try {
+      const { data } = await supabase.from("leagues").select("id, name, invite_code").eq("id", leagueId).single();
+      if (data) found = { id: data.id, name: data.name, invite_code: data.invite_code, role: "admin" };
+    } catch (_) { /* non-critical */ }
+  }
   if (!found) return;
   state.currentLeague = found;
   try { localStorage.setItem("pick7_current_league_id", found.id); } catch (_) { /* non-critical */ }
@@ -544,9 +553,9 @@ function renderChrome(innerHtml) {
           <span class="icon">\u{1F5F3}\uFE0F</span>Requests
         </button>
         ${state.isAdmin ? `
-          <a href="${escapeHtml(buildAdminUrl())}" target="_blank" rel="noopener" style="text-decoration:none;">
+          <button data-tab="admin" class="${state.activeTab === "admin" ? "active" : ""}">
             <span class="icon">⚙️</span>Admin
-          </a>
+          </button>
         ` : ""}
       </nav>
     ` : ""}
@@ -1642,6 +1651,652 @@ function openCreateLeaguePanel() {
   panelRedraw();
 }
 
+// Admin-only: lists every player with a checkbox for whether they're
+// active in the current season -- the override half of the self-serve
+// toggle above. Opens as its own stacked modal, same pattern as the
+// photo cropper.
+async function openManagePlayersPanel() {
+  if (!state.currentSeason || !state.currentLeague) return;
+  const panel = document.createElement("div");
+  panel.className = "modal-backdrop";
+  document.body.appendChild(panel);
+
+  let loading = true;
+  let msg = "";
+  let rows = [];
+
+  function panelRedraw() {
+    panel.innerHTML = `
+      <div class="modal-sheet">
+        <h3 style="text-align:center; margin-top:0;">Manage Players -- ${escapeHtml(state.currentSeason.label)}</h3>
+        ${loading ? `<div class="hint" style="text-align:center;">Loading…</div>` : `
+          <div style="max-height:50vh; overflow-y:auto; margin-bottom:12px;">
+            ${rows.map((r) => `
+              <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 0; border-bottom:1px solid var(--border, #2a2a2a);">
+                <label style="display:flex; align-items:center; gap:10px; flex:1; min-width:0; cursor:pointer;">
+                  <input type="checkbox" data-player-id="${escapeHtml(r.id)}" ${r.active ? "checked" : ""}>
+                  <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(r.username || "(no name)")}</span>
+                </label>
+                ${state.isSuperAdmin ? `
+                  <button class="btn btn-secondary" data-toggle-admin-id="${escapeHtml(r.id)}" style="width:auto; flex:none; padding:5px 10px; font-size:0.74rem;">
+                    ${r.role === "admin" ? "Remove Admin" : "Make Admin"}
+                  </button>
+                ` : ""}
+              </div>
+            `).join("") || `<div class="hint">No players yet.</div>`}
+          </div>
+        `}
+        <div class="hint" style="min-height:1.2em; margin-bottom:10px;">${msg ? escapeHtml(msg) : ""}</div>
+        <button class="btn btn-secondary" id="manage-players-close-btn">Close</button>
+      </div>
+    `;
+    panel.querySelectorAll("input[data-player-id]").forEach((cb) => {
+      cb.addEventListener("click", async (e) => {
+        const playerId = e.target.dataset.playerId;
+        const nextActive = e.target.checked;
+        try {
+          await supabase.from("player_seasons").upsert({
+            season_id: state.currentSeason.id,
+            user_id: playerId,
+            active: nextActive,
+          });
+          const row = rows.find((r) => r.id === playerId);
+          if (row) row.active = nextActive;
+          if (playerId === state.user.id) state.playerSeasonActive = nextActive;
+        } catch (err) {
+          e.target.checked = !nextActive;
+          msg = "Couldn't save: " + (err.message || err);
+          panelRedraw();
+        }
+      });
+    });
+    panel.querySelectorAll("button[data-toggle-admin-id]").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        const playerId = e.target.dataset.toggleAdminId;
+        const row = rows.find((r) => r.id === playerId);
+        if (!row) return;
+        const nextRole = row.role === "admin" ? "player" : "admin";
+        try {
+          await supabase.from("league_members").update({ role: nextRole })
+            .eq("league_id", state.currentLeague.id).eq("user_id", playerId);
+          row.role = nextRole;
+          panelRedraw();
+        } catch (err) {
+          msg = "Couldn't update admin status: " + (err.message || err);
+          panelRedraw();
+        }
+      });
+    });
+    panel.querySelector("#manage-players-close-btn")?.addEventListener("click", () => panel.remove());
+  }
+
+  panelRedraw();
+
+  try {
+    const [{ data: memberRows }, { data: seasonRows }] = await Promise.all([
+      supabase.from("league_members").select("role, players(id, username)").eq("league_id", state.currentLeague.id),
+      supabase.from("player_seasons").select("user_id, active").eq("season_id", state.currentSeason.id),
+    ]);
+    const activeByUser = {};
+    for (const r of seasonRows || []) activeByUser[r.user_id] = r.active;
+    rows = (memberRows || [])
+      .filter((m) => m.players)
+      .map((m) => ({ id: m.players.id, username: m.players.username, role: m.role, active: activeByUser[m.players.id] !== false }))
+      .sort((a, b) => (a.username || "").localeCompare(b.username || ""));
+  } catch (err) {
+    msg = "Couldn't load players: " + (err.message || err);
+  }
+  loading = false;
+  panelRedraw();
+}
+
+// Any league admin: rename this league and edit its current season's
+// settings (picks per week, which sports it syncs from, default
+// pick-lock) via the update_league_settings RPC. Season length is the
+// one field gated to state.isSuperAdmin here, mirroring the RPC's own
+// server-side check -- a regular league admin's save never sends
+// p_season_weeks, so the super-admin check never even runs for them.
+// Opens as its own stacked modal, same pattern as Start New Season.
+function openEditLeaguePanel(afterSave = render) {
+  const season = state.currentSeason;
+  const league = state.currentLeague;
+  if (!season || !league) return;
+  const panel = document.createElement("div");
+  panel.className = "modal-backdrop";
+  document.body.appendChild(panel);
+
+  let saving = false;
+  let msg = "";
+  let pickCountMode = season.pick_count_mode === "all" ? "all" : "exact";
+
+  function panelRedraw() {
+    const syncLeagues = season.sync_leagues || ["NFL", "CFB"];
+    panel.innerHTML = `
+      <div class="modal-sheet">
+        <button class="modal-close-x" id="edit-league-close-x" aria-label="Close">&times;</button>
+        <h3 style="text-align:center; margin-top:0;">Edit League</h3>
+        <div class="field">
+          <label>League name</label>
+          <input type="text" id="edit-league-name" value="${escapeHtml(league.name)}">
+        </div>
+        <div class="section-label">Current Season</div>
+        <div class="hint" style="margin-bottom:10px;">These apply to the season already in progress -- changing them doesn't touch past weeks' games or picks.</div>
+        <div class="field">
+          <label>Picks per week</label>
+          <div class="seg-toggle">
+            <div class="seg-toggle-opt">
+              <input type="radio" name="edit-league-pick-mode" id="edit-league-pick-exact" ${pickCountMode === "exact" ? "checked" : ""}>
+              <label for="edit-league-pick-exact">Exactly N games</label>
+            </div>
+            <div class="seg-toggle-opt">
+              <input type="radio" name="edit-league-pick-mode" id="edit-league-pick-all" ${pickCountMode === "all" ? "checked" : ""}>
+              <label for="edit-league-pick-all">Every game</label>
+            </div>
+          </div>
+          <div class="hint">Exactly <input type="number" id="edit-league-pick-count" class="inline-num" value="${season.pick_count_exact || 7}" min="1" ${pickCountMode === "exact" ? "" : "disabled"}> games each week -- or pick every game on the slate (e.g. a playoff round).</div>
+        </div>
+        <div class="field">
+          <label>Sync games from</label>
+          <div class="check-row"><input type="checkbox" id="edit-league-league-nfl" ${syncLeagues.includes("NFL") ? "checked" : ""}><span>🏈 NFL</span></div>
+          <div class="check-row"><input type="checkbox" id="edit-league-league-cfb" ${syncLeagues.includes("CFB") ? "checked" : ""}><span>🎓 College Football</span></div>
+        </div>
+        <div class="field">
+          <label>Default pick-lock (optional)</label>
+          <input type="number" id="edit-league-lock-offset" min="0" value="${season.default_lock_offset_minutes ?? ''}" placeholder="minutes before kickoff">
+          <div class="hint">Leave blank to set lock times by hand each week.</div>
+        </div>
+        <div class="section-label" style="display:flex; align-items:center; gap:8px;">
+          Season Length
+          ${state.isSuperAdmin ? `<span class="badge badge-super" style="margin-left:auto;">🔒 Super Admin Only</span>` : ``}
+        </div>
+        ${state.isSuperAdmin ? `
+          <div class="hint" style="margin-bottom:10px;">Changing this can add or remove weeks that may already have games or picks scheduled.</div>
+          <div class="field">
+            <input type="number" id="edit-league-season-weeks" value="${season.season_weeks || 16}" min="1">
+          </div>
+        ` : `
+          <div class="hint" style="margin-bottom:10px;">🔒 Only the account's super admin can change this, since it can add or remove weeks that may already have games or picks scheduled.</div>
+          <div class="field" style="opacity:0.45; pointer-events:none;">
+            <input type="number" value="${season.season_weeks || 16}" disabled>
+          </div>
+        `}
+        <div class="hint" style="min-height:1.2em; margin-bottom:10px;">${msg ? escapeHtml(msg) : ""}</div>
+        <div class="btn-row">
+          <button class="btn btn-secondary" id="edit-league-cancel-btn" ${saving ? "disabled" : ""}>Cancel</button>
+          <button class="btn btn-primary" id="edit-league-save-btn" ${saving ? "disabled" : ""}>
+            ${saving ? "Saving…" : "Save Changes"}
+          </button>
+        </div>
+      </div>
+    `;
+    panel.querySelector("#edit-league-close-x")?.addEventListener("click", () => panel.remove());
+    panel.querySelector("#edit-league-pick-exact")?.addEventListener("change", () => { pickCountMode = "exact"; panelRedraw(); });
+    panel.querySelector("#edit-league-pick-all")?.addEventListener("change", () => { pickCountMode = "all"; panelRedraw(); });
+    panel.querySelector("#edit-league-cancel-btn")?.addEventListener("click", () => panel.remove());
+    panel.querySelector("#edit-league-save-btn")?.addEventListener("click", async () => {
+      const name = (panel.querySelector("#edit-league-name").value || "").trim();
+      const pickCountExact = parseInt(panel.querySelector("#edit-league-pick-count").value, 10);
+      const lockOffsetRaw = (panel.querySelector("#edit-league-lock-offset").value || "").trim();
+      const lockOffset = lockOffsetRaw === "" ? null : parseInt(lockOffsetRaw, 10);
+      const syncLeaguesNew = [
+        panel.querySelector("#edit-league-league-nfl").checked ? "NFL" : null,
+        panel.querySelector("#edit-league-league-cfb").checked ? "CFB" : null,
+      ].filter(Boolean);
+      const seasonWeeksInput = panel.querySelector("#edit-league-season-weeks");
+      const seasonWeeks = state.isSuperAdmin && seasonWeeksInput ? parseInt(seasonWeeksInput.value, 10) : null;
+
+      if (!name) {
+        msg = "League name cannot be blank.";
+        panelRedraw();
+        return;
+      }
+      if (!syncLeaguesNew.length) {
+        msg = "Pick at least one league to sync games from.";
+        panelRedraw();
+        return;
+      }
+      if (pickCountMode === "exact" && (!pickCountExact || pickCountExact < 1)) {
+        msg = "Enter how many games each player picks (at least 1).";
+        panelRedraw();
+        return;
+      }
+      if (state.isSuperAdmin && (!seasonWeeks || seasonWeeks < 1)) {
+        msg = "Enter a valid season length.";
+        panelRedraw();
+        return;
+      }
+      saving = true;
+      msg = "";
+      panelRedraw();
+      try {
+        await supabase.rpc("update_league_settings", {
+          p_league_id: league.id,
+          p_name: name,
+          p_pick_count_mode: pickCountMode,
+          p_pick_count_exact: pickCountMode === "exact" ? pickCountExact : 7,
+          p_sync_leagues: syncLeaguesNew,
+          p_default_lock_offset_minutes: lockOffset,
+          p_season_weeks: seasonWeeks,
+        });
+        await refreshLeagues();
+        await refreshCurrentSeason();
+        panel.remove();
+        afterSave();
+      } catch (err) {
+        msg = "Couldn't save: " + (err.message || err);
+        saving = false;
+        panelRedraw();
+      }
+    });
+  }
+
+  panelRedraw();
+}
+
+// Super-admin only: permanently deletes the current league. Two
+// client-side confirmation layers -- an explanation of exactly what's
+// about to be destroyed, then a one-time code that must be typed back
+// exactly -- sit in front of the delete_league RPC, which only
+// re-checks WHO is calling server-side, not how they got here. Opens
+// as its own stacked modal, same pattern as the other admin panels.
+function openDeleteLeaguePanel() {
+  const league = state.currentLeague;
+  if (!league || !state.isSuperAdmin) return;
+  const panel = document.createElement("div");
+  panel.className = "modal-backdrop";
+  document.body.appendChild(panel);
+
+  let step = "explain";
+  let code = "";
+  let counts = null;
+  let loading = true;
+  let msg = "";
+
+  async function loadCounts() {
+    try {
+      const memberRows = (await supabase.from("league_members").select("user_id").eq("league_id", league.id)).data || [];
+      const seasonRows = (await supabase.from("seasons").select("id").eq("league_id", league.id)).data || [];
+      const seasonIds = seasonRows.map((s) => s.id);
+      let gamesCount = 0;
+      let picksCount = 0;
+      if (seasonIds.length) {
+        gamesCount = ((await supabase.from("games").select("id").in("season_id", seasonIds)).data || []).length;
+        picksCount = ((await supabase.from("picks").select("id").in("season_id", seasonIds)).data || []).length;
+      }
+      const chatRows = (await supabase.from("chat_messages").select("id").eq("league_id", league.id)).data || [];
+      counts = {
+        members: memberRows.length,
+        seasons: seasonIds.length,
+        games: gamesCount,
+        picks: picksCount,
+        chat: chatRows.length,
+      };
+    } catch (err) {
+      counts = { members: "?", seasons: "?", games: "?", picks: "?", chat: "?" };
+    }
+    loading = false;
+    panelRedraw();
+  }
+
+  function panelRedraw() {
+    if (step === "explain") {
+      panel.innerHTML = `
+        <div class="modal-sheet">
+          <h3 style="text-align:center; margin-top:0;">⚠️ Delete League</h3>
+          ${loading ? `
+            <div class="hint" style="text-align:center; margin-bottom:14px;">Checking what's in this league…</div>
+          ` : `
+            <div class="hint" style="margin-bottom:10px; color:var(--text);">
+              This will permanently delete <b>${escapeHtml(league.name)}</b> -- its
+              <b>${counts.members} member(s)</b>, <b>${counts.seasons} season(s)</b>,
+              <b>${counts.games} game(s)</b>, <b>${counts.picks} pick(s)</b>, and
+              <b>${counts.chat} chat message(s)</b>.
+            </div>
+            <div class="hint" style="margin-bottom:16px;">Everyone in this league will lose access to it immediately. This cannot be undone.</div>
+          `}
+          <div class="btn-row">
+            <button class="btn btn-secondary" id="delete-league-cancel-btn">Cancel</button>
+            <button class="btn btn-primary" id="delete-league-continue-btn" style="background:var(--loss); border-color:var(--loss);" ${loading ? "disabled" : ""}>I Understand, Continue</button>
+          </div>
+        </div>
+      `;
+      panel.querySelector("#delete-league-cancel-btn")?.addEventListener("click", () => panel.remove());
+      panel.querySelector("#delete-league-continue-btn")?.addEventListener("click", () => {
+        code = Math.random().toString(36).slice(2, 8).toUpperCase();
+        step = "code";
+        panelRedraw();
+      });
+    } else {
+      panel.innerHTML = `
+        <div class="modal-sheet">
+          <h3 style="text-align:center; margin-top:0;">⚠️ Confirm Deletion</h3>
+          <div class="hint" style="margin-bottom:8px;">As a second layer of protection, type this code exactly to confirm:</div>
+          <div class="code-box">
+            <div class="code-row"><span class="code">${code}</span></div>
+          </div>
+          <div class="field" style="margin-top:14px;">
+            <label>Confirmation code</label>
+            <input type="text" id="delete-league-code-input" placeholder="Type the code above" style="text-transform:uppercase; letter-spacing:0.08em; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">
+          </div>
+          <div class="hint" style="min-height:1.2em; margin-bottom:10px;">${msg ? escapeHtml(msg) : `Deleting ${escapeHtml(league.name)} -- this is the last step and cannot be undone.`}</div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" id="delete-league-code-cancel-btn">Cancel</button>
+            <button class="btn btn-primary" id="delete-league-confirm-btn" style="background:var(--loss); border-color:var(--loss);" disabled>Permanently Delete League</button>
+          </div>
+        </div>
+      `;
+      panel.querySelector("#delete-league-code-cancel-btn")?.addEventListener("click", () => panel.remove());
+      const codeInput = panel.querySelector("#delete-league-code-input");
+      const confirmBtn = panel.querySelector("#delete-league-confirm-btn");
+      codeInput?.addEventListener("input", () => {
+        const isMatch = (codeInput.value || "").trim().toUpperCase() === code;
+        if (confirmBtn) confirmBtn.disabled = !isMatch;
+      });
+      confirmBtn?.addEventListener("click", async () => {
+        if ((codeInput.value || "").trim().toUpperCase() !== code) return;
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = "Deleting…";
+        try {
+          await supabase.rpc("delete_league", { p_league_id: league.id });
+          panel.remove();
+          await refreshLeagues();
+          await refreshCurrentSeason();
+          render();
+        } catch (err) {
+          msg = "Couldn't delete: " + (err.message || err);
+          confirmBtn.disabled = false;
+          confirmBtn.textContent = "Permanently Delete League";
+          panelRedraw();
+        }
+      });
+    }
+  }
+
+  panelRedraw();
+  loadCounts();
+}
+
+// Admin-only: rolls the league over to a new year via the start_new_season
+// RPC, which flips is_current and carries forward anyone active in the
+// outgoing season. Opens as its own stacked modal.
+function openStartSeasonPanel(afterSave = render) {
+  const nextYear = (state.currentSeason?.year || new Date().getFullYear()) + 1;
+  const panel = document.createElement("div");
+  panel.className = "modal-backdrop";
+  document.body.appendChild(panel);
+
+  let saving = false;
+  let msg = "";
+
+  // Defaults mirror today's hardcoded behavior exactly, so leaving every
+  // field alone reproduces the current season's rules -- only change what
+  // the new season should actually do differently (e.g. the CFB Playoffs:
+  // "every game", CFB only, a short season).
+  let pickCountMode = "exact";
+  let lengthMode = "weeks";
+
+  function panelRedraw() {
+    panel.innerHTML = `
+      <div class="modal-sheet">
+        <button class="modal-close-x" id="start-season-close-x" aria-label="Close">&times;</button>
+        <h3 style="text-align:center; margin-top:0;">Start New Season</h3>
+        <div class="hint" style="margin-bottom:14px;">
+          This closes out ${state.currentSeason ? escapeHtml(state.currentSeason.label) : "the current season"} and opens a new one.
+          Everyone currently playing carries over automatically -- nobody has to sign up again.
+        </div>
+        <div class="field">
+          <label>Year</label>
+          <input type="number" id="start-season-year" value="${nextYear}">
+        </div>
+        <div class="field">
+          <label>Label (optional)</label>
+          <input type="text" id="start-season-label" placeholder="${nextYear} Season">
+        </div>
+        <div class="field">
+          <label>Picks per week</label>
+          <div class="seg-toggle">
+            <div class="seg-toggle-opt">
+              <input type="radio" name="start-season-pick-mode" id="start-season-pick-exact" ${pickCountMode === "exact" ? "checked" : ""}>
+              <label for="start-season-pick-exact">Exactly N games</label>
+            </div>
+            <div class="seg-toggle-opt">
+              <input type="radio" name="start-season-pick-mode" id="start-season-pick-all" ${pickCountMode === "all" ? "checked" : ""}>
+              <label for="start-season-pick-all">Every game</label>
+            </div>
+          </div>
+          <div class="hint">Exactly <input type="number" id="start-season-pick-count" class="inline-num" value="7" min="1" ${pickCountMode === "exact" ? "" : "disabled"}> games each week -- or pick every game on the slate (good for single-elimination playoffs).</div>
+        </div>
+        <div class="field">
+          <label>Sync games from</label>
+          <div class="check-row"><input type="checkbox" id="start-season-league-nfl" checked><span>🏈 NFL</span></div>
+          <div class="check-row"><input type="checkbox" id="start-season-league-cfb" checked><span>🎓 College Football</span></div>
+        </div>
+        <div class="field">
+          <label>Season length</label>
+          <div class="seg-toggle">
+            <div class="seg-toggle-opt">
+              <input type="radio" name="start-season-len-mode" id="start-season-len-weeks" ${lengthMode === "weeks" ? "checked" : ""}>
+              <label for="start-season-len-weeks">By # of weeks</label>
+            </div>
+            <div class="seg-toggle-opt">
+              <input type="radio" name="start-season-len-mode" id="start-season-len-date" ${lengthMode === "date" ? "checked" : ""}>
+              <label for="start-season-len-date">By end date</label>
+            </div>
+          </div>
+          ${lengthMode === "weeks" ? `
+            <input type="number" id="start-season-weeks" value="16" min="1">
+            <div class="hint">Number of weeks this season runs.</div>
+          ` : `
+            <input type="date" id="start-season-end-date">
+            <div class="hint">We'll work out the number of weeks from today to this date.</div>
+          `}
+        </div>
+        <div class="field">
+          <label>Auto-lock picks before kickoff (optional)</label>
+          <input type="number" id="start-season-lock-offset" placeholder="minutes before the week's first kickoff" min="0">
+          <div class="hint">Leave blank to keep setting each week's lock time by hand, like today.</div>
+        </div>
+        <div class="hint" style="min-height:1.2em; margin-bottom:10px;">${msg ? escapeHtml(msg) : ""}</div>
+        <div class="btn-row">
+          <button class="btn btn-secondary" id="start-season-cancel-btn" ${saving ? "disabled" : ""}>Cancel</button>
+          <button class="btn btn-primary" id="start-season-confirm-btn" ${saving ? "disabled" : ""}>
+            ${saving ? "Starting…" : "Start Season"}
+          </button>
+        </div>
+      </div>
+    `;
+    panel.querySelector("#start-season-close-x")?.addEventListener("click", () => panel.remove());
+    panel.querySelector("#start-season-pick-exact")?.addEventListener("change", () => { pickCountMode = "exact"; panelRedraw(); });
+    panel.querySelector("#start-season-pick-all")?.addEventListener("change", () => { pickCountMode = "all"; panelRedraw(); });
+    panel.querySelector("#start-season-len-weeks")?.addEventListener("change", () => { lengthMode = "weeks"; panelRedraw(); });
+    panel.querySelector("#start-season-len-date")?.addEventListener("change", () => { lengthMode = "date"; panelRedraw(); });
+    panel.querySelector("#start-season-cancel-btn")?.addEventListener("click", () => panel.remove());
+    panel.querySelector("#start-season-confirm-btn")?.addEventListener("click", async () => {
+      const year = parseInt(panel.querySelector("#start-season-year").value, 10);
+      const label = (panel.querySelector("#start-season-label").value || "").trim();
+      const pickCountExact = parseInt(panel.querySelector("#start-season-pick-count").value, 10);
+      const lockOffsetRaw = (panel.querySelector("#start-season-lock-offset").value || "").trim();
+      const lockOffset = lockOffsetRaw === "" ? null : parseInt(lockOffsetRaw, 10);
+      const syncLeagues = [
+        panel.querySelector("#start-season-league-nfl").checked ? "NFL" : null,
+        panel.querySelector("#start-season-league-cfb").checked ? "CFB" : null,
+      ].filter(Boolean);
+
+      let seasonWeeks;
+      if (lengthMode === "weeks") {
+        seasonWeeks = parseInt(panel.querySelector("#start-season-weeks").value, 10);
+      } else {
+        const endDateRaw = panel.querySelector("#start-season-end-date").value;
+        if (!endDateRaw) { msg = "Pick an end date."; panelRedraw(); return; }
+        const endDate = new Date(endDateRaw + "T00:00:00");
+        seasonWeeks = Math.max(1, Math.ceil((endDate - new Date()) / (7 * 86400000)));
+      }
+
+      if (!year) {
+        msg = "Enter a valid year.";
+        panelRedraw();
+        return;
+      }
+      if (!seasonWeeks || seasonWeeks < 1) {
+        msg = "Enter a valid season length.";
+        panelRedraw();
+        return;
+      }
+      if (!syncLeagues.length) {
+        msg = "Pick at least one league to sync games from.";
+        panelRedraw();
+        return;
+      }
+      if (pickCountMode === "exact" && (!pickCountExact || pickCountExact < 1)) {
+        msg = "Enter how many games each player picks (at least 1).";
+        panelRedraw();
+        return;
+      }
+      if (!confirm(`Start the ${label || year + " Season"} season now? This can't be easily undone.`)) return;
+      saving = true;
+      msg = "";
+      panelRedraw();
+      try {
+        await supabase.rpc("start_new_season", {
+          p_league_id: state.currentLeague.id,
+          p_year: year,
+          p_label: label || null,
+          p_pick_count_mode: pickCountMode,
+          p_pick_count_exact: pickCountMode === "exact" ? pickCountExact : 7,
+          p_sync_leagues: syncLeagues,
+          p_season_weeks: seasonWeeks,
+          p_default_lock_offset_minutes: lockOffset,
+        });
+        await refreshCurrentSeason();
+        panel.remove();
+        afterSave();
+      } catch (err) {
+        msg = "Couldn't start season: " + (err.message || err);
+        saving = false;
+        panelRedraw();
+      }
+    });
+  }
+
+  panelRedraw();
+}
+
+// Native "Admin > Leagues" screen -- mirrors the website's own Leagues
+// section (and the is_global_super_admin / get_admin_leagues helpers in
+// the Admin page): a super admin sees and can manage every league in the
+// system, while an ordinary league admin sees only the league(s) where
+// they hold a league_members admin role. Edit League / Manage Roster /
+// Delete League reuse the exact same panels as the account menu -- they
+// just switch the active league first (via setCurrentLeague, which also
+// handles a league the super admin isn't personally a member of) so those
+// panels operate on the clicked league, not whatever was current before.
+async function renderAdminLeagues(slot, ctx) {
+  slot.innerHTML = `
+    <div class="scroll">
+      <h3 style="margin:4px 0 10px;">🏈 Leagues</h3>
+      <div class="hint" style="text-align:center;">Loading…</div>
+    </div>
+  `;
+
+  let leagueRows = [];
+  try {
+    if (state.isSuperAdmin) {
+      const { data } = await supabase.from("leagues").select("id, name, invite_code").order("name");
+      leagueRows = data || [];
+    } else {
+      const { data } = await supabase
+        .from("league_members")
+        .select("league_id, role, leagues(id, name, invite_code)")
+        .eq("user_id", state.user.id)
+        .eq("role", "admin");
+      leagueRows = (data || []).filter((r) => r.leagues).map((r) => r.leagues);
+    }
+  } catch (_) {
+    leagueRows = [];
+  }
+
+  const leagues = await Promise.all(
+    leagueRows.map(async (lg) => {
+      let memberCount = 0;
+      try {
+        const { data } = await supabase.from("league_members").select("user_id").eq("league_id", lg.id);
+        memberCount = (data || []).length;
+      } catch (_) { /* non-critical */ }
+      return { ...lg, memberCount };
+    })
+  );
+
+  function inviteMessage(lg) {
+    return (
+      `Join my ${lg.name} pick'em league! Download the app at ` +
+      `https://sgafootballcentral.github.io/pick7-football-pool/ and enter invite code ${lg.invite_code} to join.`
+    );
+  }
+
+  if (!slot.isConnected) return; // tab switched away while we were loading
+
+  slot.innerHTML = `
+    <div class="scroll">
+      <h3 style="margin:4px 0 10px;">🏈 Leagues</h3>
+      ${state.isSuperAdmin ? `<button class="btn btn-primary" id="admin-create-league-btn" style="margin-bottom:14px;">➕ Create a League</button>` : ""}
+      ${leagues.length === 0 ? `<div class="hint">No leagues to administer yet.</div>` : leagues.map((lg) => `
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+            <div>
+              <div style="font-weight:700; font-size:0.98rem;">${escapeHtml(lg.name)}</div>
+              <div class="hint">${lg.memberCount} member${lg.memberCount === 1 ? "" : "s"}</div>
+            </div>
+            <span class="badge badge-admin">You're Admin</span>
+          </div>
+          <div class="code-box">
+            <div class="code-row"><span class="code">${escapeHtml(lg.invite_code)}</span></div>
+            <div class="code-box-actions">
+              <button class="copy-btn" data-copy-code="${escapeHtml(lg.invite_code)}">📋 Copy</button>
+              <a class="text-btn" href="sms:?body=${encodeURIComponent(inviteMessage(lg))}">📱 Text</a>
+            </div>
+          </div>
+          <div class="btn-row" style="margin-top:4px;">
+            <button class="btn btn-secondary" data-edit-league-id="${lg.id}">✏️ Edit League</button>
+            <button class="btn btn-secondary" data-manage-roster-id="${lg.id}">Manage Roster →</button>
+          </div>
+          ${state.isSuperAdmin ? `<button class="btn btn-danger" data-delete-league-id="${lg.id}" style="margin-top:6px;">🗑️ Delete League</button>` : ""}
+        </div>
+      `).join("")}
+      ${state.isSuperAdmin ? `
+        <div class="hint" style="margin-top:4px;">As super admin you can see and manage every league. Once a league has its own admin, you'll still be able to step in here if needed.</div>
+        <div class="hint" style="margin-top:6px;">Deleting a league is super-admin only, and is always a two-step confirmation -- it's not something a regular league admin can do or stumble into.</div>
+      ` : ""}
+    </div>
+  `;
+
+  slot.querySelector("#admin-create-league-btn")?.addEventListener("click", () => {
+    openCreateLeaguePanel();
+  });
+  slot.querySelectorAll("button[data-copy-code]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(btn.dataset.copyCode); } catch (_) { /* non-critical */ }
+    });
+  });
+  slot.querySelectorAll("button[data-edit-league-id]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      await setCurrentLeague(btn.dataset.editLeagueId);
+      openEditLeaguePanel();
+    });
+  });
+  slot.querySelectorAll("button[data-manage-roster-id]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      await setCurrentLeague(btn.dataset.manageRosterId);
+      openManagePlayersPanel();
+    });
+  });
+  slot.querySelectorAll("button[data-delete-league-id]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      await setCurrentLeague(btn.dataset.deleteLeagueId);
+      openDeleteLeaguePanel();
+    });
+  });
+}
+
 async function openAccountMenu() {
   if (document.querySelector(".modal-backdrop")) return; // already open
 
@@ -2061,11 +2716,11 @@ async function openAccountMenu() {
     });
 
     wrap.querySelector("#account-start-season-btn")?.addEventListener("click", () => {
-      openStartSeasonPanel();
+      openStartSeasonPanel(redraw);
     });
 
     wrap.querySelector("#account-edit-league-btn")?.addEventListener("click", () => {
-      openEditLeaguePanel();
+      openEditLeaguePanel(redraw);
     });
 
     wrap.querySelector("#account-delete-league-btn")?.addEventListener("click", () => {
@@ -2079,536 +2734,6 @@ async function openAccountMenu() {
     wrap.querySelector("#account-done-btn")?.addEventListener("click", () => {
       wrap.remove();
     });
-  }
-
-  // Admin-only: lists every player with a checkbox for whether they're
-  // active in the current season -- the override half of the self-serve
-  // toggle above. Opens as its own stacked modal, same pattern as the
-  // photo cropper.
-  async function openManagePlayersPanel() {
-    if (!state.currentSeason || !state.currentLeague) return;
-    const panel = document.createElement("div");
-    panel.className = "modal-backdrop";
-    document.body.appendChild(panel);
-
-    let loading = true;
-    let msg = "";
-    let rows = [];
-
-    function panelRedraw() {
-      panel.innerHTML = `
-        <div class="modal-sheet">
-          <h3 style="text-align:center; margin-top:0;">Manage Players -- ${escapeHtml(state.currentSeason.label)}</h3>
-          ${loading ? `<div class="hint" style="text-align:center;">Loading…</div>` : `
-            <div style="max-height:50vh; overflow-y:auto; margin-bottom:12px;">
-              ${rows.map((r) => `
-                <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 0; border-bottom:1px solid var(--border, #2a2a2a);">
-                  <label style="display:flex; align-items:center; gap:10px; flex:1; min-width:0; cursor:pointer;">
-                    <input type="checkbox" data-player-id="${escapeHtml(r.id)}" ${r.active ? "checked" : ""}>
-                    <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(r.username || "(no name)")}</span>
-                  </label>
-                  ${state.isSuperAdmin ? `
-                    <button class="btn btn-secondary" data-toggle-admin-id="${escapeHtml(r.id)}" style="width:auto; flex:none; padding:5px 10px; font-size:0.74rem;">
-                      ${r.role === "admin" ? "Remove Admin" : "Make Admin"}
-                    </button>
-                  ` : ""}
-                </div>
-              `).join("") || `<div class="hint">No players yet.</div>`}
-            </div>
-          `}
-          <div class="hint" style="min-height:1.2em; margin-bottom:10px;">${msg ? escapeHtml(msg) : ""}</div>
-          <button class="btn btn-secondary" id="manage-players-close-btn">Close</button>
-        </div>
-      `;
-      panel.querySelectorAll("input[data-player-id]").forEach((cb) => {
-        cb.addEventListener("click", async (e) => {
-          const playerId = e.target.dataset.playerId;
-          const nextActive = e.target.checked;
-          try {
-            await supabase.from("player_seasons").upsert({
-              season_id: state.currentSeason.id,
-              user_id: playerId,
-              active: nextActive,
-            });
-            const row = rows.find((r) => r.id === playerId);
-            if (row) row.active = nextActive;
-            if (playerId === state.user.id) state.playerSeasonActive = nextActive;
-          } catch (err) {
-            e.target.checked = !nextActive;
-            msg = "Couldn't save: " + (err.message || err);
-            panelRedraw();
-          }
-        });
-      });
-      panel.querySelectorAll("button[data-toggle-admin-id]").forEach((btn) => {
-        btn.addEventListener("click", async (e) => {
-          const playerId = e.target.dataset.toggleAdminId;
-          const row = rows.find((r) => r.id === playerId);
-          if (!row) return;
-          const nextRole = row.role === "admin" ? "player" : "admin";
-          try {
-            await supabase.from("league_members").update({ role: nextRole })
-              .eq("league_id", state.currentLeague.id).eq("user_id", playerId);
-            row.role = nextRole;
-            panelRedraw();
-          } catch (err) {
-            msg = "Couldn't update admin status: " + (err.message || err);
-            panelRedraw();
-          }
-        });
-      });
-      panel.querySelector("#manage-players-close-btn")?.addEventListener("click", () => panel.remove());
-    }
-
-    panelRedraw();
-
-    try {
-      const [{ data: memberRows }, { data: seasonRows }] = await Promise.all([
-        supabase.from("league_members").select("role, players(id, username)").eq("league_id", state.currentLeague.id),
-        supabase.from("player_seasons").select("user_id, active").eq("season_id", state.currentSeason.id),
-      ]);
-      const activeByUser = {};
-      for (const r of seasonRows || []) activeByUser[r.user_id] = r.active;
-      rows = (memberRows || [])
-        .filter((m) => m.players)
-        .map((m) => ({ id: m.players.id, username: m.players.username, role: m.role, active: activeByUser[m.players.id] !== false }))
-        .sort((a, b) => (a.username || "").localeCompare(b.username || ""));
-    } catch (err) {
-      msg = "Couldn't load players: " + (err.message || err);
-    }
-    loading = false;
-    panelRedraw();
-  }
-
-  // Any league admin: rename this league and edit its current season's
-  // settings (picks per week, which sports it syncs from, default
-  // pick-lock) via the update_league_settings RPC. Season length is the
-  // one field gated to state.isSuperAdmin here, mirroring the RPC's own
-  // server-side check -- a regular league admin's save never sends
-  // p_season_weeks, so the super-admin check never even runs for them.
-  // Opens as its own stacked modal, same pattern as Start New Season.
-  function openEditLeaguePanel() {
-    const season = state.currentSeason;
-    const league = state.currentLeague;
-    if (!season || !league) return;
-    const panel = document.createElement("div");
-    panel.className = "modal-backdrop";
-    document.body.appendChild(panel);
-
-    let saving = false;
-    let msg = "";
-    let pickCountMode = season.pick_count_mode === "all" ? "all" : "exact";
-
-    function panelRedraw() {
-      const syncLeagues = season.sync_leagues || ["NFL", "CFB"];
-      panel.innerHTML = `
-        <div class="modal-sheet">
-          <button class="modal-close-x" id="edit-league-close-x" aria-label="Close">&times;</button>
-          <h3 style="text-align:center; margin-top:0;">Edit League</h3>
-          <div class="field">
-            <label>League name</label>
-            <input type="text" id="edit-league-name" value="${escapeHtml(league.name)}">
-          </div>
-          <div class="section-label">Current Season</div>
-          <div class="hint" style="margin-bottom:10px;">These apply to the season already in progress -- changing them doesn't touch past weeks' games or picks.</div>
-          <div class="field">
-            <label>Picks per week</label>
-            <div class="seg-toggle">
-              <div class="seg-toggle-opt">
-                <input type="radio" name="edit-league-pick-mode" id="edit-league-pick-exact" ${pickCountMode === "exact" ? "checked" : ""}>
-                <label for="edit-league-pick-exact">Exactly N games</label>
-              </div>
-              <div class="seg-toggle-opt">
-                <input type="radio" name="edit-league-pick-mode" id="edit-league-pick-all" ${pickCountMode === "all" ? "checked" : ""}>
-                <label for="edit-league-pick-all">Every game</label>
-              </div>
-            </div>
-            <div class="hint">Exactly <input type="number" id="edit-league-pick-count" class="inline-num" value="${season.pick_count_exact || 7}" min="1" ${pickCountMode === "exact" ? "" : "disabled"}> games each week -- or pick every game on the slate (e.g. a playoff round).</div>
-          </div>
-          <div class="field">
-            <label>Sync games from</label>
-            <div class="check-row"><input type="checkbox" id="edit-league-league-nfl" ${syncLeagues.includes("NFL") ? "checked" : ""}><span>🏈 NFL</span></div>
-            <div class="check-row"><input type="checkbox" id="edit-league-league-cfb" ${syncLeagues.includes("CFB") ? "checked" : ""}><span>🎓 College Football</span></div>
-          </div>
-          <div class="field">
-            <label>Default pick-lock (optional)</label>
-            <input type="number" id="edit-league-lock-offset" min="0" value="${season.default_lock_offset_minutes ?? ''}" placeholder="minutes before kickoff">
-            <div class="hint">Leave blank to set lock times by hand each week.</div>
-          </div>
-          <div class="section-label" style="display:flex; align-items:center; gap:8px;">
-            Season Length
-            ${state.isSuperAdmin ? `<span class="badge badge-super" style="margin-left:auto;">🔒 Super Admin Only</span>` : ``}
-          </div>
-          ${state.isSuperAdmin ? `
-            <div class="hint" style="margin-bottom:10px;">Changing this can add or remove weeks that may already have games or picks scheduled.</div>
-            <div class="field">
-              <input type="number" id="edit-league-season-weeks" value="${season.season_weeks || 16}" min="1">
-            </div>
-          ` : `
-            <div class="hint" style="margin-bottom:10px;">🔒 Only the account's super admin can change this, since it can add or remove weeks that may already have games or picks scheduled.</div>
-            <div class="field" style="opacity:0.45; pointer-events:none;">
-              <input type="number" value="${season.season_weeks || 16}" disabled>
-            </div>
-          `}
-          <div class="hint" style="min-height:1.2em; margin-bottom:10px;">${msg ? escapeHtml(msg) : ""}</div>
-          <div class="btn-row">
-            <button class="btn btn-secondary" id="edit-league-cancel-btn" ${saving ? "disabled" : ""}>Cancel</button>
-            <button class="btn btn-primary" id="edit-league-save-btn" ${saving ? "disabled" : ""}>
-              ${saving ? "Saving…" : "Save Changes"}
-            </button>
-          </div>
-        </div>
-      `;
-      panel.querySelector("#edit-league-close-x")?.addEventListener("click", () => panel.remove());
-      panel.querySelector("#edit-league-pick-exact")?.addEventListener("change", () => { pickCountMode = "exact"; panelRedraw(); });
-      panel.querySelector("#edit-league-pick-all")?.addEventListener("change", () => { pickCountMode = "all"; panelRedraw(); });
-      panel.querySelector("#edit-league-cancel-btn")?.addEventListener("click", () => panel.remove());
-      panel.querySelector("#edit-league-save-btn")?.addEventListener("click", async () => {
-        const name = (panel.querySelector("#edit-league-name").value || "").trim();
-        const pickCountExact = parseInt(panel.querySelector("#edit-league-pick-count").value, 10);
-        const lockOffsetRaw = (panel.querySelector("#edit-league-lock-offset").value || "").trim();
-        const lockOffset = lockOffsetRaw === "" ? null : parseInt(lockOffsetRaw, 10);
-        const syncLeaguesNew = [
-          panel.querySelector("#edit-league-league-nfl").checked ? "NFL" : null,
-          panel.querySelector("#edit-league-league-cfb").checked ? "CFB" : null,
-        ].filter(Boolean);
-        const seasonWeeksInput = panel.querySelector("#edit-league-season-weeks");
-        const seasonWeeks = state.isSuperAdmin && seasonWeeksInput ? parseInt(seasonWeeksInput.value, 10) : null;
-
-        if (!name) {
-          msg = "League name cannot be blank.";
-          panelRedraw();
-          return;
-        }
-        if (!syncLeaguesNew.length) {
-          msg = "Pick at least one league to sync games from.";
-          panelRedraw();
-          return;
-        }
-        if (pickCountMode === "exact" && (!pickCountExact || pickCountExact < 1)) {
-          msg = "Enter how many games each player picks (at least 1).";
-          panelRedraw();
-          return;
-        }
-        if (state.isSuperAdmin && (!seasonWeeks || seasonWeeks < 1)) {
-          msg = "Enter a valid season length.";
-          panelRedraw();
-          return;
-        }
-        saving = true;
-        msg = "";
-        panelRedraw();
-        try {
-          await supabase.rpc("update_league_settings", {
-            p_league_id: league.id,
-            p_name: name,
-            p_pick_count_mode: pickCountMode,
-            p_pick_count_exact: pickCountMode === "exact" ? pickCountExact : 7,
-            p_sync_leagues: syncLeaguesNew,
-            p_default_lock_offset_minutes: lockOffset,
-            p_season_weeks: seasonWeeks,
-          });
-          await refreshLeagues();
-          await refreshCurrentSeason();
-          panel.remove();
-          redraw();
-        } catch (err) {
-          msg = "Couldn't save: " + (err.message || err);
-          saving = false;
-          panelRedraw();
-        }
-      });
-    }
-
-    panelRedraw();
-  }
-
-  // Super-admin only: permanently deletes the current league. Two
-  // client-side confirmation layers -- an explanation of exactly what's
-  // about to be destroyed, then a one-time code that must be typed back
-  // exactly -- sit in front of the delete_league RPC, which only
-  // re-checks WHO is calling server-side, not how they got here. Opens
-  // as its own stacked modal, same pattern as the other admin panels.
-  function openDeleteLeaguePanel() {
-    const league = state.currentLeague;
-    if (!league || !state.isSuperAdmin) return;
-    const panel = document.createElement("div");
-    panel.className = "modal-backdrop";
-    document.body.appendChild(panel);
-
-    let step = "explain";
-    let code = "";
-    let counts = null;
-    let loading = true;
-    let msg = "";
-
-    async function loadCounts() {
-      try {
-        const memberRows = (await supabase.from("league_members").select("user_id").eq("league_id", league.id)).data || [];
-        const seasonRows = (await supabase.from("seasons").select("id").eq("league_id", league.id)).data || [];
-        const seasonIds = seasonRows.map((s) => s.id);
-        let gamesCount = 0;
-        let picksCount = 0;
-        if (seasonIds.length) {
-          gamesCount = ((await supabase.from("games").select("id").in("season_id", seasonIds)).data || []).length;
-          picksCount = ((await supabase.from("picks").select("id").in("season_id", seasonIds)).data || []).length;
-        }
-        const chatRows = (await supabase.from("chat_messages").select("id").eq("league_id", league.id)).data || [];
-        counts = {
-          members: memberRows.length,
-          seasons: seasonIds.length,
-          games: gamesCount,
-          picks: picksCount,
-          chat: chatRows.length,
-        };
-      } catch (err) {
-        counts = { members: "?", seasons: "?", games: "?", picks: "?", chat: "?" };
-      }
-      loading = false;
-      panelRedraw();
-    }
-
-    function panelRedraw() {
-      if (step === "explain") {
-        panel.innerHTML = `
-          <div class="modal-sheet">
-            <h3 style="text-align:center; margin-top:0;">⚠️ Delete League</h3>
-            ${loading ? `
-              <div class="hint" style="text-align:center; margin-bottom:14px;">Checking what's in this league…</div>
-            ` : `
-              <div class="hint" style="margin-bottom:10px; color:var(--text);">
-                This will permanently delete <b>${escapeHtml(league.name)}</b> -- its
-                <b>${counts.members} member(s)</b>, <b>${counts.seasons} season(s)</b>,
-                <b>${counts.games} game(s)</b>, <b>${counts.picks} pick(s)</b>, and
-                <b>${counts.chat} chat message(s)</b>.
-              </div>
-              <div class="hint" style="margin-bottom:16px;">Everyone in this league will lose access to it immediately. This cannot be undone.</div>
-            `}
-            <div class="btn-row">
-              <button class="btn btn-secondary" id="delete-league-cancel-btn">Cancel</button>
-              <button class="btn btn-primary" id="delete-league-continue-btn" style="background:var(--loss); border-color:var(--loss);" ${loading ? "disabled" : ""}>I Understand, Continue</button>
-            </div>
-          </div>
-        `;
-        panel.querySelector("#delete-league-cancel-btn")?.addEventListener("click", () => panel.remove());
-        panel.querySelector("#delete-league-continue-btn")?.addEventListener("click", () => {
-          code = Math.random().toString(36).slice(2, 8).toUpperCase();
-          step = "code";
-          panelRedraw();
-        });
-      } else {
-        panel.innerHTML = `
-          <div class="modal-sheet">
-            <h3 style="text-align:center; margin-top:0;">⚠️ Confirm Deletion</h3>
-            <div class="hint" style="margin-bottom:8px;">As a second layer of protection, type this code exactly to confirm:</div>
-            <div class="code-box">
-              <div class="code-row"><span class="code">${code}</span></div>
-            </div>
-            <div class="field" style="margin-top:14px;">
-              <label>Confirmation code</label>
-              <input type="text" id="delete-league-code-input" placeholder="Type the code above" style="text-transform:uppercase; letter-spacing:0.08em; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">
-            </div>
-            <div class="hint" style="min-height:1.2em; margin-bottom:10px;">${msg ? escapeHtml(msg) : `Deleting ${escapeHtml(league.name)} -- this is the last step and cannot be undone.`}</div>
-            <div class="btn-row">
-              <button class="btn btn-secondary" id="delete-league-code-cancel-btn">Cancel</button>
-              <button class="btn btn-primary" id="delete-league-confirm-btn" style="background:var(--loss); border-color:var(--loss);" disabled>Permanently Delete League</button>
-            </div>
-          </div>
-        `;
-        panel.querySelector("#delete-league-code-cancel-btn")?.addEventListener("click", () => panel.remove());
-        const codeInput = panel.querySelector("#delete-league-code-input");
-        const confirmBtn = panel.querySelector("#delete-league-confirm-btn");
-        codeInput?.addEventListener("input", () => {
-          const isMatch = (codeInput.value || "").trim().toUpperCase() === code;
-          if (confirmBtn) confirmBtn.disabled = !isMatch;
-        });
-        confirmBtn?.addEventListener("click", async () => {
-          if ((codeInput.value || "").trim().toUpperCase() !== code) return;
-          confirmBtn.disabled = true;
-          confirmBtn.textContent = "Deleting…";
-          try {
-            await supabase.rpc("delete_league", { p_league_id: league.id });
-            panel.remove();
-            await refreshLeagues();
-            await refreshCurrentSeason();
-            render();
-          } catch (err) {
-            msg = "Couldn't delete: " + (err.message || err);
-            confirmBtn.disabled = false;
-            confirmBtn.textContent = "Permanently Delete League";
-            panelRedraw();
-          }
-        });
-      }
-    }
-
-    panelRedraw();
-    loadCounts();
-  }
-
-  // Admin-only: rolls the league over to a new year via the start_new_season
-  // RPC, which flips is_current and carries forward anyone active in the
-  // outgoing season. Opens as its own stacked modal.
-  function openStartSeasonPanel() {
-    const nextYear = (state.currentSeason?.year || new Date().getFullYear()) + 1;
-    const panel = document.createElement("div");
-    panel.className = "modal-backdrop";
-    document.body.appendChild(panel);
-
-    let saving = false;
-    let msg = "";
-
-    // Defaults mirror today's hardcoded behavior exactly, so leaving every
-    // field alone reproduces the current season's rules -- only change what
-    // the new season should actually do differently (e.g. the CFB Playoffs:
-    // "every game", CFB only, a short season).
-    let pickCountMode = "exact";
-    let lengthMode = "weeks";
-
-    function panelRedraw() {
-      panel.innerHTML = `
-        <div class="modal-sheet">
-          <button class="modal-close-x" id="start-season-close-x" aria-label="Close">&times;</button>
-          <h3 style="text-align:center; margin-top:0;">Start New Season</h3>
-          <div class="hint" style="margin-bottom:14px;">
-            This closes out ${state.currentSeason ? escapeHtml(state.currentSeason.label) : "the current season"} and opens a new one.
-            Everyone currently playing carries over automatically -- nobody has to sign up again.
-          </div>
-          <div class="field">
-            <label>Year</label>
-            <input type="number" id="start-season-year" value="${nextYear}">
-          </div>
-          <div class="field">
-            <label>Label (optional)</label>
-            <input type="text" id="start-season-label" placeholder="${nextYear} Season">
-          </div>
-          <div class="field">
-            <label>Picks per week</label>
-            <div class="seg-toggle">
-              <div class="seg-toggle-opt">
-                <input type="radio" name="start-season-pick-mode" id="start-season-pick-exact" ${pickCountMode === "exact" ? "checked" : ""}>
-                <label for="start-season-pick-exact">Exactly N games</label>
-              </div>
-              <div class="seg-toggle-opt">
-                <input type="radio" name="start-season-pick-mode" id="start-season-pick-all" ${pickCountMode === "all" ? "checked" : ""}>
-                <label for="start-season-pick-all">Every game</label>
-              </div>
-            </div>
-            <div class="hint">Exactly <input type="number" id="start-season-pick-count" class="inline-num" value="7" min="1" ${pickCountMode === "exact" ? "" : "disabled"}> games each week -- or pick every game on the slate (good for single-elimination playoffs).</div>
-          </div>
-          <div class="field">
-            <label>Sync games from</label>
-            <div class="check-row"><input type="checkbox" id="start-season-league-nfl" checked><span>🏈 NFL</span></div>
-            <div class="check-row"><input type="checkbox" id="start-season-league-cfb" checked><span>🎓 College Football</span></div>
-          </div>
-          <div class="field">
-            <label>Season length</label>
-            <div class="seg-toggle">
-              <div class="seg-toggle-opt">
-                <input type="radio" name="start-season-len-mode" id="start-season-len-weeks" ${lengthMode === "weeks" ? "checked" : ""}>
-                <label for="start-season-len-weeks">By # of weeks</label>
-              </div>
-              <div class="seg-toggle-opt">
-                <input type="radio" name="start-season-len-mode" id="start-season-len-date" ${lengthMode === "date" ? "checked" : ""}>
-                <label for="start-season-len-date">By end date</label>
-              </div>
-            </div>
-            ${lengthMode === "weeks" ? `
-              <input type="number" id="start-season-weeks" value="16" min="1">
-              <div class="hint">Number of weeks this season runs.</div>
-            ` : `
-              <input type="date" id="start-season-end-date">
-              <div class="hint">We'll work out the number of weeks from today to this date.</div>
-            `}
-          </div>
-          <div class="field">
-            <label>Auto-lock picks before kickoff (optional)</label>
-            <input type="number" id="start-season-lock-offset" placeholder="minutes before the week's first kickoff" min="0">
-            <div class="hint">Leave blank to keep setting each week's lock time by hand, like today.</div>
-          </div>
-          <div class="hint" style="min-height:1.2em; margin-bottom:10px;">${msg ? escapeHtml(msg) : ""}</div>
-          <div class="btn-row">
-            <button class="btn btn-secondary" id="start-season-cancel-btn" ${saving ? "disabled" : ""}>Cancel</button>
-            <button class="btn btn-primary" id="start-season-confirm-btn" ${saving ? "disabled" : ""}>
-              ${saving ? "Starting…" : "Start Season"}
-            </button>
-          </div>
-        </div>
-      `;
-      panel.querySelector("#start-season-close-x")?.addEventListener("click", () => panel.remove());
-      panel.querySelector("#start-season-pick-exact")?.addEventListener("change", () => { pickCountMode = "exact"; panelRedraw(); });
-      panel.querySelector("#start-season-pick-all")?.addEventListener("change", () => { pickCountMode = "all"; panelRedraw(); });
-      panel.querySelector("#start-season-len-weeks")?.addEventListener("change", () => { lengthMode = "weeks"; panelRedraw(); });
-      panel.querySelector("#start-season-len-date")?.addEventListener("change", () => { lengthMode = "date"; panelRedraw(); });
-      panel.querySelector("#start-season-cancel-btn")?.addEventListener("click", () => panel.remove());
-      panel.querySelector("#start-season-confirm-btn")?.addEventListener("click", async () => {
-        const year = parseInt(panel.querySelector("#start-season-year").value, 10);
-        const label = (panel.querySelector("#start-season-label").value || "").trim();
-        const pickCountExact = parseInt(panel.querySelector("#start-season-pick-count").value, 10);
-        const lockOffsetRaw = (panel.querySelector("#start-season-lock-offset").value || "").trim();
-        const lockOffset = lockOffsetRaw === "" ? null : parseInt(lockOffsetRaw, 10);
-        const syncLeagues = [
-          panel.querySelector("#start-season-league-nfl").checked ? "NFL" : null,
-          panel.querySelector("#start-season-league-cfb").checked ? "CFB" : null,
-        ].filter(Boolean);
-
-        let seasonWeeks;
-        if (lengthMode === "weeks") {
-          seasonWeeks = parseInt(panel.querySelector("#start-season-weeks").value, 10);
-        } else {
-          const endDateRaw = panel.querySelector("#start-season-end-date").value;
-          if (!endDateRaw) { msg = "Pick an end date."; panelRedraw(); return; }
-          const endDate = new Date(endDateRaw + "T00:00:00");
-          seasonWeeks = Math.max(1, Math.ceil((endDate - new Date()) / (7 * 86400000)));
-        }
-
-        if (!year) {
-          msg = "Enter a valid year.";
-          panelRedraw();
-          return;
-        }
-        if (!seasonWeeks || seasonWeeks < 1) {
-          msg = "Enter a valid season length.";
-          panelRedraw();
-          return;
-        }
-        if (!syncLeagues.length) {
-          msg = "Pick at least one league to sync games from.";
-          panelRedraw();
-          return;
-        }
-        if (pickCountMode === "exact" && (!pickCountExact || pickCountExact < 1)) {
-          msg = "Enter how many games each player picks (at least 1).";
-          panelRedraw();
-          return;
-        }
-        if (!confirm(`Start the ${label || year + " Season"} season now? This can't be easily undone.`)) return;
-        saving = true;
-        msg = "";
-        panelRedraw();
-        try {
-          await supabase.rpc("start_new_season", {
-            p_league_id: state.currentLeague.id,
-            p_year: year,
-            p_label: label || null,
-            p_pick_count_mode: pickCountMode,
-            p_pick_count_exact: pickCountMode === "exact" ? pickCountExact : 7,
-            p_sync_leagues: syncLeagues,
-            p_season_weeks: seasonWeeks,
-            p_default_lock_offset_minutes: lockOffset,
-          });
-          await refreshCurrentSeason();
-          panel.remove();
-          redraw();
-        } catch (err) {
-          msg = "Couldn't start season: " + (err.message || err);
-          saving = false;
-          panelRedraw();
-        }
-      });
-    }
-
-    panelRedraw();
   }
 
   redraw();
@@ -2684,13 +2809,14 @@ export function render() {
 
   renderChrome(`<div id="tab-slot"></div>`);
   const slot = document.getElementById("tab-slot");
-  const ctx = { supabase, user: state.user, username: state.username, isAdmin: state.isAdmin, unreadDmSenders: state.unreadDmSenders, markDmRead, currentSeason: state.currentSeason, currentLeague: state.currentLeague };
+  const ctx = { supabase, user: state.user, username: state.username, isAdmin: state.isAdmin, isSuperAdmin: state.isSuperAdmin, unreadDmSenders: state.unreadDmSenders, markDmRead, currentSeason: state.currentSeason, currentLeague: state.currentLeague };
 
   if (state.activeTab === "picks") renderPicks(slot, ctx);
   else if (state.activeTab === "leaderboard") renderLeaderboard(slot, ctx);
   else if (state.activeTab === "compare") renderCompare(slot, ctx);
   else if (state.activeTab === "chat") renderChat(slot, ctx);
   else if (state.activeTab === "requests") renderRequestsVotes(slot, ctx);
+  else if (state.activeTab === "admin") renderAdminLeagues(slot, ctx);
 }
 
 // Ask the browser to treat this origin's storage (localStorage, where the

@@ -76,6 +76,8 @@ input, select, textarea {
 .btn:disabled { opacity: 0.5; }
 .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn-secondary { background: transparent; }
+.btn-danger { background: transparent; border-color: var(--loss); color: var(--loss); }
+.btn-danger-solid { background: var(--loss); border-color: var(--loss); color: #fff; }
 .btn-row { display: flex; gap: 8px; }
 .btn-row .btn { width: auto; flex: 1; }
 
