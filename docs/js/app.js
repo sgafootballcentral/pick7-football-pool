@@ -29,6 +29,9 @@ const state = {
   notifState: "checking",
   currentSeason: null, // { id, year, label }
   playerSeasonActive: true, // am I opted in to the current season
+  currentLeague: null, // { id, name, invite_code, role }
+  userLeagues: [], // every league I belong to
+  isSuperAdmin: false, // the original global admin flag -- admin of every league automatically
 };
 
 function isStandalone() {
@@ -58,8 +61,11 @@ async function refreshIdentity() {
     state.avatarUrl = null;
     state.avatarMonogram = null;
     state.isAdmin = false;
+    state.isSuperAdmin = false;
     state.currentSeason = null;
     state.playerSeasonActive = true;
+    state.currentLeague = null;
+    state.userLeagues = [];
     return;
   }
 
@@ -94,12 +100,8 @@ async function refreshIdentity() {
     state.avatarMonogram = null;
   }
 
-  try {
-    const { data } = await supabase.from("league_users").select("role").eq("id", state.user.id).single();
-    state.isAdmin = data?.role === "admin";
-  } catch (_) {
-    state.isAdmin = false;
-  }
+  await refreshLeagues();
+  await refreshLeagueAdmin();
 
   try {
     const { data } = await supabase.from("players").select("last_chat_read_at").eq("id", state.user.id).single();
@@ -119,16 +121,79 @@ async function refreshIdentity() {
   await refreshCurrentSeason();
 }
 
-// Loads the current season and whether I'm opted in to it. Defaults to
-// "playing" (true) whenever there's no row yet, since the season migration
-// backfilled every existing player as active=true -- a missing row only
-// happens for a brand new signup made after the opt-out toggle shipped, and
-// new signups should start out playing too.
+// Every league I belong to (league_members joined to leagues), with my role
+// in each. Resolves state.currentLeague -- remembered across visits via
+// localStorage, same idea as "remember me" for login, falling back to the
+// first league if nothing's remembered yet or I'm no longer in it.
+async function refreshLeagues() {
+  try {
+    const { data } = await supabase
+      .from("league_members")
+      .select("league_id, role, leagues(id, name, invite_code)")
+      .eq("user_id", state.user.id);
+    state.userLeagues = (data || [])
+      .filter((r) => r.leagues)
+      .map((r) => ({ id: r.leagues.id, name: r.leagues.name, invite_code: r.leagues.invite_code, role: r.role }));
+  } catch (_) {
+    state.userLeagues = [];
+  }
+
+  if (!state.userLeagues.length) {
+    state.currentLeague = null;
+    return;
+  }
+
+  let rememberedId = null;
+  try { rememberedId = localStorage.getItem("pick7_current_league_id"); } catch (_) { /* non-critical */ }
+  state.currentLeague =
+    state.userLeagues.find((l) => String(l.id) === String(rememberedId)) || state.userLeagues[0];
+  try { localStorage.setItem("pick7_current_league_id", state.currentLeague.id); } catch (_) { /* non-critical */ }
+}
+
+// Switches the active league (from the switcher, or right after creating/
+// joining one), persists the choice, and reloads everything that's scoped
+// to a league -- admin status, current season, and a full re-render.
+async function setCurrentLeague(leagueId) {
+  const found = state.userLeagues.find((l) => String(l.id) === String(leagueId));
+  if (!found) return;
+  state.currentLeague = found;
+  try { localStorage.setItem("pick7_current_league_id", found.id); } catch (_) { /* non-critical */ }
+  await refreshLeagueAdmin();
+  await refreshCurrentSeason();
+  render();
+}
+
+// Mirrors the is_league_admin() SQL function: a global league_users
+// super-admin is admin of every league automatically; otherwise it's just
+// whatever role league_members gave me in the current league (already
+// fetched by refreshLeagues(), so no extra query needed for that half).
+async function refreshLeagueAdmin() {
+  try {
+    const { data } = await supabase.from("league_users").select("role").eq("id", state.user.id).single();
+    state.isSuperAdmin = data?.role === "admin";
+  } catch (_) {
+    state.isSuperAdmin = false;
+  }
+  state.isAdmin = state.isSuperAdmin || state.currentLeague?.role === "admin";
+}
+
+// Loads the current season (for the current league) and whether I'm opted
+// in to it. Defaults to "playing" (true) whenever there's no row yet, since
+// the season migration backfilled every existing player as active=true -- a
+// missing row only happens for a brand new signup made after the opt-out
+// toggle shipped, and new signups should start out playing too.
 async function refreshCurrentSeason() {
+  if (!state.currentLeague) {
+    state.currentSeason = null;
+    state.playerSeasonActive = true;
+    return;
+  }
+
   try {
     const { data: season } = await supabase
       .from("seasons")
       .select("id, year, label, pick_count_mode, pick_count_exact, sync_leagues, season_weeks, default_lock_offset_minutes")
+      .eq("league_id", state.currentLeague.id)
       .eq("is_current", true)
       .single();
     state.currentSeason = season || null;
@@ -396,8 +461,11 @@ supabase.auth.onAuthStateChange((event, session) => {
     state.avatarUrl = null;
     state.avatarMonogram = null;
     state.isAdmin = false;
+    state.isSuperAdmin = false;
     state.currentSeason = null;
     state.playerSeasonActive = true;
+    state.currentLeague = null;
+    state.userLeagues = [];
     render();
   }
 });
@@ -424,6 +492,11 @@ function renderChrome(innerHtml) {
       </div>` : ""}
     ${state.user && !state.recoveryMode ? `
       <div class="topbar">
+        ${state.currentLeague ? `
+          <button class="league-pill" id="league-switcher-btn" aria-label="Switch league">
+            \u{1F3C8} ${escapeHtml(state.currentLeague.name)} <span class="chev">\u25BE</span>
+          </button>
+        ` : `<span></span>`}
         <button class="avatar-btn" id="account-menu-btn" aria-label="Account menu" title="${escapeHtml(state.username || "")}">
           ${avatarInnerHtml(state.avatarUrl, state.avatarMonogram, state.username)}
         </button>
@@ -466,6 +539,7 @@ function renderChrome(innerHtml) {
     render();
   });
   document.getElementById("account-menu-btn")?.addEventListener("click", openAccountMenu);
+  document.getElementById("league-switcher-btn")?.addEventListener("click", openLeagueSwitcher);
   root.querySelectorAll(".bottom-nav [data-tab]").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.activeTab = btn.dataset.tab;
@@ -1261,6 +1335,280 @@ function redrawPlayerDmModal() {
 // document.body (so renderChrome()'s root.innerHTML rewrites never touch
 // it) with a local `redraw()` that patches just this sheet instead of
 // going through the whole app's render().
+// "My Leagues" bottom sheet -- switch leagues, or jump into creating/joining
+// one. Same self-contained-panel pattern as the account menu / Start New
+// Season below.
+function openLeagueSwitcher() {
+  if (document.querySelector(".modal-backdrop")) return;
+  const wrap = document.createElement("div");
+  wrap.className = "modal-backdrop";
+  document.body.appendChild(wrap);
+
+  function redraw() {
+    wrap.innerHTML = `
+      <div class="modal-sheet">
+        <div class="sheet-head" style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+          <h3 style="margin:0;">My Leagues</h3>
+          <button class="close" id="switcher-close-x" aria-label="Close">&times;</button>
+        </div>
+        ${state.userLeagues.map((l) => `
+          <div class="league-row" data-league-id="${escapeHtml(l.id)}">
+            <div>
+              <div class="name">${escapeHtml(l.name)}</div>
+              <div class="meta">${l.role === "admin" ? "Admin" : "Player"}</div>
+            </div>
+            ${state.currentLeague && String(state.currentLeague.id) === String(l.id) ? `<span class="check">✓</span>` : ""}
+          </div>
+        `).join("")}
+        ${state.isSuperAdmin ? `<button class="btn btn-secondary" id="switcher-create-btn" style="margin-top:14px;">➕ Create a League</button>` : ""}
+        <button class="btn btn-secondary" id="switcher-join-btn" style="margin-top:8px;">\u{1F511} Join a League</button>
+      </div>
+    `;
+    wrap.querySelector("#switcher-close-x")?.addEventListener("click", () => wrap.remove());
+    wrap.querySelectorAll(".league-row").forEach((row) => {
+      row.addEventListener("click", async () => {
+        await setCurrentLeague(row.dataset.leagueId);
+        wrap.remove();
+      });
+    });
+    wrap.querySelector("#switcher-create-btn")?.addEventListener("click", () => {
+      wrap.remove();
+      openCreateLeaguePanel();
+    });
+    wrap.querySelector("#switcher-join-btn")?.addEventListener("click", () => {
+      wrap.remove();
+      openJoinLeaguePanel();
+    });
+  }
+
+  redraw();
+}
+
+// Join a league by invite code -- available from the switcher above, or
+// (via renderJoinLeagueGate) to a brand new signup who isn't in one yet.
+function openJoinLeaguePanel() {
+  const panel = document.createElement("div");
+  panel.className = "modal-backdrop";
+  document.body.appendChild(panel);
+
+  let saving = false;
+  let msg = "";
+
+  function panelRedraw() {
+    panel.innerHTML = `
+      <div class="modal-sheet">
+        <h3 style="text-align:center; margin-top:0;">Join a League</h3>
+        <div class="field">
+          <label>Invite code</label>
+          <input type="text" id="join-league-code" placeholder="ABCD1234" style="text-transform:uppercase; letter-spacing:0.08em; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">
+        </div>
+        <div class="hint" style="min-height:1.2em; margin-bottom:10px;">${msg ? escapeHtml(msg) : "Ask the league's admin for their invite code."}</div>
+        <div class="btn-row">
+          <button class="btn btn-secondary" id="join-league-cancel-btn" ${saving ? "disabled" : ""}>Cancel</button>
+          <button class="btn btn-primary" id="join-league-confirm-btn" ${saving ? "disabled" : ""}>${saving ? "Joining…" : "Join League"}</button>
+        </div>
+      </div>
+    `;
+    panel.querySelector("#join-league-cancel-btn")?.addEventListener("click", () => panel.remove());
+    panel.querySelector("#join-league-confirm-btn")?.addEventListener("click", async () => {
+      const code = (panel.querySelector("#join-league-code").value || "").trim();
+      if (!code) { msg = "Enter an invite code."; panelRedraw(); return; }
+      saving = true;
+      msg = "";
+      panelRedraw();
+      try {
+        await supabase.rpc("join_league_by_code", { p_code: code });
+        await refreshLeagues();
+        await refreshLeagueAdmin();
+        await refreshCurrentSeason();
+        panel.remove();
+        render();
+      } catch (err) {
+        msg = "Couldn't join: " + (err.message || err);
+        saving = false;
+        panelRedraw();
+      }
+    });
+  }
+
+  panelRedraw();
+}
+
+// Create a league -- super-admin only (gated at the call site, the switcher
+// above). Creates the league, then its first season in one flow, then shows
+// the invite code with a "Send via Text" link, mirroring the Create League
+// mockup Trent approved. Season-length can be set by week count or by an
+// end date, which is converted to a week count client-side -- the DB only
+// ever stores season_weeks, same as Start New Season below.
+function openCreateLeaguePanel() {
+  const panel = document.createElement("div");
+  panel.className = "modal-backdrop";
+  document.body.appendChild(panel);
+
+  let saving = false;
+  let msg = "";
+  let created = null; // { name, invite_code }
+  let pickCountMode = "exact";
+  let lengthMode = "weeks";
+  const thisYear = new Date().getFullYear();
+
+  function panelRedraw() {
+    if (created) {
+      const inviteMessage =
+        `Join my ${created.name} pick'em league! Download the app at ` +
+        `https://sgafootballcentral.github.io/pick7-football-pool/ and enter invite code ${created.invite_code} to join.`;
+      panel.innerHTML = `
+        <div class="modal-sheet">
+          <div class="sheet-head" style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+            <h3 style="margin:0;">\u{1F389} League Created!</h3>
+            <button class="close" id="create-league-done-x" aria-label="Close">&times;</button>
+          </div>
+          <div style="font-weight:700; font-size:1.05rem; margin-bottom:2px;">${escapeHtml(created.name)}</div>
+          <div class="hint" style="margin-bottom:6px;">Its first season is set up and ready -- share the code below so people can join themselves.</div>
+          <div class="code-box">
+            <div class="code-row"><span class="code">${escapeHtml(created.invite_code)}</span></div>
+            <div class="code-box-actions">
+              <button class="copy-btn" id="create-league-copy-btn">\u{1F4CB} Copy Code</button>
+              <a class="text-btn" href="sms:?body=${encodeURIComponent(inviteMessage)}">\u{1F4F1} Send via Text</a>
+            </div>
+          </div>
+          <button class="btn btn-primary" id="create-league-done-btn" style="margin-top:16px;">Done</button>
+        </div>
+      `;
+      panel.querySelector("#create-league-done-x")?.addEventListener("click", () => panel.remove());
+      panel.querySelector("#create-league-done-btn")?.addEventListener("click", () => panel.remove());
+      panel.querySelector("#create-league-copy-btn")?.addEventListener("click", async () => {
+        try { await navigator.clipboard.writeText(created.invite_code); } catch (_) { /* non-critical */ }
+      });
+      return;
+    }
+
+    panel.innerHTML = `
+      <div class="modal-sheet">
+        <h3 style="text-align:center; margin-top:0;">Create a League</h3>
+        <div class="field">
+          <label>League name</label>
+          <input type="text" id="create-league-name" placeholder="e.g. Downtown Dynasty">
+        </div>
+        <div class="hint" style="margin:14px 0 7px; text-transform:uppercase; letter-spacing:0.04em; font-weight:700; font-size:0.78rem;">First Season</div>
+        <div class="field">
+          <label>Year</label>
+          <input type="number" id="create-league-year" value="${thisYear}">
+        </div>
+        <div class="field">
+          <label>Sync games from</label>
+          <div>
+            <label style="font-weight:normal; margin-right:14px;"><input type="checkbox" id="create-league-nfl" checked> NFL</label>
+            <label style="font-weight:normal;"><input type="checkbox" id="create-league-cfb" checked> CFB</label>
+          </div>
+        </div>
+        <div class="field">
+          <label>How many games does everyone pick each week?</label>
+          <div style="margin-bottom:8px;">
+            <label style="font-weight:normal; display:block; margin-bottom:4px;">
+              <input type="radio" name="create-league-pick-mode" id="create-league-pick-exact" value="exact" ${pickCountMode === "exact" ? "checked" : ""}>
+              Exactly <input type="number" id="create-league-pick-count" value="7" min="1" style="width:60px; display:inline-block;" ${pickCountMode === "exact" ? "" : "disabled"}> games
+            </label>
+            <label style="font-weight:normal; display:block;">
+              <input type="radio" name="create-league-pick-mode" id="create-league-pick-all" value="all" ${pickCountMode === "all" ? "checked" : ""}>
+              Every game that week (good for single-elimination playoffs)
+            </label>
+          </div>
+        </div>
+        <div class="field">
+          <label>Season length</label>
+          <div style="margin-bottom:8px;">
+            <label style="font-weight:normal; margin-right:14px;"><input type="radio" name="create-league-len-mode" id="create-league-len-weeks" ${lengthMode === "weeks" ? "checked" : ""}> By # of weeks</label>
+            <label style="font-weight:normal;"><input type="radio" name="create-league-len-mode" id="create-league-len-date" ${lengthMode === "date" ? "checked" : ""}> By end date</label>
+          </div>
+          ${lengthMode === "weeks" ? `
+            <input type="number" id="create-league-weeks" value="16" min="1">
+          ` : `
+            <input type="date" id="create-league-end-date">
+            <div class="hint">We'll work out the number of weeks from today to this date.</div>
+          `}
+        </div>
+        <div class="field">
+          <label>Default pick-lock (optional)</label>
+          <input type="number" id="create-league-lock-offset" placeholder="minutes before kickoff" min="0">
+          <div class="hint">Leave blank to set lock times by hand each week.</div>
+        </div>
+        <div class="hint" style="min-height:1.2em; margin-bottom:10px;">${msg ? escapeHtml(msg) : ""}</div>
+        <div class="btn-row">
+          <button class="btn btn-secondary" id="create-league-cancel-btn" ${saving ? "disabled" : ""}>Cancel</button>
+          <button class="btn btn-primary" id="create-league-confirm-btn" ${saving ? "disabled" : ""}>${saving ? "Creating…" : "Create League"}</button>
+        </div>
+      </div>
+    `;
+
+    panel.querySelector("#create-league-pick-exact")?.addEventListener("change", () => { pickCountMode = "exact"; panelRedraw(); });
+    panel.querySelector("#create-league-pick-all")?.addEventListener("change", () => { pickCountMode = "all"; panelRedraw(); });
+    panel.querySelector("#create-league-len-weeks")?.addEventListener("change", () => { lengthMode = "weeks"; panelRedraw(); });
+    panel.querySelector("#create-league-len-date")?.addEventListener("change", () => { lengthMode = "date"; panelRedraw(); });
+    panel.querySelector("#create-league-cancel-btn")?.addEventListener("click", () => panel.remove());
+    panel.querySelector("#create-league-confirm-btn")?.addEventListener("click", async () => {
+      const name = (panel.querySelector("#create-league-name").value || "").trim();
+      const year = parseInt(panel.querySelector("#create-league-year").value, 10);
+      const pickCountExact = parseInt(panel.querySelector("#create-league-pick-count").value, 10);
+      const lockOffsetRaw = (panel.querySelector("#create-league-lock-offset").value || "").trim();
+      const lockOffset = lockOffsetRaw === "" ? null : parseInt(lockOffsetRaw, 10);
+      const syncLeagues = [
+        panel.querySelector("#create-league-nfl").checked ? "NFL" : null,
+        panel.querySelector("#create-league-cfb").checked ? "CFB" : null,
+      ].filter(Boolean);
+
+      let seasonWeeks;
+      if (lengthMode === "weeks") {
+        seasonWeeks = parseInt(panel.querySelector("#create-league-weeks").value, 10);
+      } else {
+        const endDateRaw = panel.querySelector("#create-league-end-date").value;
+        if (!endDateRaw) { msg = "Pick an end date."; panelRedraw(); return; }
+        const endDate = new Date(endDateRaw + "T00:00:00");
+        seasonWeeks = Math.max(1, Math.ceil((endDate - new Date()) / (7 * 86400000)));
+      }
+
+      if (!name) { msg = "Enter a league name."; panelRedraw(); return; }
+      if (!year) { msg = "Enter a valid year."; panelRedraw(); return; }
+      if (!seasonWeeks || seasonWeeks < 1) { msg = "Enter a valid season length."; panelRedraw(); return; }
+      if (!syncLeagues.length) { msg = "Pick at least one league to sync games from."; panelRedraw(); return; }
+      if (pickCountMode === "exact" && (!pickCountExact || pickCountExact < 1)) {
+        msg = "Enter how many games each player picks (at least 1).";
+        panelRedraw();
+        return;
+      }
+
+      saving = true;
+      msg = "";
+      panelRedraw();
+      try {
+        const { data: newLeagueId } = await supabase.rpc("create_league", { p_name: name });
+        await supabase.rpc("start_new_season", {
+          p_league_id: newLeagueId,
+          p_year: year,
+          p_label: null,
+          p_pick_count_mode: pickCountMode,
+          p_pick_count_exact: pickCountMode === "exact" ? pickCountExact : 7,
+          p_sync_leagues: syncLeagues,
+          p_season_weeks: seasonWeeks,
+          p_default_lock_offset_minutes: lockOffset,
+        });
+        await refreshLeagues();
+        const newLeague = state.userLeagues.find((l) => String(l.id) === String(newLeagueId));
+        if (newLeague) await setCurrentLeague(newLeague.id);
+        created = { name, invite_code: newLeague ? newLeague.invite_code : "" };
+        saving = false;
+        panelRedraw();
+      } catch (err) {
+        msg = "Couldn't create league: " + (err.message || err);
+        saving = false;
+        panelRedraw();
+      }
+    });
+  }
+
+  panelRedraw();
+}
+
 async function openAccountMenu() {
   if (document.querySelector(".modal-backdrop")) return; // already open
 
@@ -1689,7 +2037,7 @@ async function openAccountMenu() {
   // toggle above. Opens as its own stacked modal, same pattern as the
   // photo cropper.
   async function openManagePlayersPanel() {
-    if (!state.currentSeason) return;
+    if (!state.currentSeason || !state.currentLeague) return;
     const panel = document.createElement("div");
     panel.className = "modal-backdrop";
     document.body.appendChild(panel);
@@ -1705,10 +2053,17 @@ async function openAccountMenu() {
           ${loading ? `<div class="hint" style="text-align:center;">Loading…</div>` : `
             <div style="max-height:50vh; overflow-y:auto; margin-bottom:12px;">
               ${rows.map((r) => `
-                <label style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid var(--border, #2a2a2a);">
-                  <span>${escapeHtml(r.username || "(no name)")}</span>
-                  <input type="checkbox" data-player-id="${escapeHtml(r.id)}" ${r.active ? "checked" : ""}>
-                </label>
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 0; border-bottom:1px solid var(--border, #2a2a2a);">
+                  <label style="display:flex; align-items:center; gap:10px; flex:1; min-width:0; cursor:pointer;">
+                    <input type="checkbox" data-player-id="${escapeHtml(r.id)}" ${r.active ? "checked" : ""}>
+                    <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(r.username || "(no name)")}</span>
+                  </label>
+                  ${state.isSuperAdmin ? `
+                    <button class="btn btn-secondary" data-toggle-admin-id="${escapeHtml(r.id)}" style="width:auto; flex:none; padding:5px 10px; font-size:0.74rem;">
+                      ${r.role === "admin" ? "Remove Admin" : "Make Admin"}
+                    </button>
+                  ` : ""}
+                </div>
               `).join("") || `<div class="hint">No players yet.</div>`}
             </div>
           `}
@@ -1736,19 +2091,39 @@ async function openAccountMenu() {
           }
         });
       });
+      panel.querySelectorAll("button[data-toggle-admin-id]").forEach((btn) => {
+        btn.addEventListener("click", async (e) => {
+          const playerId = e.target.dataset.toggleAdminId;
+          const row = rows.find((r) => r.id === playerId);
+          if (!row) return;
+          const nextRole = row.role === "admin" ? "player" : "admin";
+          try {
+            await supabase.from("league_members").update({ role: nextRole })
+              .eq("league_id", state.currentLeague.id).eq("user_id", playerId);
+            row.role = nextRole;
+            panelRedraw();
+          } catch (err) {
+            msg = "Couldn't update admin status: " + (err.message || err);
+            panelRedraw();
+          }
+        });
+      });
       panel.querySelector("#manage-players-close-btn")?.addEventListener("click", () => panel.remove());
     }
 
     panelRedraw();
 
     try {
-      const [{ data: players }, { data: seasonRows }] = await Promise.all([
-        supabase.from("players").select("id, username").order("username", { ascending: true }),
+      const [{ data: memberRows }, { data: seasonRows }] = await Promise.all([
+        supabase.from("league_members").select("role, players(id, username)").eq("league_id", state.currentLeague.id),
         supabase.from("player_seasons").select("user_id, active").eq("season_id", state.currentSeason.id),
       ]);
       const activeByUser = {};
       for (const r of seasonRows || []) activeByUser[r.user_id] = r.active;
-      rows = (players || []).map((p) => ({ id: p.id, username: p.username, active: activeByUser[p.id] !== false }));
+      rows = (memberRows || [])
+        .filter((m) => m.players)
+        .map((m) => ({ id: m.players.id, username: m.players.username, role: m.role, active: activeByUser[m.players.id] !== false }))
+        .sort((a, b) => (a.username || "").localeCompare(b.username || ""));
     } catch (err) {
       msg = "Couldn't load players: " + (err.message || err);
     }
@@ -1869,6 +2244,7 @@ async function openAccountMenu() {
         panelRedraw();
         try {
           await supabase.rpc("start_new_season", {
+            p_league_id: state.currentLeague.id,
             p_year: year,
             p_label: label || null,
             p_pick_count_mode: pickCountMode,
@@ -1907,6 +2283,35 @@ export function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
+function renderJoinLeagueGate(el) {
+  el.innerHTML = `
+    <div class="card" style="margin:16px 14px;">
+      <h3 style="margin-top:0;">Join a League</h3>
+      <div class="hint" style="margin-bottom:12px;">You're not part of a league yet. Ask your league's admin for an invite code to join.</div>
+      <div class="field">
+        <label>Invite code</label>
+        <input type="text" id="gate-join-code" placeholder="ABCD1234" style="text-transform:uppercase; letter-spacing:0.08em; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">
+      </div>
+      <div class="hint" id="gate-join-msg" style="min-height:1.2em; margin-bottom:10px;"></div>
+      <button class="btn btn-primary" id="gate-join-btn">Join League</button>
+    </div>
+  `;
+  el.querySelector("#gate-join-btn")?.addEventListener("click", async () => {
+    const code = (el.querySelector("#gate-join-code").value || "").trim();
+    const msgEl = el.querySelector("#gate-join-msg");
+    if (!code) { msgEl.textContent = "Enter an invite code."; return; }
+    try {
+      await supabase.rpc("join_league_by_code", { p_code: code });
+      await refreshLeagues();
+      await refreshLeagueAdmin();
+      await refreshCurrentSeason();
+      render();
+    } catch (err) {
+      msgEl.textContent = "Couldn't join: " + (err.message || err);
+    }
+  });
+}
+
 export function render() {
   if (state.recoveryMode) {
     renderChrome(`<div id="tab-slot"></div>`);
@@ -1927,9 +2332,15 @@ export function render() {
     return;
   }
 
+  if (!state.currentLeague) {
+    renderChrome(`<div id="tab-slot"></div>`);
+    renderJoinLeagueGate(document.getElementById("tab-slot"));
+    return;
+  }
+
   renderChrome(`<div id="tab-slot"></div>`);
   const slot = document.getElementById("tab-slot");
-  const ctx = { supabase, user: state.user, username: state.username, isAdmin: state.isAdmin, unreadDmSenders: state.unreadDmSenders, markDmRead, currentSeason: state.currentSeason };
+  const ctx = { supabase, user: state.user, username: state.username, isAdmin: state.isAdmin, unreadDmSenders: state.unreadDmSenders, markDmRead, currentSeason: state.currentSeason, currentLeague: state.currentLeague };
 
   if (state.activeTab === "picks") renderPicks(slot, ctx);
   else if (state.activeTab === "leaderboard") renderLeaderboard(slot, ctx);

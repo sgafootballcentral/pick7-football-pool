@@ -770,3 +770,69 @@ table.profile-weeks th { color: var(--text-dim); font-weight: 600; font-size: 0.
   margin-left: 6px;
   vertical-align: middle;
 }
+
+/* Multi-league: switcher pill, roster badges, invite-code box */
+.league-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 7px 12px 7px 10px;
+  font-weight: 700;
+  font-size: 0.86rem;
+  color: var(--text);
+}
+.league-pill .chev { color: var(--text-dim); font-size: 0.7rem; margin-left: 2px; }
+
+.league-row { display: flex; align-items: center; gap: 10px; padding: 11px 4px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.league-row:last-of-type { border-bottom: none; }
+.league-row .name { font-weight: 700; font-size: 0.94rem; }
+.league-row .meta { color: var(--text-dim); font-size: 0.76rem; margin-top: 1px; }
+.league-row .check { color: var(--win); font-size: 1.1rem; margin-left: auto; }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 999px;
+  letter-spacing: 0.02em;
+}
+.badge-admin { background: rgba(255, 75, 75, 0.16); color: var(--accent); }
+.badge-player { background: rgba(154, 164, 178, 0.16); color: var(--text-dim); }
+.badge-super { background: rgba(255, 215, 0, 0.16); color: var(--gold); }
+
+.code-box {
+  background: var(--bg-card);
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin: 8px 0 4px;
+}
+.code-box .code-row { display: flex; align-items: center; justify-content: center; margin-bottom: 10px; }
+.code-box .code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1.3rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+.code-box-actions { display: flex; gap: 8px; }
+.copy-btn, .text-btn {
+  flex: 1;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  text-decoration: none;
+  cursor: pointer;
+}
