@@ -71,11 +71,19 @@ if "user" not in st.session_state or not st.session_state.user:
 user = st.session_state.user
 username = user.user_metadata.get("username", user.email)
 
-def is_admin_anywhere(uid):
-    """True if this user is a super-admin, or an admin of at least one
-    league. Chat is still one shared room for everyone regardless of
-    league, so admin status here just answers whether this person can
-    moderate chat at all -- not which league."""
+def get_user_leagues(uid):
+    resp = (
+        supabase.table("league_members")
+        .select("league_id, leagues(id, name)")
+        .eq("user_id", uid)
+        .execute()
+    )
+    return [row["leagues"] for row in (resp.data or []) if row.get("leagues")]
+
+
+def is_league_admin(league_id, uid):
+    """True if this user is a super-admin, or an admin of this specific
+    league -- mirrors the is_league_admin() SQL function."""
     try:
         role_resp = supabase.table("league_users").select("role").eq("id", uid).execute()
         if role_resp.data and role_resp.data[0].get("role") == "admin":
@@ -83,13 +91,35 @@ def is_admin_anywhere(uid):
     except Exception:
         pass
     try:
-        member_resp = supabase.table("league_members").select("role").eq("user_id", uid).eq("role", "admin").execute()
+        member_resp = (
+            supabase.table("league_members")
+            .select("role")
+            .eq("league_id", league_id)
+            .eq("user_id", uid)
+            .eq("role", "admin")
+            .execute()
+        )
         return bool(member_resp.data)
     except Exception:
         return False
 
 
-is_admin = is_admin_anywhere(user.id)
+user_leagues = get_user_leagues(user.id)
+if not user_leagues:
+    st.warning("You're not part of a league yet. Join one from the home page first.")
+    st.stop()
+if len(user_leagues) == 1:
+    CURRENT_LEAGUE_ID = user_leagues[0]["id"]
+else:
+    _chat_remembered_id = st.session_state.get("current_league_id")
+    _chat_idx = next((i for i, l in enumerate(user_leagues) if l["id"] == _chat_remembered_id), 0)
+    _chat_current_league = st.sidebar.selectbox(
+        "League", options=user_leagues, index=_chat_idx, format_func=lambda l: l["name"], key="chat_league_selector",
+    )
+    st.session_state["current_league_id"] = _chat_current_league["id"]
+    CURRENT_LEAGUE_ID = _chat_current_league["id"]
+
+is_admin = is_league_admin(CURRENT_LEAGUE_ID, user.id)
 
 st.title("💬 League Chat")
 st.caption("Messages stay here for everyone to see until an admin removes them.")
@@ -170,6 +200,7 @@ def confirm_clear_chat():
                 batch = (
                     supabase.table("chat_messages")
                     .select("image_url")
+                    .eq("league_id", CURRENT_LEAGUE_ID)
                     .range(offset, offset + page_size - 1)
                     .execute()
                     .data
@@ -184,7 +215,7 @@ def confirm_clear_chat():
                     supabase.storage.from_("chat-images").remove(image_paths)
                 except Exception:
                     pass  # don't let a storage hiccup block clearing the messages themselves
-            supabase.table("chat_messages").delete().gte("id", 0).execute()
+            supabase.table("chat_messages").delete().eq("league_id", CURRENT_LEAGUE_ID).execute()
             st.session_state.pending_clear_chat = False
             st.rerun()
         except Exception as e:
@@ -229,6 +260,7 @@ EASTERN_TZ = ZoneInfo("America/New_York")
 messages = (
     supabase.table("chat_messages")
     .select("*")
+    .eq("league_id", CURRENT_LEAGUE_ID)
     .order("created_at", desc=True)
     .limit(500)
     .execute()
@@ -332,6 +364,7 @@ if new_prompt:
                 "username": username,
                 "message": text,
                 "image_url": image_url,
+                "league_id": CURRENT_LEAGUE_ID,
             }).execute()
             st.rerun()
         except Exception as e:
