@@ -144,7 +144,7 @@ input, select, textarea {
   padding: 6px 4px calc(6px + var(--safe-bottom)) 4px;
   z-index: 100;
 }
-.bottom-nav button {
+.bottom-nav button, .bottom-nav a {
   position: relative;
   flex: 1;
   background: none;
@@ -158,7 +158,7 @@ input, select, textarea {
   font-size: 0.68rem;
   border-radius: 10px;
 }
-.bottom-nav button .icon { font-size: 1.3rem; }
+.bottom-nav button .icon, .bottom-nav a .icon { font-size: 1.3rem; }
 .bottom-nav button.active { color: var(--accent); }
 .nav-badge {
   position: absolute;

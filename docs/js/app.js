@@ -543,6 +543,11 @@ function renderChrome(innerHtml) {
         <button data-tab="requests" class="${state.activeTab === "requests" ? "active" : ""}">
           <span class="icon">\u{1F5F3}\uFE0F</span>Requests
         </button>
+        ${state.isAdmin ? `
+          <a href="${escapeHtml(buildAdminUrl())}" target="_blank" rel="noopener" style="text-decoration:none;">
+            <span class="icon">⚙️</span>Admin
+          </a>
+        ` : ""}
       </nav>
     ` : ""}
   `;
@@ -2198,39 +2203,42 @@ async function openAccountMenu() {
       const syncLeagues = season.sync_leagues || ["NFL", "CFB"];
       panel.innerHTML = `
         <div class="modal-sheet">
+          <button class="modal-close-x" id="edit-league-close-x" aria-label="Close">&times;</button>
           <h3 style="text-align:center; margin-top:0;">Edit League</h3>
           <div class="field">
             <label>League name</label>
             <input type="text" id="edit-league-name" value="${escapeHtml(league.name)}">
           </div>
-          <div class="hint" style="margin: 2px 0 10px; text-transform:uppercase; letter-spacing:0.04em; font-weight:700; font-size:0.78rem;">Current Season</div>
-          <div class="hint" style="margin-bottom:10px;">These apply to the season already in progress — changing them doesn't touch past weeks' games or picks.</div>
+          <div class="section-label">Current Season</div>
+          <div class="hint" style="margin-bottom:10px;">These apply to the season already in progress -- changing them doesn't touch past weeks' games or picks.</div>
           <div class="field">
             <label>Picks per week</label>
-            <div style="margin-bottom:8px;">
-              <label style="font-weight:normal; display:block; margin-bottom:4px;">
-                <input type="radio" name="edit-league-pick-mode" id="edit-league-pick-exact" value="exact" ${pickCountMode === "exact" ? "checked" : ""}>
-                Exactly <input type="number" id="edit-league-pick-count" value="${season.pick_count_exact || 7}" min="1" style="width:60px; display:inline-block;" ${pickCountMode === "exact" ? "" : "disabled"}> games
-              </label>
-              <label style="font-weight:normal; display:block;">
-                <input type="radio" name="edit-league-pick-mode" id="edit-league-pick-all" value="all" ${pickCountMode === "all" ? "checked" : ""}>
-                Every game that week
-              </label>
+            <div class="seg-toggle">
+              <div class="seg-toggle-opt">
+                <input type="radio" name="edit-league-pick-mode" id="edit-league-pick-exact" ${pickCountMode === "exact" ? "checked" : ""}>
+                <label for="edit-league-pick-exact">Exactly N games</label>
+              </div>
+              <div class="seg-toggle-opt">
+                <input type="radio" name="edit-league-pick-mode" id="edit-league-pick-all" ${pickCountMode === "all" ? "checked" : ""}>
+                <label for="edit-league-pick-all">Every game</label>
+              </div>
             </div>
+            <div class="hint">Exactly <input type="number" id="edit-league-pick-count" class="inline-num" value="${season.pick_count_exact || 7}" min="1" ${pickCountMode === "exact" ? "" : "disabled"}> games each week -- or pick every game on the slate (e.g. a playoff round).</div>
           </div>
           <div class="field">
             <label>Sync games from</label>
-            <div>
-              <label style="font-weight:normal; margin-right:14px;"><input type="checkbox" id="edit-league-league-nfl" ${syncLeagues.includes("NFL") ? "checked" : ""}> NFL</label>
-              <label style="font-weight:normal;"><input type="checkbox" id="edit-league-league-cfb" ${syncLeagues.includes("CFB") ? "checked" : ""}> CFB</label>
-            </div>
+            <div class="check-row"><input type="checkbox" id="edit-league-league-nfl" ${syncLeagues.includes("NFL") ? "checked" : ""}><span>🏈 NFL</span></div>
+            <div class="check-row"><input type="checkbox" id="edit-league-league-cfb" ${syncLeagues.includes("CFB") ? "checked" : ""}><span>🎓 College Football</span></div>
           </div>
           <div class="field">
             <label>Default pick-lock (optional)</label>
             <input type="number" id="edit-league-lock-offset" min="0" value="${season.default_lock_offset_minutes ?? ''}" placeholder="minutes before kickoff">
             <div class="hint">Leave blank to set lock times by hand each week.</div>
           </div>
-          <div class="hint" style="margin: 14px 0 7px; text-transform:uppercase; letter-spacing:0.04em; font-weight:700; font-size:0.78rem;">Season Length</div>
+          <div class="section-label" style="display:flex; align-items:center; gap:8px;">
+            Season Length
+            ${state.isSuperAdmin ? `<span class="badge badge-super" style="margin-left:auto;">🔒 Super Admin Only</span>` : ``}
+          </div>
           ${state.isSuperAdmin ? `
             <div class="hint" style="margin-bottom:10px;">Changing this can add or remove weeks that may already have games or picks scheduled.</div>
             <div class="field">
@@ -2251,6 +2259,7 @@ async function openAccountMenu() {
           </div>
         </div>
       `;
+      panel.querySelector("#edit-league-close-x")?.addEventListener("click", () => panel.remove());
       panel.querySelector("#edit-league-pick-exact")?.addEventListener("change", () => { pickCountMode = "exact"; panelRedraw(); });
       panel.querySelector("#edit-league-pick-all")?.addEventListener("change", () => { pickCountMode = "all"; panelRedraw(); });
       panel.querySelector("#edit-league-cancel-btn")?.addEventListener("click", () => panel.remove());
@@ -2454,10 +2463,12 @@ async function openAccountMenu() {
     // the new season should actually do differently (e.g. the CFB Playoffs:
     // "every game", CFB only, a short season).
     let pickCountMode = "exact";
+    let lengthMode = "weeks";
 
     function panelRedraw() {
       panel.innerHTML = `
         <div class="modal-sheet">
+          <button class="modal-close-x" id="start-season-close-x" aria-label="Close">&times;</button>
           <h3 style="text-align:center; margin-top:0;">Start New Season</h3>
           <div class="hint" style="margin-bottom:14px;">
             This closes out ${state.currentSeason ? escapeHtml(state.currentSeason.label) : "the current season"} and opens a new one.
@@ -2472,28 +2483,43 @@ async function openAccountMenu() {
             <input type="text" id="start-season-label" placeholder="${nextYear} Season">
           </div>
           <div class="field">
-            <label>Season length (weeks)</label>
-            <input type="number" id="start-season-weeks" value="16" min="1">
+            <label>Picks per week</label>
+            <div class="seg-toggle">
+              <div class="seg-toggle-opt">
+                <input type="radio" name="start-season-pick-mode" id="start-season-pick-exact" ${pickCountMode === "exact" ? "checked" : ""}>
+                <label for="start-season-pick-exact">Exactly N games</label>
+              </div>
+              <div class="seg-toggle-opt">
+                <input type="radio" name="start-season-pick-mode" id="start-season-pick-all" ${pickCountMode === "all" ? "checked" : ""}>
+                <label for="start-season-pick-all">Every game</label>
+              </div>
+            </div>
+            <div class="hint">Exactly <input type="number" id="start-season-pick-count" class="inline-num" value="7" min="1" ${pickCountMode === "exact" ? "" : "disabled"}> games each week -- or pick every game on the slate (good for single-elimination playoffs).</div>
           </div>
           <div class="field">
             <label>Sync games from</label>
-            <div>
-              <label style="font-weight:normal; margin-right:14px;"><input type="checkbox" id="start-season-league-nfl" checked> NFL</label>
-              <label style="font-weight:normal;"><input type="checkbox" id="start-season-league-cfb" checked> CFB</label>
-            </div>
+            <div class="check-row"><input type="checkbox" id="start-season-league-nfl" checked><span>🏈 NFL</span></div>
+            <div class="check-row"><input type="checkbox" id="start-season-league-cfb" checked><span>🎓 College Football</span></div>
           </div>
           <div class="field">
-            <label>How many games does everyone pick each week?</label>
-            <div style="margin-bottom:8px;">
-              <label style="font-weight:normal; display:block; margin-bottom:4px;">
-                <input type="radio" name="start-season-pick-mode" id="start-season-pick-exact" value="exact" ${pickCountMode === "exact" ? "checked" : ""}>
-                Exactly <input type="number" id="start-season-pick-count" value="7" min="1" style="width:60px; display:inline-block;" ${pickCountMode === "exact" ? "" : "disabled"}> games
-              </label>
-              <label style="font-weight:normal; display:block;">
-                <input type="radio" name="start-season-pick-mode" id="start-season-pick-all" value="all" ${pickCountMode === "all" ? "checked" : ""}>
-                Every game that week (good for single-elimination playoffs)
-              </label>
+            <label>Season length</label>
+            <div class="seg-toggle">
+              <div class="seg-toggle-opt">
+                <input type="radio" name="start-season-len-mode" id="start-season-len-weeks" ${lengthMode === "weeks" ? "checked" : ""}>
+                <label for="start-season-len-weeks">By # of weeks</label>
+              </div>
+              <div class="seg-toggle-opt">
+                <input type="radio" name="start-season-len-mode" id="start-season-len-date" ${lengthMode === "date" ? "checked" : ""}>
+                <label for="start-season-len-date">By end date</label>
+              </div>
             </div>
+            ${lengthMode === "weeks" ? `
+              <input type="number" id="start-season-weeks" value="16" min="1">
+              <div class="hint">Number of weeks this season runs.</div>
+            ` : `
+              <input type="date" id="start-season-end-date">
+              <div class="hint">We'll work out the number of weeks from today to this date.</div>
+            `}
           </div>
           <div class="field">
             <label>Auto-lock picks before kickoff (optional)</label>
@@ -2509,13 +2535,15 @@ async function openAccountMenu() {
           </div>
         </div>
       `;
+      panel.querySelector("#start-season-close-x")?.addEventListener("click", () => panel.remove());
       panel.querySelector("#start-season-pick-exact")?.addEventListener("change", () => { pickCountMode = "exact"; panelRedraw(); });
       panel.querySelector("#start-season-pick-all")?.addEventListener("change", () => { pickCountMode = "all"; panelRedraw(); });
+      panel.querySelector("#start-season-len-weeks")?.addEventListener("change", () => { lengthMode = "weeks"; panelRedraw(); });
+      panel.querySelector("#start-season-len-date")?.addEventListener("change", () => { lengthMode = "date"; panelRedraw(); });
       panel.querySelector("#start-season-cancel-btn")?.addEventListener("click", () => panel.remove());
       panel.querySelector("#start-season-confirm-btn")?.addEventListener("click", async () => {
         const year = parseInt(panel.querySelector("#start-season-year").value, 10);
         const label = (panel.querySelector("#start-season-label").value || "").trim();
-        const seasonWeeks = parseInt(panel.querySelector("#start-season-weeks").value, 10);
         const pickCountExact = parseInt(panel.querySelector("#start-season-pick-count").value, 10);
         const lockOffsetRaw = (panel.querySelector("#start-season-lock-offset").value || "").trim();
         const lockOffset = lockOffsetRaw === "" ? null : parseInt(lockOffsetRaw, 10);
@@ -2524,13 +2552,23 @@ async function openAccountMenu() {
           panel.querySelector("#start-season-league-cfb").checked ? "CFB" : null,
         ].filter(Boolean);
 
+        let seasonWeeks;
+        if (lengthMode === "weeks") {
+          seasonWeeks = parseInt(panel.querySelector("#start-season-weeks").value, 10);
+        } else {
+          const endDateRaw = panel.querySelector("#start-season-end-date").value;
+          if (!endDateRaw) { msg = "Pick an end date."; panelRedraw(); return; }
+          const endDate = new Date(endDateRaw + "T00:00:00");
+          seasonWeeks = Math.max(1, Math.ceil((endDate - new Date()) / (7 * 86400000)));
+        }
+
         if (!year) {
           msg = "Enter a valid year.";
           panelRedraw();
           return;
         }
         if (!seasonWeeks || seasonWeeks < 1) {
-          msg = "Enter a valid season length (at least 1 week).";
+          msg = "Enter a valid season length.";
           panelRedraw();
           return;
         }
