@@ -513,14 +513,14 @@ function renderChrome(innerHtml) {
       </div>` : ""}
     ${state.user && !state.recoveryMode ? `
       <div class="topbar">
+        <button class="avatar-btn" id="account-menu-btn" aria-label="Account menu" title="${escapeHtml(state.username || "")}">
+          ${avatarInnerHtml(state.avatarUrl, state.avatarMonogram, state.username)}
+        </button>
         ${state.currentLeague ? `
           <button class="league-pill" id="league-switcher-btn" aria-label="Switch league">
             \u{1F3C8} ${escapeHtml(state.currentLeague.name)} <span class="chev">\u25BE</span>
           </button>
         ` : `<span></span>`}
-        <button class="avatar-btn" id="account-menu-btn" aria-label="Account menu" title="${escapeHtml(state.username || "")}">
-          ${avatarInnerHtml(state.avatarUrl, state.avatarMonogram, state.username)}
-        </button>
       </div>
     ` : ""}
     <div id="tab-content">${innerHtml}</div>
@@ -1897,6 +1897,10 @@ async function openAccountMenu() {
           <button class="btn btn-secondary" id="account-edit-league-btn" style="margin-bottom:10px;">Edit League Settings…</button>
         ` : ""}
 
+        ${state.isSuperAdmin ? `
+          <button class="btn btn-secondary" id="account-delete-league-btn" style="margin-bottom:10px; color:var(--loss);">Delete League…</button>
+        ` : ""}
+
         ${state.isAdmin ? `
           <a class="btn btn-secondary" href="${escapeHtml(buildAdminUrl())}" target="_blank" rel="noopener"
              style="text-decoration:none; margin-bottom:10px;">Admin ↗</a>
@@ -2057,6 +2061,10 @@ async function openAccountMenu() {
 
     wrap.querySelector("#account-edit-league-btn")?.addEventListener("click", () => {
       openEditLeaguePanel();
+    });
+
+    wrap.querySelector("#account-delete-league-btn")?.addEventListener("click", () => {
+      openDeleteLeaguePanel();
     });
 
     wrap.querySelector("#account-logout-btn")?.addEventListener("click", async () => {
@@ -2304,6 +2312,129 @@ async function openAccountMenu() {
     }
 
     panelRedraw();
+  }
+
+  // Super-admin only: permanently deletes the current league. Two
+  // client-side confirmation layers -- an explanation of exactly what's
+  // about to be destroyed, then a one-time code that must be typed back
+  // exactly -- sit in front of the delete_league RPC, which only
+  // re-checks WHO is calling server-side, not how they got here. Opens
+  // as its own stacked modal, same pattern as the other admin panels.
+  function openDeleteLeaguePanel() {
+    const league = state.currentLeague;
+    if (!league || !state.isSuperAdmin) return;
+    const panel = document.createElement("div");
+    panel.className = "modal-backdrop";
+    document.body.appendChild(panel);
+
+    let step = "explain";
+    let code = "";
+    let counts = null;
+    let loading = true;
+    let msg = "";
+
+    async function loadCounts() {
+      try {
+        const memberRows = (await supabase.from("league_members").select("user_id").eq("league_id", league.id)).data || [];
+        const seasonRows = (await supabase.from("seasons").select("id").eq("league_id", league.id)).data || [];
+        const seasonIds = seasonRows.map((s) => s.id);
+        let gamesCount = 0;
+        let picksCount = 0;
+        if (seasonIds.length) {
+          gamesCount = ((await supabase.from("games").select("id").in("season_id", seasonIds)).data || []).length;
+          picksCount = ((await supabase.from("picks").select("id").in("season_id", seasonIds)).data || []).length;
+        }
+        const chatRows = (await supabase.from("chat_messages").select("id").eq("league_id", league.id)).data || [];
+        counts = {
+          members: memberRows.length,
+          seasons: seasonIds.length,
+          games: gamesCount,
+          picks: picksCount,
+          chat: chatRows.length,
+        };
+      } catch (err) {
+        counts = { members: "?", seasons: "?", games: "?", picks: "?", chat: "?" };
+      }
+      loading = false;
+      panelRedraw();
+    }
+
+    function panelRedraw() {
+      if (step === "explain") {
+        panel.innerHTML = `
+          <div class="modal-sheet">
+            <h3 style="text-align:center; margin-top:0;">⚠️ Delete League</h3>
+            ${loading ? `
+              <div class="hint" style="text-align:center; margin-bottom:14px;">Checking what's in this league…</div>
+            ` : `
+              <div class="hint" style="margin-bottom:10px; color:var(--text);">
+                This will permanently delete <b>${escapeHtml(league.name)}</b> -- its
+                <b>${counts.members} member(s)</b>, <b>${counts.seasons} season(s)</b>,
+                <b>${counts.games} game(s)</b>, <b>${counts.picks} pick(s)</b>, and
+                <b>${counts.chat} chat message(s)</b>.
+              </div>
+              <div class="hint" style="margin-bottom:16px;">Everyone in this league will lose access to it immediately. This cannot be undone.</div>
+            `}
+            <div class="btn-row">
+              <button class="btn btn-secondary" id="delete-league-cancel-btn">Cancel</button>
+              <button class="btn btn-primary" id="delete-league-continue-btn" style="background:var(--loss); border-color:var(--loss);" ${loading ? "disabled" : ""}>I Understand, Continue</button>
+            </div>
+          </div>
+        `;
+        panel.querySelector("#delete-league-cancel-btn")?.addEventListener("click", () => panel.remove());
+        panel.querySelector("#delete-league-continue-btn")?.addEventListener("click", () => {
+          code = Math.random().toString(36).slice(2, 8).toUpperCase();
+          step = "code";
+          panelRedraw();
+        });
+      } else {
+        panel.innerHTML = `
+          <div class="modal-sheet">
+            <h3 style="text-align:center; margin-top:0;">⚠️ Confirm Deletion</h3>
+            <div class="hint" style="margin-bottom:8px;">As a second layer of protection, type this code exactly to confirm:</div>
+            <div class="code-box">
+              <div class="code-row"><span class="code">${code}</span></div>
+            </div>
+            <div class="field" style="margin-top:14px;">
+              <label>Confirmation code</label>
+              <input type="text" id="delete-league-code-input" placeholder="Type the code above" style="text-transform:uppercase; letter-spacing:0.08em; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">
+            </div>
+            <div class="hint" style="min-height:1.2em; margin-bottom:10px;">${msg ? escapeHtml(msg) : `Deleting ${escapeHtml(league.name)} -- this is the last step and cannot be undone.`}</div>
+            <div class="btn-row">
+              <button class="btn btn-secondary" id="delete-league-code-cancel-btn">Cancel</button>
+              <button class="btn btn-primary" id="delete-league-confirm-btn" style="background:var(--loss); border-color:var(--loss);" disabled>Permanently Delete League</button>
+            </div>
+          </div>
+        `;
+        panel.querySelector("#delete-league-code-cancel-btn")?.addEventListener("click", () => panel.remove());
+        const codeInput = panel.querySelector("#delete-league-code-input");
+        const confirmBtn = panel.querySelector("#delete-league-confirm-btn");
+        codeInput?.addEventListener("input", () => {
+          const isMatch = (codeInput.value || "").trim().toUpperCase() === code;
+          if (confirmBtn) confirmBtn.disabled = !isMatch;
+        });
+        confirmBtn?.addEventListener("click", async () => {
+          if ((codeInput.value || "").trim().toUpperCase() !== code) return;
+          confirmBtn.disabled = true;
+          confirmBtn.textContent = "Deleting…";
+          try {
+            await supabase.rpc("delete_league", { p_league_id: league.id });
+            panel.remove();
+            await refreshLeagues();
+            await refreshCurrentSeason();
+            render();
+          } catch (err) {
+            msg = "Couldn't delete: " + (err.message || err);
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = "Permanently Delete League";
+            panelRedraw();
+          }
+        });
+      }
+    }
+
+    panelRedraw();
+    loadCounts();
   }
 
   // Admin-only: rolls the league over to a new year via the start_new_season
