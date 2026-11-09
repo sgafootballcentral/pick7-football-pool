@@ -15,6 +15,18 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+
+def get_current_season_id():
+    """The id of the seasons row with is_current=true. Mirrors the same
+    helper in pages/1_Admin.py / app.py -- needed everywhere a read is
+    keyed on week_number alone, since week numbers repeat across seasons."""
+    try:
+        resp = supabase.table("seasons").select("id").eq("is_current", True).limit(1).execute()
+        rows = resp.data or []
+        return rows[0]["id"] if rows else None
+    except Exception:
+        return None
+
 # Same "remember me" browser storage keys/helpers as app.py -- see there for
 # the full explanation. This page doesn't drive its own login, but a
 # successful refresh here still needs to update the saved tokens app.py's
@@ -82,7 +94,7 @@ st.caption("See how your picks stack up against everyone else's -- once the week
 # of the whole games table would silently truncate at Supabase's
 # 1000-row API cap once it grows past that, the same way the
 # Leaderboard page's picks query already did.
-available_week_rows = supabase.table("game_week_status").select("week_number").execute().data
+available_week_rows = supabase.table("game_week_status").select("week_number").eq("season_id", get_current_season_id()).execute().data
 available_weeks = sorted({w["week_number"] for w in available_week_rows}, reverse=True)
 
 if not available_weeks:
@@ -105,11 +117,11 @@ CURRENT_WEEK = st.selectbox("Week:", available_weeks, key="cmp_selected_week")
 if CURRENT_WEEK != st.session_state["global_week"]:
     st.session_state["global_week"] = CURRENT_WEEK
 
-games = supabase.table("games").select("*").eq("week_number", CURRENT_WEEK).execute().data or []
+games = supabase.table("games").select("*").eq("week_number", CURRENT_WEEK).eq("season_id", get_current_season_id()).execute().data or []
 games_sorted = sorted(games, key=lambda g: (g.get("kickoff_time") or "", g.get("game_id") or ""))
 
 try:
-    lock_row = supabase.table("week_pick_locks").select("*").eq("week_number", CURRENT_WEEK).maybe_single().execute().data
+    lock_row = supabase.table("week_pick_locks").select("*").eq("week_number", CURRENT_WEEK).eq("season_id", get_current_season_id()).maybe_single().execute().data
 except Exception:
     lock_row = None
 
@@ -146,7 +158,7 @@ if not unlocked:
         )
     st.stop()
 
-week_picks = supabase.table("picks").select("*").eq("week_number", CURRENT_WEEK).execute().data or []
+week_picks = supabase.table("picks").select("*").eq("week_number", CURRENT_WEEK).eq("season_id", get_current_season_id()).execute().data or []
 
 # Resolve through the live id -> username map on `players`, not the
 # snapshot username stored on each pick row -- that snapshot goes stale

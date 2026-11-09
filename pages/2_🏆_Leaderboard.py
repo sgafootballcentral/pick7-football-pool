@@ -16,6 +16,25 @@ SUPABASE_URL = st.secrets.get("SUPABASE_URL")
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+
+def get_current_season():
+    """The full seasons row with is_current=true (id, season_weeks, ...).
+    Mirrors the same helper in pages/1_Admin.py / app.py -- needed
+    everywhere a read is keyed on week_number alone, since week numbers
+    repeat across seasons, and to drive season-setup options like the
+    week range below."""
+    try:
+        resp = supabase.table("seasons").select("*").eq("is_current", True).limit(1).execute()
+        rows = resp.data or []
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def get_current_season_id():
+    season = get_current_season()
+    return season["id"] if season else None
+
 # Same "remember me" browser storage keys/helpers as app.py -- see there for
 # the full explanation.
 REMEMBER_AT_KEY = "pick7_remember_at"
@@ -109,13 +128,14 @@ if is_admin:
         if "lb_grade_week" not in st.session_state:
             st.session_state["lb_grade_week"] = st.session_state["global_week"]
 
-        grade_week_num = st.selectbox("Week to grade:", options=list(range(1, 17)), key="lb_grade_week")
+        _grade_season_weeks = (get_current_season() or {}).get("season_weeks", 16)
+        grade_week_num = st.selectbox("Week to grade:", options=list(range(1, _grade_season_weeks + 1)), key="lb_grade_week")
 
         if grade_week_num != st.session_state["global_week"]:
             st.session_state["global_week"] = grade_week_num
 
         if st.button("🔄 Refresh Scores & Grade", type="primary", key="lb_grade_btn"):
-            games_in_week = supabase.table("games").select("*").eq("week_number", grade_week_num).execute().data
+            games_in_week = supabase.table("games").select("*").eq("week_number", grade_week_num).eq("season_id", get_current_season_id()).execute().data
 
             if not games_in_week:
                 st.warning(f"No games found for Week {grade_week_num}.")
@@ -262,7 +282,7 @@ try:
     # rows happen to fall past row 1000 just vanishes from the standings.
     # The view avoids this by aggregating server-side, so only one small
     # row per player per week ever crosses the wire.
-    tallies_data = supabase.table("picks_week_tallies").select("username, week_number, wins, losses").execute().data
+    tallies_data = supabase.table("picks_week_tallies").select("username, week_number, wins, losses").eq("season_id", get_current_season_id()).execute().data
 
     if not tallies_data:
         st.info("No player picks have been submitted yet in this league.")
@@ -299,7 +319,8 @@ try:
             if "lb_view_week" not in st.session_state:
                 st.session_state["lb_view_week"] = st.session_state["global_week"]
 
-            selected_week = st.selectbox("Show record for week:", options=list(range(1, 17)), key="lb_view_week")
+            _view_season_weeks = (get_current_season() or {}).get("season_weeks", 16)
+            selected_week = st.selectbox("Show record for week:", options=list(range(1, _view_season_weeks + 1)), key="lb_view_week")
 
             if selected_week != st.session_state["global_week"]:
                 st.session_state["global_week"] = selected_week
@@ -332,7 +353,7 @@ try:
             # selected_week (whatever week they're already viewing standings
             # for above) actually being fully graded, not just partly.
             if is_admin:
-                graded_check_games = supabase.table("games").select("id,status").eq("week_number", selected_week).execute().data or []
+                graded_check_games = supabase.table("games").select("id,status").eq("week_number", selected_week).eq("season_id", get_current_season_id()).execute().data or []
                 graded_check_total = len(graded_check_games)
                 graded_check_pending = sum(1 for g in graded_check_games if g.get("status") != "final")
 

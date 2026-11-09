@@ -27,6 +27,29 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+
+def get_current_season():
+    """The full seasons row with is_current=true (id, pick_count_mode,
+    pick_count_exact, sync_leagues, season_weeks,
+    default_lock_offset_minutes, ...). Every games/picks read below needs
+    the id -- week numbers repeat across seasons (a new season starts back
+    at Week 1), so a read keyed only on week_number would otherwise
+    silently pull in another season's games/picks too, the moment a second
+    season exists. Mirrors the same helper in pages/1_Admin.py. Deliberately
+    not cached, for the same reason noted there: a season rollover
+    mid-session should never leave a read pointed at the outgoing season."""
+    try:
+        resp = supabase.table("seasons").select("*").eq("is_current", True).limit(1).execute()
+        rows = resp.data or []
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def get_current_season_id():
+    season = get_current_season()
+    return season["id"] if season else None
+
 # "Remember me" persistence -- keeps a logged-in session across a full
 # close-and-reopen of the tab/PWA, not just within one still-open browser
 # tab. Streamlit's own session_state only lives as long as that one tab's
@@ -94,7 +117,7 @@ def compute_game_numbers(week_games):
     return numbers
 
 
-def save_picks_atomically(new_picks, game_lookup, week_number, user_id, username):
+def save_picks_atomically(new_picks, game_lookup, week_number, user_id, username, season_id):
     """Writes this player's picks for a week as a single upsert, keyed on
     the picks table's own (user_id, week_number, game_id) unique
     constraint, instead of the old delete-everything-then-insert-in-a-loop
@@ -118,7 +141,14 @@ def save_picks_atomically(new_picks, game_lookup, week_number, user_id, username
         for p in new_picks
     ]
     supabase.table("picks").upsert(payload, on_conflict="user_id,week_number,game_id").execute()
-    delete_query = supabase.table("picks").delete().eq("user_id", user_id).eq("week_number", week_number)
+    # Scoped by season_id too, not just user_id+week_number -- week numbers
+    # repeat across seasons, so without this a cleanup delete for this
+    # week's picks could silently also delete this same player's picks for
+    # the SAME week number in a completely different season.
+    delete_query = (
+        supabase.table("picks").delete()
+        .eq("user_id", user_id).eq("week_number", week_number).eq("season_id", season_id)
+    )
     if new_game_ids:
         delete_query = delete_query.not_.in_("game_id", new_game_ids)
     delete_query.execute()
@@ -292,7 +322,7 @@ def confirm_resubmit(existing_picks_raw, new_picks, game_lookup):
                 queue_picks_pending(new_picks, game_lookup)
             else:
                 try:
-                    save_picks_atomically(new_picks, game_lookup, CURRENT_WEEK, user.id, username)
+                    save_picks_atomically(new_picks, game_lookup, CURRENT_WEEK, user.id, username, CURRENT_SEASON_ID)
                     # One row per submission event (not per pick) -- a Database
                     # Webhook on this table's INSERT is what triggers the admin
                     # push notification, see supabase/functions/send-picks-push.
@@ -596,6 +626,9 @@ if st.session_state.get("access_token"):
             forget_session_in_browser()
             st.session_state["_just_logged_out"] = True
             st.rerun()
+CURRENT_SEASON = get_current_season()
+CURRENT_SEASON_ID = CURRENT_SEASON["id"] if CURRENT_SEASON else None
+
 signup_username = user.user_metadata.get("username", user.email)
 signup_full_name = user.user_metadata.get("full_name", "")
 try:
@@ -634,7 +667,7 @@ if st.sidebar.button("Log Out", use_container_width=True):
 # of the whole games table would silently truncate at Supabase's
 # 1000-row API cap once it grows past that, the same way the
 # Leaderboard page's picks query already did.
-available_week_rows = supabase.table("game_week_status").select("week_number").execute().data
+available_week_rows = supabase.table("game_week_status").select("week_number").eq("season_id", CURRENT_SEASON_ID).execute().data
 available_weeks = sorted({w["week_number"] for w in available_week_rows}, reverse=True)
 
 if not available_weeks:
@@ -672,7 +705,7 @@ EASTERN_TZ = ZoneInfo("America/New_York")
 # queue_picks_pending below -- it's saved as a pending request instead, and
 # an admin approving it is what actually commits it to the real picks table.
 try:
-    _lock_row = supabase.table("week_pick_locks").select("*").eq("week_number", CURRENT_WEEK).maybe_single().execute().data
+    _lock_row = supabase.table("week_pick_locks").select("*").eq("week_number", CURRENT_WEEK).eq("season_id", CURRENT_SEASON_ID).maybe_single().execute().data
 except Exception:
     _lock_row = None
 
@@ -685,7 +718,7 @@ if _lock_row and _lock_row.get("lock_at"):
 try:
     my_exceptions_this_week = (
         supabase.table("pick_lock_exceptions").select("*")
-        .eq("week_number", CURRENT_WEEK).eq("user_id", user.id)
+        .eq("week_number", CURRENT_WEEK).eq("user_id", user.id).eq("season_id", CURRENT_SEASON_ID)
         .order("requested_at", desc=True).execute().data or []
     )
 except Exception:
@@ -756,9 +789,19 @@ if week_locked:
 
 # 4. Pull active week slate from database rows
 try:
-    all_games = supabase.table("games").select("*").eq("week_number", CURRENT_WEEK).execute().data
+    all_games = supabase.table("games").select("*").eq("week_number", CURRENT_WEEK).eq("season_id", CURRENT_SEASON_ID).execute().data
 except Exception:
     all_games = []
+
+# How many picks are required this week: a fixed number (today's behavior,
+# and still the default), or every game on the slate -- e.g. for a playoff
+# season where every game gets picked. Driven by the current season's
+# pick_count_mode/pick_count_exact (see season-setup options).
+_season_pick_mode = (CURRENT_SEASON or {}).get("pick_count_mode", "exact")
+REQUIRED_PICK_COUNT = (
+    len(all_games) if _season_pick_mode == "all"
+    else (CURRENT_SEASON or {}).get("pick_count_exact", 7)
+)
 
 # 5. 🌐 LIVE SCOREBOARD FEED FROM ESPN (fetch_live_scores is defined near the
 # top of this file so the refresh controls above can call .clear() on it)
@@ -1030,7 +1073,7 @@ else:
     # picks" selector further down. Reading other players' own picks table
     # rows is already how the Leaderboard page works for every logged-in
     # user, not just admins, so this doesn't open up anything new.
-    week_picks_all = supabase.table("picks").select("*").eq("week_number", CURRENT_WEEK).execute().data
+    week_picks_all = supabase.table("picks").select("*").eq("week_number", CURRENT_WEEK).eq("season_id", CURRENT_SEASON_ID).execute().data
     existing_picks = [p for p in week_picks_all if p["user_id"] == user.id]
 
     # A pending late submission (see queue_picks_pending) reflects this
@@ -1056,7 +1099,7 @@ else:
     other_players_submitted = sorted(u for u in picks_by_username_this_week if u != username)
 
     current_picks_count = sum(1 for g in all_games if st.session_state.get(f"sel_{g['game_id']}") is not None)
-    ui_max_reached = current_picks_count >= 7
+    ui_max_reached = current_picks_count >= REQUIRED_PICK_COUNT
 
     # Computed immediately (not inside the game-row loop below) so the Lock In
     # button can live in a sticky bar at the top, before any games have rendered.
@@ -1078,7 +1121,7 @@ else:
             number_lookup_player[nums["und_num"]] = {"game_id": g["game_id"], "team": g.get("underdog_team", "")}
 
         numbers_text = st.text_input(
-            "Your 7 picks, comma-separated (e.g. 1,5,9,12,23,78,100):",
+            f"Your {REQUIRED_PICK_COUNT} picks, comma-separated (e.g. 1,5,9,12,23,78,100):",
             key="picks_by_number_input",
         )
 
@@ -1113,8 +1156,8 @@ else:
                     st.error(f"These numbers were entered more than once: {duplicate_numbers}")
                 elif locked_numbers:
                     st.error(f"These games have already started and can't be picked: {locked_numbers}")
-                elif len(entered_numbers) != 7:
-                    st.error(f"You entered {len(entered_numbers)} number(s) -- exactly 7 are required.")
+                elif len(entered_numbers) != REQUIRED_PICK_COUNT:
+                    st.error(f"You entered {len(entered_numbers)} number(s) -- exactly {REQUIRED_PICK_COUNT} are required.")
                 else:
                     preview_rows = []
                     resolved_picks = []
@@ -1134,7 +1177,7 @@ else:
         if st.session_state.get("pending_number_preview"):
             show_number_picks_preview(st.session_state.pending_number_preview)
 
-    pct = min(current_picks_count / 7 * 100, 100)
+    pct = min(current_picks_count / REQUIRED_PICK_COUNT * 100, 100)
 
     # CSS targets the container below by its Streamlit-assigned key class.
     # "fixed" (not "sticky") -- position:sticky is silently broken here because
@@ -1211,7 +1254,7 @@ else:
     with st.container(key="sticky_top_bar"):
         st.markdown(f"""
             <div style="text-align: center; font-weight: 600;">
-                🏈 {current_picks_count} of 7 games selected
+                🏈 {current_picks_count} of {REQUIRED_PICK_COUNT} games selected
                 <div class="sticky-ticker-track">
                     <div class="sticky-ticker-fill" style="width: {pct}%;"></div>
                 </div>
@@ -1241,8 +1284,8 @@ else:
                 st_autorefresh(interval=interval_seconds * 1000, key="scoreboard_autorefresh")
 
         if lock_clicked:
-            if len(chosen_picks) != 7:
-                st.error("Validation Error: You must pick exactly 7 games.")
+            if len(chosen_picks) != REQUIRED_PICK_COUNT:
+                st.error(f"Validation Error: You must pick exactly {REQUIRED_PICK_COUNT} games.")
             elif already_submitted:
                 st.session_state.pending_resubmit = {
                     "existing_picks": existing_picks,
@@ -1255,7 +1298,7 @@ else:
                 queue_picks_pending(chosen_picks, game_lookup)
             else:
                 try:
-                    save_picks_atomically(chosen_picks, game_lookup, CURRENT_WEEK, user.id, username)
+                    save_picks_atomically(chosen_picks, game_lookup, CURRENT_WEEK, user.id, username, CURRENT_SEASON_ID)
                     # One row per submission event (not per pick) -- a Database
                     # Webhook on this table's INSERT is what triggers the admin
                     # push notification, see supabase/functions/send-picks-push.
@@ -1266,7 +1309,7 @@ else:
                         }).execute()
                     except Exception:
                         pass  # non-critical -- picks themselves are already saved
-                    st.success("Boom! Your 7 picks are saved securely.")
+                    st.success(f"Boom! Your {REQUIRED_PICK_COUNT} picks are saved securely.")
 
                     recap_rows = [
                         {

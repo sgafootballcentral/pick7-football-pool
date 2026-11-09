@@ -26,21 +26,42 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-def get_current_season_id():
-    """The id of the seasons row with is_current=true, used to tag every
-    new games/week_pick_locks row this page inserts -- mirrors the PWA's
-    own current_season_id() DB default, just made explicit here too so a
-    season rollover can never leave a row pointing at the wrong year.
-    Deliberately NOT cached: it's one cheap indexed query, and caching it
-    (even briefly) risked tagging a game/lock with the outgoing season if
-    an admin ran "Start New Season" in the PWA and then immediately added
-    a game or set a lock here within the same cache window."""
+def get_current_season():
+    """The full seasons row with is_current=true (id, pick_count_mode,
+    pick_count_exact, sync_leagues, season_weeks,
+    default_lock_offset_minutes, ...), used to tag every new
+    games/week_pick_locks row this page inserts and to drive the
+    season-setup options below. Mirrors the PWA's own current_season_id()
+    DB default, just made explicit here too so a season rollover can never
+    leave a row pointing at the wrong year. Deliberately NOT cached: it's
+    one cheap indexed query, and caching it (even briefly) risked tagging a
+    game/lock with the outgoing season if an admin ran "Start New Season"
+    in the PWA and then immediately added a game or set a lock here within
+    the same cache window."""
     try:
-        resp = supabase.table("seasons").select("id").eq("is_current", True).limit(1).execute()
+        resp = supabase.table("seasons").select("*").eq("is_current", True).limit(1).execute()
         rows = resp.data or []
-        return rows[0]["id"] if rows else None
+        return rows[0] if rows else None
     except Exception:
         return None
+
+
+def get_current_season_id():
+    season = get_current_season()
+    return season["id"] if season else None
+
+
+def required_pick_count(games_list):
+    """How many picks are required for a week, given its games: a fixed
+    number (today's behavior, and still the default), or every game on the
+    slate -- e.g. for a playoff season where every game gets picked. Driven
+    by the current season's pick_count_mode/pick_count_exact (see
+    season-setup options)."""
+    season = get_current_season()
+    mode = (season or {}).get("pick_count_mode", "exact")
+    if mode == "all":
+        return len(games_list)
+    return (season or {}).get("pick_count_exact", 7)
 
 
 # Same "remember me" browser storage keys/helpers as app.py -- this page
@@ -214,7 +235,8 @@ def section_week_selector(key_prefix, master_week, label="Week:"):
         key=f"{key_prefix}_override",
     )
     if override:
-        options = list(range(1, 17))
+        _season_weeks = (get_current_season() or {}).get("season_weeks", 16)
+        options = list(range(1, _season_weeks + 1))
         default_index = options.index(int(master_week)) if int(master_week) in options else 0
         return st.selectbox(label, options=options, index=default_index, key=f"{key_prefix}_week_value")
     st.caption(f"Following the master week selector above: **Week {int(master_week)}**")
@@ -493,9 +515,10 @@ if "global_week" not in st.session_state:
 if "active_week" not in st.session_state:
     st.session_state["active_week"] = st.session_state["global_week"]
 
+_active_week_season_weeks = (get_current_season() or {}).get("season_weeks", 16)
 active_week = st.selectbox(
     "Target Grouping Week Number (For Player Submissions):",
-    options=list(range(1, 17)), key="active_week",
+    options=list(range(1, _active_week_season_weeks + 1)), key="active_week",
 )
 
 if active_week != st.session_state["global_week"]:
@@ -536,6 +559,10 @@ with tab_setup:
                 window_dates = [
                     (start_date + timedelta(days=n)).strftime("%Y%m%d") for n in range(num_days)
                 ]
+                # Which sport(s) to sync from is a season-setup option (e.g. a
+                # CFB Playoffs season syncs CFB only, no NFL playoff games mixed
+                # in) -- defaults to both, matching every season before this.
+                _sync_leagues = (get_current_season() or {}).get("sync_leagues") or ["NFL", "CFB"]
                 leagues_to_fetch = []
                 for day_str in window_dates:
                     # ESPN also silently truncates CFB results to a fraction of
@@ -543,19 +570,22 @@ with tab_setup:
                     # value that used to work fine) -- 500 is comfortably under
                     # whatever their new cap is and still far more than any single
                     # day's games.
-                    leagues_to_fetch.append({
-                        "name": "NFL",
-                        "url": "https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
-                        "params": {"limit": 500, "dates": day_str},
-                    })
-                    leagues_to_fetch.append({
-                        "name": "CFB",
-                        "url": "https://site.web.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard",
-                        "params": {"limit": 500, "groups": 80, "dates": day_str},
-                    })
+                    if "NFL" in _sync_leagues:
+                        leagues_to_fetch.append({
+                            "name": "NFL",
+                            "url": "https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
+                            "params": {"limit": 500, "dates": day_str},
+                        })
+                    if "CFB" in _sync_leagues:
+                        leagues_to_fetch.append({
+                            "name": "CFB",
+                            "url": "https://site.web.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard",
+                            "params": {"limit": 500, "groups": 80, "dates": day_str},
+                        })
 
                 total_games_inserted = 0
                 skipped_no_line = 0
+                earliest_kickoff_iso = None  # tracked below, for the default-lock-offset auto-insert
                 headers = {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                     "Referer": "https://www.espn.com/",
@@ -660,6 +690,8 @@ with tab_setup:
                             odds_string = f"{home_abbr} -0.5"
 
                         total_games_inserted += 1
+                        if kickoff_time and (earliest_kickoff_iso is None or kickoff_time < earliest_kickoff_iso):
+                            earliest_kickoff_iso = kickoff_time
 
                         # Save clean rows straight to your Supabase tables
                         supabase.table("games").insert({
@@ -698,6 +730,30 @@ with tab_setup:
                     except Exception:
                         pass  # already announced -- stay quiet on a re-pull
 
+                    # Default pick-lock offset is a season-setup option: when
+                    # set, and no lock exists yet for this week, auto-set one
+                    # at (earliest kickoff - offset) so the admin doesn't have
+                    # to set a lock by hand every round (e.g. for a playoff
+                    # season with several rounds in quick succession). The
+                    # manual "Set / change the lock time" expander above
+                    # always stays available as an override.
+                    _season_for_lock = get_current_season()
+                    _lock_offset_minutes = (_season_for_lock or {}).get("default_lock_offset_minutes")
+                    if _lock_offset_minutes is not None and earliest_kickoff_iso:
+                        try:
+                            _existing_auto_lock = supabase.table("week_pick_locks").select("id") \
+                                .eq("week_number", target_week).eq("season_id", get_current_season_id()) \
+                                .maybe_single().execute().data
+                            if not _existing_auto_lock:
+                                _earliest_kickoff_dt = datetime.fromisoformat(earliest_kickoff_iso.replace("Z", "+00:00"))
+                                _auto_lock_at = _earliest_kickoff_dt - timedelta(minutes=_lock_offset_minutes)
+                                supabase.table("week_pick_locks").insert({
+                                    "week_number": target_week, "lock_at": _auto_lock_at.isoformat(),
+                                    "set_by": user_id, "season_id": get_current_season_id(),
+                                }).execute()
+                        except Exception:
+                            pass  # non-critical -- admin can still set the lock manually above
+
                 st.session_state.pending_refetch = None
                 st.rerun()
             except Exception as e:
@@ -709,7 +765,7 @@ with tab_setup:
             st.error("Validation Error: Please select both a start date and an end date on the calendar.")
         else:
             start_date, end_date = selected_range
-            existing_picks = supabase.table("picks").select("user_id").eq("week_number", int(active_week)).execute().data
+            existing_picks = supabase.table("picks").select("user_id").eq("week_number", int(active_week)).eq("season_id", get_current_season_id()).execute().data
             if existing_picks:
                 st.session_state.pending_refetch = {
                     "week": int(active_week),
@@ -820,7 +876,7 @@ with tab_setup:
         )
 
         edit_spread_week = section_week_selector("edit_spread_week", active_week, "Week number:")
-        week_games_for_edit = supabase.table("games").select("*").eq("week_number", edit_spread_week).execute().data
+        week_games_for_edit = supabase.table("games").select("*").eq("week_number", edit_spread_week).eq("season_id", get_current_season_id()).execute().data
 
         if not week_games_for_edit:
             st.info(f"No games loaded for Week {edit_spread_week} yet.")
@@ -1004,7 +1060,8 @@ with tab_picks:
     )
     pending_exceptions = (
         supabase.table("pick_lock_exceptions").select("*")
-        .eq("status", "pending").order("requested_at", desc=True).execute().data or []
+        .eq("status", "pending").eq("season_id", get_current_season_id())
+        .order("requested_at", desc=True).execute().data or []
     )
     if not pending_exceptions:
         st.caption("No pending late picks.")
@@ -1043,12 +1100,20 @@ with tab_picks:
                             # no longer in this payload are cleaned up only
                             # after it succeeds.
                             new_game_ids = [p.get("game_id") for p in payload]
+                            # Tagged with the EXCEPTION's own season_id, not
+                            # necessarily "whatever season is current right
+                            # now" -- an admin could in principle be clearing
+                            # out a straggler exception from a season that's
+                            # already ended, and the picks it writes/deletes
+                            # must stay scoped to that exception's own
+                            # season, not wherever is_current has moved on to.
                             upsert_payload = [
                                 {
                                     "user_id": exc["user_id"], "username": exc.get("username"),
                                     "week_number": exc["week_number"], "game_id": p.get("game_id"),
                                     "selected_team": p.get("selected_team"),
                                     "spread_at_pick": p.get("spread_at_pick", ""),
+                                    "season_id": exc.get("season_id"),
                                 }
                                 for p in payload
                             ]
@@ -1056,6 +1121,7 @@ with tab_picks:
                             delete_query = (
                                 supabase.table("picks").delete()
                                 .eq("user_id", exc["user_id"]).eq("week_number", exc["week_number"])
+                                .eq("season_id", exc.get("season_id"))
                             )
                             if new_game_ids:
                                 delete_query = delete_query.not_.in_("game_id", new_game_ids)
@@ -1097,11 +1163,12 @@ with tab_picks:
     st.subheader("📋 Submitted Picks")
     view_week = section_week_selector("view_week_picks", active_week, "Week to view picks for:")
 
-    picks_rows = supabase.table("picks").select("*").eq("week_number", view_week).execute().data
+    _season_id_view = get_current_season_id()
+    picks_rows = supabase.table("picks").select("*").eq("week_number", view_week).eq("season_id", _season_id_view).execute().data
     games_rows = supabase.table("games").select(
         "game_id, display_text, favorite_team, underdog_team, favorite_team_home, "
         "underdog_team_home, spread_value, kickoff_time, league, status, home_score, away_score"
-    ).eq("week_number", view_week).execute().data
+    ).eq("week_number", view_week).eq("season_id", _season_id_view).execute().data
     game_lookup = {g["game_id"]: g for g in games_rows}
     pick_numbers_map = compute_game_numbers(games_rows)
 
@@ -1155,22 +1222,23 @@ with tab_picks:
         uname = p.get("username", "Unknown")
         picks_per_username[uname] = picks_per_username.get(uname, 0) + 1
 
+    _req_view = required_pick_count(games_rows)
     submitted_count = len(picks_per_username)
-    complete_count = sum(1 for n in picks_per_username.values() if n == 7)
+    complete_count = sum(1 for n in picks_per_username.values() if n == _req_view)
     not_started_count = total_players - submitted_count
 
     col_total, col_submitted, col_complete, col_not_started = st.columns(4)
     col_total.metric("Total Players", total_players)
     col_submitted.metric("Submitted (any)", submitted_count)
-    col_complete.metric("Complete (7/7)", complete_count)
+    col_complete.metric(f"Complete ({_req_view}/{_req_view})", complete_count)
     col_not_started.metric("Not Started", not_started_count)
 
     def status_for(n):
         if n == 0:
             return "❌ Not Started"
-        if n == 7:
+        if n == _req_view:
             return "✅ Complete"
-        return f"⏳ {n}/7"
+        return f"⏳ {n}/{_req_view}"
 
     roster_status = pd.DataFrame([
         {
@@ -1266,8 +1334,9 @@ with tab_picks:
 
     picks_export_week = section_week_selector("picks_export_week", active_week)
 
-    picks_export_games = supabase.table("games").select("*").eq("week_number", picks_export_week).execute().data
-    picks_export_picks = supabase.table("picks").select("*").eq("week_number", picks_export_week).execute().data
+    _season_id_export = get_current_season_id()
+    picks_export_games = supabase.table("games").select("*").eq("week_number", picks_export_week).eq("season_id", _season_id_export).execute().data
+    picks_export_picks = supabase.table("picks").select("*").eq("week_number", picks_export_week).eq("season_id", _season_id_export).execute().data
     picks_export_players = supabase.table("players").select("*").order("username").execute().data
 
     if not picks_export_games:
@@ -1360,7 +1429,7 @@ with tab_picks:
         else:
             selected_manual_user_id = player_options[selected_manual_player]
 
-            week_games_for_manual = supabase.table("games").select("*").eq("week_number", manual_pick_week).execute().data
+            week_games_for_manual = supabase.table("games").select("*").eq("week_number", manual_pick_week).eq("season_id", get_current_season_id()).execute().data
 
             if not week_games_for_manual:
                 st.info(f"No games loaded for Week {manual_pick_week} yet.")
@@ -1388,7 +1457,7 @@ with tab_picks:
                     st.dataframe(ref_rows, use_container_width=True, hide_index=True)
 
                 existing_manual_picks = supabase.table("picks").select("*") \
-                    .eq("user_id", selected_manual_user_id).eq("week_number", manual_pick_week).execute().data
+                    .eq("user_id", selected_manual_user_id).eq("week_number", manual_pick_week).eq("season_id", get_current_season_id()).execute().data
 
                 existing_numbers = []
                 for pk in existing_manual_picks:
@@ -1405,8 +1474,9 @@ with tab_picks:
                 if existing_manual_picks:
                     st.caption(f"{selected_manual_player} already has {len(existing_manual_picks)} pick(s) on file for Week {manual_pick_week} -- pre-filled below.")
 
+                _req_manual = required_pick_count(week_games_for_manual)
                 numbers_input = st.text_input(
-                    "Enter their 7 picks by number, comma-separated (e.g. 3,5,11,13,41,45,144):",
+                    f"Enter their {_req_manual} picks by number, comma-separated (e.g. 3,5,11,13,41,45,144):",
                     value=",".join(str(n) for n in existing_numbers),
                     key="manual_pick_numbers_input",
                 )
@@ -1427,8 +1497,8 @@ with tab_picks:
                             st.error(f"These numbers don't match any game this week: {invalid_numbers}")
                         elif duplicate_numbers:
                             st.error(f"These numbers were entered more than once: {duplicate_numbers}")
-                        elif len(entered_numbers) != 7:
-                            st.error(f"You entered {len(entered_numbers)} number(s) -- exactly 7 are required.")
+                        elif len(entered_numbers) != _req_manual:
+                            st.error(f"You entered {len(entered_numbers)} number(s) -- exactly {_req_manual} are required.")
                         else:
                             preview_rows = [
                                 {
@@ -1467,7 +1537,7 @@ with tab_grading:
     grade_week_num = section_week_selector("grade_week", active_week, "Week to grade:")
 
     if st.button("🔄 Refresh Scores & Grade", type="primary"):
-        games_in_week = supabase.table("games").select("*").eq("week_number", grade_week_num).execute().data
+        games_in_week = supabase.table("games").select("*").eq("week_number", grade_week_num).eq("season_id", get_current_season_id()).execute().data
 
         if not games_in_week:
             st.warning(f"No games found for Week {grade_week_num}.")
@@ -2029,7 +2099,7 @@ with tab_exports:
     st.subheader("📊 Export Slate to Excel")
     export_week = section_week_selector("export_week", active_week, "Week to export:")
 
-    export_games = supabase.table("games").select("*").eq("week_number", export_week).execute().data
+    export_games = supabase.table("games").select("*").eq("week_number", export_week).eq("season_id", get_current_season_id()).execute().data
 
     if not export_games:
         st.info(f"No games found for Week {export_week}.")
@@ -2145,7 +2215,7 @@ with tab_exports:
     st.caption("For after the week wraps up -- teams, spread, and final score, with whoever covered highlighted. No kickoff times or TV.")
 
     scores_export_week = section_week_selector("scores_export_week", active_week, "Week to export:")
-    scores_export_games = supabase.table("games").select("*").eq("week_number", scores_export_week).execute().data
+    scores_export_games = supabase.table("games").select("*").eq("week_number", scores_export_week).eq("season_id", get_current_season_id()).execute().data
 
     if not scores_export_games:
         st.info(f"No games found for Week {scores_export_week}.")
@@ -2236,7 +2306,7 @@ with tab_exports:
     # games table would silently truncate at Supabase's 1000-row API cap
     # once it grows past that, the same way the Leaderboard page's picks
     # query already did.
-    all_week_status_rows = supabase.table("game_week_status").select("week_number, any_final").execute().data
+    all_week_status_rows = supabase.table("game_week_status").select("week_number, any_final").eq("season_id", get_current_season_id()).execute().data
     graded_weeks = sorted({g["week_number"] for g in all_week_status_rows if g.get("any_final")})
 
     if not graded_weeks:
@@ -2266,10 +2336,10 @@ with tab_exports:
                 # Pre-fetch each week's games/picks once
                 week_game_numbers, week_games_by_id, week_picks = {}, {}, {}
                 for wk in weeks:
-                    games_this_week = supabase.table("games").select("*").eq("week_number", wk).execute().data
+                    games_this_week = supabase.table("games").select("*").eq("week_number", wk).eq("season_id", get_current_season_id()).execute().data
                     week_game_numbers[wk] = compute_game_numbers(games_this_week)
                     week_games_by_id[wk] = {g["game_id"]: g for g in games_this_week}
-                    week_picks[wk] = supabase.table("picks").select("*").eq("week_number", wk).execute().data
+                    week_picks[wk] = supabase.table("picks").select("*").eq("week_number", wk).eq("season_id", get_current_season_id()).execute().data
 
                 # Build every player's row data first so ranking can happen before writing
                 player_rows_data = []
@@ -2406,10 +2476,10 @@ with tab_exports:
                 ws1 = wb.active
                 ws1.title = f"Week {target_week} Results"[:31]
 
-                week_games = supabase.table("games").select("*").eq("week_number", target_week).execute().data
+                week_games = supabase.table("games").select("*").eq("week_number", target_week).eq("season_id", get_current_season_id()).execute().data
                 numbers_map = compute_game_numbers(week_games)
                 games_map = {g["game_id"]: g for g in week_games}
-                week_picks_rows = supabase.table("picks").select("*").eq("week_number", target_week).execute().data
+                week_picks_rows = supabase.table("picks").select("*").eq("week_number", target_week).eq("season_id", get_current_season_id()).execute().data
 
                 headers1 = ["Player", "Picks", "Wins", "Loss", "W", "L"]
                 style_header(ws1, headers1)
@@ -2484,7 +2554,7 @@ with tab_exports:
 
                 season_totals = {}
                 for wk in all_graded_weeks:
-                    picks_wk = supabase.table("picks").select("user_id, result").eq("week_number", wk).execute().data
+                    picks_wk = supabase.table("picks").select("user_id, result").eq("week_number", wk).eq("season_id", get_current_season_id()).execute().data
                     for pk in picks_wk:
                         uid = pk["user_id"]
                         totals = season_totals.setdefault(uid, {"wins": 0, "losses": 0})
