@@ -673,6 +673,15 @@ st.session_state["current_admin_league_id"] = CURRENT_LEAGUE["id"]
 CURRENT_LEAGUE_ID = CURRENT_LEAGUE["id"]
 is_admin = True
 
+if IS_SUPER_ADMIN:
+    st.markdown(
+        '<div style="display:flex; justify-content:flex-end; margin-bottom:-6px;">'
+        '<span style="background:rgba(255,215,0,0.16); color:#ffd700; font-size:0.7rem; '
+        'font-weight:700; padding:3px 9px; border-radius:999px; letter-spacing:0.02em;">'
+        'Super Admin</span></div>',
+        unsafe_allow_html=True,
+    )
+
 st.success(f"🔓 Commissioner Dashboard Unlocked! — Administering **{CURRENT_LEAGUE['name']}**")
 
 # Bidirectional week sync with the main app page (and Leaderboard), via a single
