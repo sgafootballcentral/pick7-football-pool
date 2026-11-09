@@ -1894,6 +1894,10 @@ async function openAccountMenu() {
         ` : ""}
 
         ${state.isAdmin ? `
+          <button class="btn btn-secondary" id="account-edit-league-btn" style="margin-bottom:10px;">Edit League Settings…</button>
+        ` : ""}
+
+        ${state.isAdmin ? `
           <a class="btn btn-secondary" href="${escapeHtml(buildAdminUrl())}" target="_blank" rel="noopener"
              style="text-decoration:none; margin-bottom:10px;">Admin ↗</a>
         ` : ""}
@@ -2051,6 +2055,10 @@ async function openAccountMenu() {
       openStartSeasonPanel();
     });
 
+    wrap.querySelector("#account-edit-league-btn")?.addEventListener("click", () => {
+      openEditLeaguePanel();
+    });
+
     wrap.querySelector("#account-logout-btn")?.addEventListener("click", async () => {
       wrap.remove();
       await supabase.auth.signOut();
@@ -2156,6 +2164,145 @@ async function openAccountMenu() {
       msg = "Couldn't load players: " + (err.message || err);
     }
     loading = false;
+    panelRedraw();
+  }
+
+  // Any league admin: rename this league and edit its current season's
+  // settings (picks per week, which sports it syncs from, default
+  // pick-lock) via the update_league_settings RPC. Season length is the
+  // one field gated to state.isSuperAdmin here, mirroring the RPC's own
+  // server-side check -- a regular league admin's save never sends
+  // p_season_weeks, so the super-admin check never even runs for them.
+  // Opens as its own stacked modal, same pattern as Start New Season.
+  function openEditLeaguePanel() {
+    const season = state.currentSeason;
+    const league = state.currentLeague;
+    if (!season || !league) return;
+    const panel = document.createElement("div");
+    panel.className = "modal-backdrop";
+    document.body.appendChild(panel);
+
+    let saving = false;
+    let msg = "";
+    let pickCountMode = season.pick_count_mode === "all" ? "all" : "exact";
+
+    function panelRedraw() {
+      const syncLeagues = season.sync_leagues || ["NFL", "CFB"];
+      panel.innerHTML = `
+        <div class="modal-sheet">
+          <h3 style="text-align:center; margin-top:0;">Edit League</h3>
+          <div class="field">
+            <label>League name</label>
+            <input type="text" id="edit-league-name" value="${escapeHtml(league.name)}">
+          </div>
+          <div class="hint" style="margin: 2px 0 10px; text-transform:uppercase; letter-spacing:0.04em; font-weight:700; font-size:0.78rem;">Current Season</div>
+          <div class="hint" style="margin-bottom:10px;">These apply to the season already in progress — changing them doesn't touch past weeks' games or picks.</div>
+          <div class="field">
+            <label>Picks per week</label>
+            <div style="margin-bottom:8px;">
+              <label style="font-weight:normal; display:block; margin-bottom:4px;">
+                <input type="radio" name="edit-league-pick-mode" id="edit-league-pick-exact" value="exact" ${pickCountMode === "exact" ? "checked" : ""}>
+                Exactly <input type="number" id="edit-league-pick-count" value="${season.pick_count_exact || 7}" min="1" style="width:60px; display:inline-block;" ${pickCountMode === "exact" ? "" : "disabled"}> games
+              </label>
+              <label style="font-weight:normal; display:block;">
+                <input type="radio" name="edit-league-pick-mode" id="edit-league-pick-all" value="all" ${pickCountMode === "all" ? "checked" : ""}>
+                Every game that week
+              </label>
+            </div>
+          </div>
+          <div class="field">
+            <label>Sync games from</label>
+            <div>
+              <label style="font-weight:normal; margin-right:14px;"><input type="checkbox" id="edit-league-league-nfl" ${syncLeagues.includes("NFL") ? "checked" : ""}> NFL</label>
+              <label style="font-weight:normal;"><input type="checkbox" id="edit-league-league-cfb" ${syncLeagues.includes("CFB") ? "checked" : ""}> CFB</label>
+            </div>
+          </div>
+          <div class="field">
+            <label>Default pick-lock (optional)</label>
+            <input type="number" id="edit-league-lock-offset" min="0" value="${season.default_lock_offset_minutes ?? ''}" placeholder="minutes before kickoff">
+            <div class="hint">Leave blank to set lock times by hand each week.</div>
+          </div>
+          <div class="hint" style="margin: 14px 0 7px; text-transform:uppercase; letter-spacing:0.04em; font-weight:700; font-size:0.78rem;">Season Length</div>
+          ${state.isSuperAdmin ? `
+            <div class="hint" style="margin-bottom:10px;">Changing this can add or remove weeks that may already have games or picks scheduled.</div>
+            <div class="field">
+              <input type="number" id="edit-league-season-weeks" value="${season.season_weeks || 16}" min="1">
+            </div>
+          ` : `
+            <div class="hint" style="margin-bottom:10px;">🔒 Only the account's super admin can change this, since it can add or remove weeks that may already have games or picks scheduled.</div>
+            <div class="field" style="opacity:0.45; pointer-events:none;">
+              <input type="number" value="${season.season_weeks || 16}" disabled>
+            </div>
+          `}
+          <div class="hint" style="min-height:1.2em; margin-bottom:10px;">${msg ? escapeHtml(msg) : ""}</div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" id="edit-league-cancel-btn" ${saving ? "disabled" : ""}>Cancel</button>
+            <button class="btn btn-primary" id="edit-league-save-btn" ${saving ? "disabled" : ""}>
+              ${saving ? "Saving…" : "Save Changes"}
+            </button>
+          </div>
+        </div>
+      `;
+      panel.querySelector("#edit-league-pick-exact")?.addEventListener("change", () => { pickCountMode = "exact"; panelRedraw(); });
+      panel.querySelector("#edit-league-pick-all")?.addEventListener("change", () => { pickCountMode = "all"; panelRedraw(); });
+      panel.querySelector("#edit-league-cancel-btn")?.addEventListener("click", () => panel.remove());
+      panel.querySelector("#edit-league-save-btn")?.addEventListener("click", async () => {
+        const name = (panel.querySelector("#edit-league-name").value || "").trim();
+        const pickCountExact = parseInt(panel.querySelector("#edit-league-pick-count").value, 10);
+        const lockOffsetRaw = (panel.querySelector("#edit-league-lock-offset").value || "").trim();
+        const lockOffset = lockOffsetRaw === "" ? null : parseInt(lockOffsetRaw, 10);
+        const syncLeaguesNew = [
+          panel.querySelector("#edit-league-league-nfl").checked ? "NFL" : null,
+          panel.querySelector("#edit-league-league-cfb").checked ? "CFB" : null,
+        ].filter(Boolean);
+        const seasonWeeksInput = panel.querySelector("#edit-league-season-weeks");
+        const seasonWeeks = state.isSuperAdmin && seasonWeeksInput ? parseInt(seasonWeeksInput.value, 10) : null;
+
+        if (!name) {
+          msg = "League name cannot be blank.";
+          panelRedraw();
+          return;
+        }
+        if (!syncLeaguesNew.length) {
+          msg = "Pick at least one league to sync games from.";
+          panelRedraw();
+          return;
+        }
+        if (pickCountMode === "exact" && (!pickCountExact || pickCountExact < 1)) {
+          msg = "Enter how many games each player picks (at least 1).";
+          panelRedraw();
+          return;
+        }
+        if (state.isSuperAdmin && (!seasonWeeks || seasonWeeks < 1)) {
+          msg = "Enter a valid season length.";
+          panelRedraw();
+          return;
+        }
+        saving = true;
+        msg = "";
+        panelRedraw();
+        try {
+          await supabase.rpc("update_league_settings", {
+            p_league_id: league.id,
+            p_name: name,
+            p_pick_count_mode: pickCountMode,
+            p_pick_count_exact: pickCountMode === "exact" ? pickCountExact : 7,
+            p_sync_leagues: syncLeaguesNew,
+            p_default_lock_offset_minutes: lockOffset,
+            p_season_weeks: seasonWeeks,
+          });
+          await refreshLeagues();
+          await refreshCurrentSeason();
+          panel.remove();
+          redraw();
+        } catch (err) {
+          msg = "Couldn't save: " + (err.message || err);
+          saving = false;
+          panelRedraw();
+        }
+      });
+    }
+
     panelRedraw();
   }
 
