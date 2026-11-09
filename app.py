@@ -28,27 +28,78 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-def get_current_season():
-    """The full seasons row with is_current=true (id, pick_count_mode,
-    pick_count_exact, sync_leagues, season_weeks,
+def get_current_season(league_id):
+    """The full seasons row with is_current=true for this league (id,
+    pick_count_mode, pick_count_exact, sync_leagues, season_weeks,
     default_lock_offset_minutes, ...). Every games/picks read below needs
     the id -- week numbers repeat across seasons (a new season starts back
     at Week 1), so a read keyed only on week_number would otherwise
     silently pull in another season's games/picks too, the moment a second
-    season exists. Mirrors the same helper in pages/1_Admin.py. Deliberately
-    not cached, for the same reason noted there: a season rollover
-    mid-session should never leave a read pointed at the outgoing season."""
+    season exists. "Current" is now per-league (seasons.league_id), not
+    global, so a league_id is required -- without it this could silently
+    resolve to some OTHER league's current season. Mirrors the same helper
+    in pages/1_Admin.py. Deliberately not cached, for the same reason noted
+    there: a season rollover mid-session should never leave a read pointed
+    at the outgoing season."""
     try:
-        resp = supabase.table("seasons").select("*").eq("is_current", True).limit(1).execute()
+        resp = (
+            supabase.table("seasons").select("*")
+            .eq("league_id", league_id).eq("is_current", True).limit(1).execute()
+        )
         rows = resp.data or []
         return rows[0] if rows else None
     except Exception:
         return None
 
 
-def get_current_season_id():
-    season = get_current_season()
+def get_current_season_id(league_id):
+    season = get_current_season(league_id)
     return season["id"] if season else None
+
+
+def get_user_leagues(user_id):
+    """Every league this user belongs to, with their role in each
+    (league_members joined to leagues). Powers the league switcher -- a
+    user who belongs to just one league never sees it at all."""
+    try:
+        resp = (
+            supabase.table("league_members")
+            .select("league_id, role, leagues(id, name, invite_code)")
+            .eq("user_id", user_id).execute()
+        )
+        rows = resp.data or []
+        return [
+            {
+                "id": r["leagues"]["id"],
+                "name": r["leagues"]["name"],
+                "invite_code": r["leagues"]["invite_code"],
+                "role": r["role"],
+            }
+            for r in rows if r.get("leagues")
+        ]
+    except Exception:
+        return []
+
+
+def is_league_admin(league_id, user_id):
+    """Mirrors the is_league_admin() SQL function: a global
+    league_users.role == 'admin' row is a super-admin (admin of every
+    league automatically); otherwise falls back to this specific league's
+    own league_members role."""
+    try:
+        role_resp = supabase.table("league_users").select("role").eq("id", user_id).execute()
+        if role_resp.data and role_resp.data[0].get("role") == "admin":
+            return True
+    except Exception:
+        pass
+    try:
+        member_resp = (
+            supabase.table("league_members").select("role")
+            .eq("league_id", league_id).eq("user_id", user_id).execute()
+        )
+        return bool(member_resp.data) and member_resp.data[0].get("role") == "admin"
+    except Exception:
+        return False
 
 # "Remember me" persistence -- keeps a logged-in session across a full
 # close-and-reopen of the tab/PWA, not just within one still-open browser
@@ -626,9 +677,6 @@ if st.session_state.get("access_token"):
             forget_session_in_browser()
             st.session_state["_just_logged_out"] = True
             st.rerun()
-CURRENT_SEASON = get_current_season()
-CURRENT_SEASON_ID = CURRENT_SEASON["id"] if CURRENT_SEASON else None
-
 signup_username = user.user_metadata.get("username", user.email)
 signup_full_name = user.user_metadata.get("full_name", "")
 try:
@@ -661,6 +709,56 @@ if st.sidebar.button("Log Out", use_container_width=True):
     forget_session_in_browser()
     st.session_state["_just_logged_out"] = True
     st.rerun()
+
+# League resolution -- which league's season/games/roster this page reads.
+# A brand new player (just inserted into `players` above, nothing in
+# league_members yet) can't do anything until they join one, so that's
+# gated here before anything league-scoped runs below.
+user_leagues = get_user_leagues(user.id)
+if not user_leagues:
+    st.warning("You're not part of a league yet. Ask your league's admin for an invite code to join.")
+    join_code_input = st.text_input("Invite code", key="app_join_code").strip()
+    if st.button("Join League", key="app_join_btn"):
+        if not join_code_input:
+            st.error("Enter an invite code first.")
+        else:
+            try:
+                supabase.rpc("join_league_by_code", {"p_code": join_code_input}).execute()
+                st.success("Joined! Loading your league...")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Couldn't join with that code: {e}")
+    st.stop()
+
+if len(user_leagues) == 1:
+    CURRENT_LEAGUE = user_leagues[0]
+else:
+    _remembered_league_id = st.session_state.get("current_league_id")
+    _league_idx = next(
+        (i for i, l in enumerate(user_leagues) if l["id"] == _remembered_league_id), 0
+    )
+    CURRENT_LEAGUE = st.sidebar.selectbox(
+        "League", options=user_leagues, index=_league_idx,
+        format_func=lambda l: l["name"], key="app_league_selector",
+    )
+st.session_state["current_league_id"] = CURRENT_LEAGUE["id"]
+CURRENT_LEAGUE_ID = CURRENT_LEAGUE["id"]
+
+with st.sidebar.expander("🔑 Join another league"):
+    other_join_code = st.text_input("Invite code", key="app_join_code_other").strip()
+    if st.button("Join League", key="app_join_btn_other"):
+        if not other_join_code:
+            st.error("Enter an invite code first.")
+        else:
+            try:
+                supabase.rpc("join_league_by_code", {"p_code": other_join_code}).execute()
+                st.success("Joined! Switch to it above.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Couldn't join with that code: {e}")
+
+CURRENT_SEASON = get_current_season(CURRENT_LEAGUE_ID)
+CURRENT_SEASON_ID = CURRENT_SEASON["id"] if CURRENT_SEASON else None
 
 # game_week_status pre-aggregates one row per week instead of one row
 # per game -- same reason picks_week_tallies exists: an unfiltered pull
@@ -810,13 +908,7 @@ espn_scores = fetch_live_scores(all_games) if all_games else {}
 if not all_games:
     st.info(f"No games loaded yet for Week {CURRENT_WEEK}.")
 else:
-    is_admin = False
-    try:
-        role_resp = supabase.table("league_users").select("role").eq("id", user.id).execute()
-        if role_resp.data and role_resp.data[0].get("role") == "admin":
-            is_admin = True
-    except Exception:
-        pass
+    is_admin = is_league_admin(CURRENT_LEAGUE_ID, user.id)
 
     if is_admin:
         def build_slate_workbook_for_export(games_rows, week_number):

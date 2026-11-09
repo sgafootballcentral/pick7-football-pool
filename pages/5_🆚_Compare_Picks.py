@@ -17,15 +17,54 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 def get_current_season_id():
-    """The id of the seasons row with is_current=true. Mirrors the same
-    helper in pages/1_Admin.py / app.py -- needed everywhere a read is
-    keyed on week_number alone, since week numbers repeat across seasons."""
+    """The id of the seasons row with is_current=true for CURRENT_LEAGUE_ID.
+    Mirrors the same helper in pages/1_Admin.py / app.py -- needed
+    everywhere a read is keyed on week_number alone, since week numbers
+    repeat across seasons. "Current" is per-league now, not global --
+    CURRENT_LEAGUE_ID is resolved once, below, before this is ever called."""
     try:
-        resp = supabase.table("seasons").select("id").eq("is_current", True).limit(1).execute()
+        resp = (
+            supabase.table("seasons").select("id")
+            .eq("league_id", CURRENT_LEAGUE_ID).eq("is_current", True).limit(1).execute()
+        )
         rows = resp.data or []
         return rows[0]["id"] if rows else None
     except Exception:
         return None
+
+
+def get_user_leagues(uid):
+    """Every league this user belongs to, with their role in each."""
+    try:
+        resp = (
+            supabase.table("league_members")
+            .select("league_id, role, leagues(id, name, invite_code)")
+            .eq("user_id", uid).execute()
+        )
+        rows = resp.data or []
+        return [
+            {
+                "id": r["leagues"]["id"], "name": r["leagues"]["name"],
+                "invite_code": r["leagues"]["invite_code"], "role": r["role"],
+            }
+            for r in rows if r.get("leagues")
+        ]
+    except Exception:
+        return []
+
+
+def get_league_players(league_id):
+    """All players on this league's roster (league_members joined to
+    players)."""
+    try:
+        resp = (
+            supabase.table("league_members").select("players(*)")
+            .eq("league_id", league_id).execute()
+        )
+        rows = resp.data or []
+        return [r["players"] for r in rows if r.get("players")]
+    except Exception:
+        return []
 
 # Same "remember me" browser storage keys/helpers as app.py -- see there for
 # the full explanation. This page doesn't drive its own login, but a
@@ -83,6 +122,22 @@ if st.session_state.get("access_token"):
 
 user = st.session_state.user
 username = user.user_metadata.get("username", user.email)
+
+user_leagues_cmp = get_user_leagues(user.id)
+if not user_leagues_cmp:
+    st.warning("You're not part of a league yet. Join one from the home page first.")
+    st.stop()
+if len(user_leagues_cmp) == 1:
+    CURRENT_LEAGUE_ID = user_leagues_cmp[0]["id"]
+else:
+    _cmp_remembered_id = st.session_state.get("current_league_id")
+    _cmp_idx = next((i for i, l in enumerate(user_leagues_cmp) if l["id"] == _cmp_remembered_id), 0)
+    _cmp_current_league = st.sidebar.selectbox(
+        "League", options=user_leagues_cmp, index=_cmp_idx,
+        format_func=lambda l: l["name"], key="cmp_league_selector",
+    )
+    st.session_state["current_league_id"] = _cmp_current_league["id"]
+    CURRENT_LEAGUE_ID = _cmp_current_league["id"]
 
 EASTERN_TZ = ZoneInfo("America/New_York")
 
@@ -166,7 +221,7 @@ week_picks = supabase.table("picks").select("*").eq("week_number", CURRENT_WEEK)
 # across two different rows/columns here (their old name and their new
 # one) instead of keeping them together under whoever they are now.
 # Same fix already applied to docs/js/compare.js and the Leaderboard.
-current_usernames_resp = supabase.table("players").select("id, username").execute().data or []
+current_usernames_resp = get_league_players(CURRENT_LEAGUE_ID)
 current_username_by_id = {row["id"]: row["username"] for row in current_usernames_resp if row.get("username")}
 
 picks_by_username = {}

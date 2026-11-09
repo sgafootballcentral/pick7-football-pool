@@ -71,13 +71,25 @@ if "user" not in st.session_state or not st.session_state.user:
 user = st.session_state.user
 username = user.user_metadata.get("username", user.email)
 
-is_admin = False
-try:
-    role_resp = supabase.table("league_users").select("role").eq("id", user.id).execute()
-    if role_resp.data and role_resp.data[0].get("role") == "admin":
-        is_admin = True
-except Exception:
-    pass
+def is_admin_anywhere(uid):
+    """True if this user is a super-admin, or an admin of at least one
+    league. Chat is still one shared room for everyone regardless of
+    league, so admin status here just answers whether this person can
+    moderate chat at all -- not which league."""
+    try:
+        role_resp = supabase.table("league_users").select("role").eq("id", uid).execute()
+        if role_resp.data and role_resp.data[0].get("role") == "admin":
+            return True
+    except Exception:
+        pass
+    try:
+        member_resp = supabase.table("league_members").select("role").eq("user_id", uid).eq("role", "admin").execute()
+        return bool(member_resp.data)
+    except Exception:
+        return False
+
+
+is_admin = is_admin_anywhere(user.id)
 
 st.title("💬 League Chat")
 st.caption("Messages stay here for everyone to see until an admin removes them.")

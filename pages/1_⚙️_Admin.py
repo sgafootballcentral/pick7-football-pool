@@ -6,6 +6,7 @@ import time as time_module
 import io
 import json
 import uuid
+from urllib.parse import quote as url_quote
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 from supabase import create_client, Client
@@ -27,19 +28,24 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 def get_current_season():
-    """The full seasons row with is_current=true (id, pick_count_mode,
-    pick_count_exact, sync_leagues, season_weeks,
+    """The full seasons row with is_current=true for CURRENT_LEAGUE_ID (id,
+    pick_count_mode, pick_count_exact, sync_leagues, season_weeks,
     default_lock_offset_minutes, ...), used to tag every new
     games/week_pick_locks row this page inserts and to drive the
-    season-setup options below. Mirrors the PWA's own current_season_id()
-    DB default, just made explicit here too so a season rollover can never
-    leave a row pointing at the wrong year. Deliberately NOT cached: it's
-    one cheap indexed query, and caching it (even briefly) risked tagging a
-    game/lock with the outgoing season if an admin ran "Start New Season"
-    in the PWA and then immediately added a game or set a lock here within
-    the same cache window."""
+    season-setup options below. "Current" is per-league now, not global --
+    CURRENT_LEAGUE_ID is set once, right after login/admin resolution below,
+    before anything on this page calls this. Mirrors the PWA's own
+    current_season_id() DB default, just made explicit here too so a season
+    rollover can never leave a row pointing at the wrong year. Deliberately
+    NOT cached: it's one cheap indexed query, and caching it (even briefly)
+    risked tagging a game/lock with the outgoing season if an admin ran
+    "Start New Season" in the PWA and then immediately added a game or set
+    a lock here within the same cache window."""
     try:
-        resp = supabase.table("seasons").select("*").eq("is_current", True).limit(1).execute()
+        resp = (
+            supabase.table("seasons").select("*")
+            .eq("league_id", CURRENT_LEAGUE_ID).eq("is_current", True).limit(1).execute()
+        )
         rows = resp.data or []
         return rows[0] if rows else None
     except Exception:
@@ -49,6 +55,100 @@ def get_current_season():
 def get_current_season_id():
     season = get_current_season()
     return season["id"] if season else None
+
+
+def get_user_leagues(uid):
+    """Every league this user belongs to, with their role in each
+    (league_members joined to leagues)."""
+    try:
+        resp = (
+            supabase.table("league_members")
+            .select("league_id, role, leagues(id, name, invite_code)")
+            .eq("user_id", uid).execute()
+        )
+        rows = resp.data or []
+        return [
+            {
+                "id": r["leagues"]["id"],
+                "name": r["leagues"]["name"],
+                "invite_code": r["leagues"]["invite_code"],
+                "role": r["role"],
+            }
+            for r in rows if r.get("leagues")
+        ]
+    except Exception:
+        return []
+
+
+def is_global_super_admin(uid):
+    """The original, single global admin flag -- a super-admin, admin of
+    every league automatically. Gates the Leagues section (create a league,
+    see every league's roster) separately from ordinary per-league admin."""
+    try:
+        resp = supabase.table("league_users").select("role").eq("id", uid).execute()
+        return bool(resp.data) and resp.data[0].get("role") == "admin"
+    except Exception:
+        return False
+
+
+def is_league_admin(league_id, uid):
+    """Mirrors the is_league_admin() SQL function: a global super-admin, or
+    this specific league's own league_members admin."""
+    if is_global_super_admin(uid):
+        return True
+    try:
+        member_resp = (
+            supabase.table("league_members").select("role")
+            .eq("league_id", league_id).eq("user_id", uid).execute()
+        )
+        return bool(member_resp.data) and member_resp.data[0].get("role") == "admin"
+    except Exception:
+        return False
+
+
+def get_admin_leagues(uid):
+    """Leagues this user can administer right now: every league, for a
+    global super-admin ("you can see and manage every league"), or just the
+    league(s) where they hold a league_members admin role otherwise."""
+    if is_global_super_admin(uid):
+        try:
+            resp = supabase.table("leagues").select("id, name, invite_code").order("name").execute()
+            return resp.data or []
+        except Exception:
+            return []
+    try:
+        resp = (
+            supabase.table("league_members")
+            .select("league_id, role, leagues(id, name, invite_code)")
+            .eq("user_id", uid).eq("role", "admin").execute()
+        )
+        rows = resp.data or []
+        return [
+            {"id": r["leagues"]["id"], "name": r["leagues"]["name"], "invite_code": r["leagues"]["invite_code"]}
+            for r in rows if r.get("leagues")
+        ]
+    except Exception:
+        return []
+
+
+def get_league_players(league_id, order_by=None):
+    """All players on this league's roster (league_members joined to
+    players), replacing a bare, unscoped players-table read now that there
+    can be more than one league. order_by, given as a players column name,
+    sorts the result client-side."""
+    try:
+        resp = (
+            supabase.table("league_members")
+            .select("players(*)")
+            .eq("league_id", league_id).execute()
+        )
+        rows = resp.data or []
+        players_list = [r["players"] for r in rows if r.get("players")]
+        if order_by:
+            players_list.sort(key=lambda pl: (pl.get(order_by) or "").lower())
+        return players_list
+    except Exception:
+        return []
 
 
 def required_pick_count(games_list):
@@ -386,22 +486,34 @@ def confirm_merge(info):
 
 @st.dialog("⚠️ Delete This Player?")
 def confirm_delete_player(info):
-    detail = f"This will permanently delete **{info['name']}**"
-    if info["picks_count"]:
-        detail += f", along with **{info['picks_count']} pick(s)** across **{info['weeks_count']} week(s)**"
-    detail += ". This cannot be undone."
+    if info.get("in_other_leagues"):
+        detail = (
+            f"**{info['name']}** is also in another league, so this will only remove them from "
+            "**this** league -- their account and picks elsewhere are untouched."
+        )
+    else:
+        detail = f"This will permanently delete **{info['name']}**"
+        if info["picks_count"]:
+            detail += f", along with **{info['picks_count']} pick(s)** across **{info['weeks_count']} week(s)**"
+        detail += ". This cannot be undone."
     st.write(detail)
 
     col_yes, col_no = st.columns(2)
     with col_yes:
-        confirm_clicked = st.button("Yes, delete", type="primary", use_container_width=True)
+        confirm_clicked = st.button(
+            "Yes, remove" if info.get("in_other_leagues") else "Yes, delete",
+            type="primary", use_container_width=True,
+        )
     with col_no:
         cancel_clicked = st.button("Cancel", use_container_width=True)
 
     if confirm_clicked:
         try:
-            supabase.table("picks").delete().eq("user_id", info["player_id"]).execute()
-            supabase.table("players").delete().eq("id", info["player_id"]).execute()
+            if info.get("in_other_leagues"):
+                supabase.table("league_members").delete().eq("league_id", CURRENT_LEAGUE_ID).eq("user_id", info["player_id"]).execute()
+            else:
+                supabase.table("picks").delete().eq("user_id", info["player_id"]).execute()
+                supabase.table("players").delete().eq("id", info["player_id"]).execute()
             st.session_state.pending_player_delete = None
             st.rerun()
         except Exception as e:
@@ -484,23 +596,29 @@ if st.session_state.get("access_token"):
             st.stop()
 
 user_id = st.session_state.user.id
-is_admin = False
+IS_SUPER_ADMIN = is_global_super_admin(user_id)
+admin_leagues = get_admin_leagues(user_id)
 
-try:
-    response = supabase.table("league_users").select("role").eq("id", user_id).execute()
-    current_user_records = response.data
-    if current_user_records and len(current_user_records) > 0:
-        if current_user_records[0].get("role") == "admin":
-            is_admin = True
-except Exception as e:
-    st.error(f"Database security check failed: {e}")
-    is_admin = False
-
-if not is_admin:
-    st.error("🚫 Access Denied. Your profile role must be set to 'admin' in your database.")
+if not admin_leagues:
+    st.error("🚫 Access Denied. You're not an admin of any league.")
     st.stop()
 
-st.success("🔓 Commissioner Dashboard Unlocked!")
+if len(admin_leagues) == 1:
+    CURRENT_LEAGUE = admin_leagues[0]
+else:
+    _remembered_admin_league_id = st.session_state.get("current_admin_league_id")
+    _admin_league_idx = next(
+        (i for i, l in enumerate(admin_leagues) if l["id"] == _remembered_admin_league_id), 0
+    )
+    CURRENT_LEAGUE = st.sidebar.selectbox(
+        "Administering league", options=admin_leagues, index=_admin_league_idx,
+        format_func=lambda l: l["name"], key="admin_league_selector",
+    )
+st.session_state["current_admin_league_id"] = CURRENT_LEAGUE["id"]
+CURRENT_LEAGUE_ID = CURRENT_LEAGUE["id"]
+is_admin = True
+
+st.success(f"🔓 Commissioner Dashboard Unlocked! — Administering **{CURRENT_LEAGUE['name']}**")
 
 # Bidirectional week sync with the main app page (and Leaderboard), via a single
 # shared "global_week" value. IMPORTANT: Streamlit deletes a widget's own
@@ -525,8 +643,8 @@ if active_week != st.session_state["global_week"]:
     st.session_state["global_week"] = active_week
 
 
-tab_setup, tab_picks, tab_grading, tab_players, tab_exports, tab_requests = st.tabs([
-    "🗓️ Weekly Setup", "📋 Picks", "🏁 Grading", "👥 Players", "📤 Exports", "🗳️ Requests & Votes",
+tab_setup, tab_picks, tab_grading, tab_players, tab_exports, tab_requests, tab_leagues = st.tabs([
+    "🗓️ Weekly Setup", "📋 Picks", "🏁 Grading", "👥 Players", "📤 Exports", "🗳️ Requests & Votes", "🏈 Leagues",
 ])
 
 with tab_setup:
@@ -1194,7 +1312,7 @@ with tab_picks:
 
     score_label_map = {g["game_id"]: _score_label_for_game(g) for g in games_rows}
 
-    all_players_rows = supabase.table("players").select("username, full_name").execute().data
+    all_players_rows = get_league_players(CURRENT_LEAGUE_ID)
     total_players = len(all_players_rows)
     full_name_by_username = {p["username"]: p.get("full_name") for p in all_players_rows}
 
@@ -1337,7 +1455,7 @@ with tab_picks:
     _season_id_export = get_current_season_id()
     picks_export_games = supabase.table("games").select("*").eq("week_number", picks_export_week).eq("season_id", _season_id_export).execute().data
     picks_export_picks = supabase.table("picks").select("*").eq("week_number", picks_export_week).eq("season_id", _season_id_export).execute().data
-    picks_export_players = supabase.table("players").select("*").order("username").execute().data
+    picks_export_players = get_league_players(CURRENT_LEAGUE_ID, order_by="username")
 
     if not picks_export_games:
         st.info(f"No games loaded for Week {picks_export_week} yet.")
@@ -1416,7 +1534,7 @@ with tab_picks:
 
     manual_pick_week = section_week_selector("manual_pick_week", active_week)
 
-    players_roster = supabase.table("players").select("*").execute().data
+    players_roster = get_league_players(CURRENT_LEAGUE_ID)
     if not players_roster:
         st.info("No players found yet -- add one above, or have them log in once.")
     else:
@@ -1745,7 +1863,7 @@ with tab_players:
             st.session_state.roster_edit_done = None
             st.rerun()
     else:
-        roster_rows = supabase.table("players").select("id, username, full_name").order("username").execute().data or []
+        roster_rows = get_league_players(CURRENT_LEAGUE_ID, order_by="username") or []
         if not roster_rows:
             st.info("No players yet.")
         else:
@@ -1859,9 +1977,13 @@ with tab_players:
             st.error("Enter a name.")
         else:
             try:
+                _new_player_id = str(uuid.uuid4())
                 supabase.table("players").insert({
-                    "id": str(uuid.uuid4()),
+                    "id": _new_player_id,
                     "username": manual_player_name.strip(),
+                }).execute()
+                supabase.table("league_members").insert({
+                    "league_id": CURRENT_LEAGUE_ID, "user_id": _new_player_id, "role": "player",
                 }).execute()
                 st.success(f"Added {manual_player_name.strip()}.")
                 st.rerun()
@@ -1886,8 +2008,9 @@ with tab_players:
         if not raw_names:
             st.error("Paste at least one name.")
         else:
-            existing_players = supabase.table("players").select("username").execute().data
-            existing_usernames = {p["username"] for p in existing_players}
+            # Scoped to THIS league's roster, not every player system-wide --
+            # the same display name is fine in two different leagues.
+            existing_usernames = {p["username"] for p in get_league_players(CURRENT_LEAGUE_ID)}
 
             added, skipped = [], []
             for name in raw_names:
@@ -1895,9 +2018,13 @@ with tab_players:
                     skipped.append(name)
                     continue
                 try:
+                    _bulk_player_id = str(uuid.uuid4())
                     supabase.table("players").insert({
-                        "id": str(uuid.uuid4()),
+                        "id": _bulk_player_id,
                         "username": name,
+                    }).execute()
+                    supabase.table("league_members").insert({
+                        "league_id": CURRENT_LEAGUE_ID, "user_id": _bulk_player_id, "role": "player",
                     }).execute()
                     added.append(name)
                     existing_usernames.add(name)  # guard against duplicate lines in the same paste
@@ -1916,7 +2043,7 @@ with tab_players:
     st.subheader("🔀 Merge a Manual Player into a Real Account")
     st.caption("Once someone you added manually creates a real login, combine their pick history under the real account.")
 
-    merge_players_roster = supabase.table("players").select("*").order("username").execute().data
+    merge_players_roster = get_league_players(CURRENT_LEAGUE_ID, order_by="username")
     if len(merge_players_roster) < 2:
         st.info("Need at least two player entries to merge.")
     else:
@@ -1977,7 +2104,7 @@ with tab_players:
     # 14. PLAYER PAYMENT STATUS
     st.subheader("💰 Player Payment Status")
 
-    players_for_payment = supabase.table("players").select("*").order("username").execute().data
+    players_for_payment = get_league_players(CURRENT_LEAGUE_ID, order_by="username")
     if not players_for_payment:
         st.info("No players yet -- they need to log in at least once before they show up here.")
     else:
@@ -2064,7 +2191,7 @@ with tab_players:
     st.subheader("🗑️ Delete a Player")
     st.caption("For a player added by mistake, a duplicate, or someone who's leaving the league entirely.")
 
-    players_for_delete = supabase.table("players").select("*").order("username").execute().data
+    players_for_delete = get_league_players(CURRENT_LEAGUE_ID, order_by="username")
     if not players_for_delete:
         st.info("No players found yet.")
     else:
@@ -2080,11 +2207,14 @@ with tab_players:
 
             if st.button(f"Delete {selected_delete_player}", key="delete_player_btn"):
                 picks_for_player = supabase.table("picks").select("week_number").eq("user_id", selected_delete_id).execute().data
+                _delete_memberships = supabase.table("league_members").select("league_id").eq("user_id", selected_delete_id).execute().data or []
+                _in_other_leagues = any(m["league_id"] != CURRENT_LEAGUE_ID for m in _delete_memberships)
                 st.session_state.pending_player_delete = {
                     "player_id": selected_delete_id,
                     "name": selected_delete_player,
                     "picks_count": len(picks_for_player),
                     "weeks_count": len({p["week_number"] for p in picks_for_player}),
+                    "in_other_leagues": _in_other_leagues,
                 }
                 st.rerun()
 
@@ -2312,7 +2442,7 @@ with tab_exports:
     if not graded_weeks:
         st.info("No graded weeks yet -- use 'Grade Finished Games' above first.")
     else:
-        players_for_export = supabase.table("players").select("*").order("username").execute().data
+        players_for_export = get_league_players(CURRENT_LEAGUE_ID, order_by="username")
         if not players_for_export:
             st.info("No players found yet.")
         else:
@@ -2447,7 +2577,7 @@ with tab_exports:
     if results_week not in graded_weeks:
         st.info(f"Week {int(results_week)} hasn't been graded yet -- use 'Grade Finished Games' above first.")
     else:
-        players_for_results = supabase.table("players").select("*").order("username").execute().data
+        players_for_results = get_league_players(CURRENT_LEAGUE_ID, order_by="username")
         if not players_for_results:
             st.info("No players found yet.")
         else:
@@ -2621,9 +2751,9 @@ with tab_exports:
 with tab_requests:
 
     def _players_username_map():
-        """id -> username for every player, used to show who requested/created
-        something without a join query per row."""
-        rows = supabase.table("players").select("id, username").execute().data or []
+        """id -> username for every player on this league's roster, used to
+        show who requested/created something without a join query per row."""
+        rows = get_league_players(CURRENT_LEAGUE_ID)
         return {r["id"]: r.get("username", "Unknown") for r in rows}
 
 
@@ -2884,3 +3014,66 @@ with tab_requests:
                     count = tally.get(opt["id"], 0)
                     marker = "🏆 " if opt["id"] == poll.get("result_option_id") else ""
                     st.write(f"{marker}{opt['label']} — {count} vote(s)")
+
+with tab_leagues:
+    # 18. LEAGUES -- super-admin only. Create new leagues, see every league
+    # with its invite code (and an SMS link to share it), and manage each
+    # one's roster with a promote/demote-admin toggle -- this is what makes
+    # handing a specific league's admin tools to someone else possible.
+    if not IS_SUPER_ADMIN:
+        st.info("Only a super admin can create leagues or manage another league's roster from here.")
+    else:
+        st.subheader("🏈 Leagues")
+        st.caption(
+            "As super admin you can see and manage every league. Once a league has its own admin, "
+            "you'll still be able to step in here if needed."
+        )
+
+        with st.expander("➕ Create a League"):
+            new_league_name = st.text_input("League name:", key="new_league_name", placeholder="e.g. Downtown Dynasty")
+            if st.button("Create League", key="create_league_btn"):
+                if not new_league_name.strip():
+                    st.error("Enter a league name.")
+                else:
+                    try:
+                        supabase.rpc("create_league", {"p_name": new_league_name.strip()}).execute()
+                        st.success(f"Created **{new_league_name.strip()}**! Switch to it above to set up its first season.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Database error: {e}")
+
+        st.write("---")
+
+        all_leagues = supabase.table("leagues").select("id, name, invite_code").order("name").execute().data or []
+        for lg in all_leagues:
+            member_rows = (
+                supabase.table("league_members").select("user_id, role").eq("league_id", lg["id"]).execute().data or []
+            )
+            with st.container(border=True):
+                st.markdown(f"**{lg['name']}** · {len(member_rows)} member(s)")
+                st.code(lg["invite_code"])
+                invite_message = (
+                    f"Join my {lg['name']} pick'em league! Download the app at "
+                    f"https://sgafootballcentral.github.io/pick7-football-pool/ and enter invite code "
+                    f"{lg['invite_code']} to join."
+                )
+                st.link_button("📱 Send via Text", f"sms:?body={url_quote(invite_message)}")
+
+                with st.expander(f"Manage {lg['name']}'s roster"):
+                    league_roster = get_league_players(lg["id"], order_by="username")
+                    role_by_user_id = {m["user_id"]: m["role"] for m in member_rows}
+                    if not league_roster:
+                        st.caption("No members yet.")
+                    else:
+                        for member_player in league_roster:
+                            member_role = role_by_user_id.get(member_player["id"], "player")
+                            col_name, col_role, col_toggle = st.columns([3, 2, 2])
+                            col_name.write(member_player["username"])
+                            col_role.write("👑 Admin" if member_role == "admin" else "Player")
+                            new_role = "player" if member_role == "admin" else "admin"
+                            toggle_label = "Remove Admin" if member_role == "admin" else "Make Admin"
+                            if col_toggle.button(toggle_label, key=f"toggle_admin_{lg['id']}_{member_player['id']}"):
+                                supabase.table("league_members").update({"role": new_role}).eq(
+                                    "league_id", lg["id"]
+                                ).eq("user_id", member_player["id"]).execute()
+                                st.rerun()

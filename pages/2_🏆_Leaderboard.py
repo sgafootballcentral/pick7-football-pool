@@ -18,13 +18,17 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 def get_current_season():
-    """The full seasons row with is_current=true (id, season_weeks, ...).
-    Mirrors the same helper in pages/1_Admin.py / app.py -- needed
-    everywhere a read is keyed on week_number alone, since week numbers
-    repeat across seasons, and to drive season-setup options like the
-    week range below."""
+    """The full seasons row with is_current=true for CURRENT_LEAGUE_ID (id,
+    season_weeks, ...). Mirrors the same helper in pages/1_Admin.py / app.py
+    -- needed everywhere a read is keyed on week_number alone, since week
+    numbers repeat across seasons, and to drive season-setup options like
+    the week range below. "Current" is per-league now, not global --
+    CURRENT_LEAGUE_ID is resolved once, below, before this is ever called."""
     try:
-        resp = supabase.table("seasons").select("*").eq("is_current", True).limit(1).execute()
+        resp = (
+            supabase.table("seasons").select("*")
+            .eq("league_id", CURRENT_LEAGUE_ID).eq("is_current", True).limit(1).execute()
+        )
         rows = resp.data or []
         return rows[0] if rows else None
     except Exception:
@@ -34,6 +38,62 @@ def get_current_season():
 def get_current_season_id():
     season = get_current_season()
     return season["id"] if season else None
+
+
+def get_user_leagues(uid):
+    """Every league this user belongs to, with their role in each."""
+    try:
+        resp = (
+            supabase.table("league_members")
+            .select("league_id, role, leagues(id, name, invite_code)")
+            .eq("user_id", uid).execute()
+        )
+        rows = resp.data or []
+        return [
+            {
+                "id": r["leagues"]["id"], "name": r["leagues"]["name"],
+                "invite_code": r["leagues"]["invite_code"], "role": r["role"],
+            }
+            for r in rows if r.get("leagues")
+        ]
+    except Exception:
+        return []
+
+
+def is_league_admin(league_id, uid):
+    """Mirrors the is_league_admin() SQL function: a global super-admin, or
+    this specific league's own league_members admin."""
+    try:
+        role_resp = supabase.table("league_users").select("role").eq("id", uid).execute()
+        if role_resp.data and role_resp.data[0].get("role") == "admin":
+            return True
+    except Exception:
+        pass
+    try:
+        member_resp = (
+            supabase.table("league_members").select("role")
+            .eq("league_id", league_id).eq("user_id", uid).execute()
+        )
+        return bool(member_resp.data) and member_resp.data[0].get("role") == "admin"
+    except Exception:
+        return False
+
+
+def get_league_players(league_id, order_by=None):
+    """All players on this league's roster (league_members joined to
+    players)."""
+    try:
+        resp = (
+            supabase.table("league_members").select("players(*)")
+            .eq("league_id", league_id).execute()
+        )
+        rows = resp.data or []
+        players_list = [r["players"] for r in rows if r.get("players")]
+        if order_by:
+            players_list.sort(key=lambda pl: (pl.get(order_by) or "").lower())
+        return players_list
+    except Exception:
+        return []
 
 # Same "remember me" browser storage keys/helpers as app.py -- see there for
 # the full explanation.
@@ -86,14 +146,29 @@ if st.session_state.get("access_token"):
             forget_session_in_browser()
             st.session_state["_just_logged_out"] = True
 
+CURRENT_LEAGUE_ID = None
+if st.session_state.get("user"):
+    _lb_user_leagues = get_user_leagues(st.session_state.user.id)
+    if _lb_user_leagues:
+        if len(_lb_user_leagues) == 1:
+            _lb_current_league = _lb_user_leagues[0]
+        else:
+            _lb_remembered_id = st.session_state.get("current_league_id")
+            _lb_idx = next((i for i, l in enumerate(_lb_user_leagues) if l["id"] == _lb_remembered_id), 0)
+            _lb_current_league = st.sidebar.selectbox(
+                "League", options=_lb_user_leagues, index=_lb_idx,
+                format_func=lambda l: l["name"], key="lb_league_selector",
+            )
+        st.session_state["current_league_id"] = _lb_current_league["id"]
+        CURRENT_LEAGUE_ID = _lb_current_league["id"]
+
+if CURRENT_LEAGUE_ID is None:
+    _lb_fallback_league = supabase.table("leagues").select("id").order("id").limit(1).execute().data
+    CURRENT_LEAGUE_ID = _lb_fallback_league[0]["id"] if _lb_fallback_league else None
+
 is_admin = False
 if st.session_state.get("user"):
-    try:
-        role_resp = supabase.table("league_users").select("role").eq("id", st.session_state.user.id).execute()
-        if role_resp.data and role_resp.data[0].get("role") == "admin":
-            is_admin = True
-    except Exception:
-        pass
+    is_admin = is_league_admin(CURRENT_LEAGUE_ID, st.session_state.user.id)
 
 st.title("🏆 League Standings & Leaderboard")
 st.write("Running tab of each participant's record week over week.")
@@ -393,7 +468,7 @@ try:
                         st.rerun()
 
             if is_admin:
-                players_rows = supabase.table("players").select("username, paid").execute().data
+                players_rows = get_league_players(CURRENT_LEAGUE_ID)
                 paid_by_username = {p["username"]: bool(p.get("paid")) for p in players_rows}
 
                 def build_leaderboard_workbook(standings_df):
