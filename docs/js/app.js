@@ -1480,12 +1480,10 @@ function openCreateLeaguePanel() {
         `https://sgafootballcentral.github.io/pick7-football-pool/ and enter invite code ${created.invite_code} to join.`;
       panel.innerHTML = `
         <div class="modal-sheet">
-          <div class="sheet-head" style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
-            <h3 style="margin:0;">\u{1F389} League Created!</h3>
-            <button class="close" id="create-league-done-x" aria-label="Close">&times;</button>
-          </div>
+          <button class="modal-close-x" id="create-league-done-x" aria-label="Close">&times;</button>
+          <h3 style="text-align:center; margin-top:0;">\u{1F389} League Created!</h3>
           <div style="font-weight:700; font-size:1.05rem; margin-bottom:2px;">${escapeHtml(created.name)}</div>
-          <div class="hint" style="margin-bottom:6px;">Its first season is set up and ready -- share the code below so people can join themselves.</div>
+          <div class="hint" style="margin-bottom:6px;">Its first season is set up and ready -- share the code below so people can join themselves, or add them manually from Admin \u2192 Leagues.</div>
           <div class="code-box">
             <div class="code-row"><span class="code">${escapeHtml(created.invite_code)}</span></div>
             <div class="code-box-actions">
@@ -1506,44 +1504,52 @@ function openCreateLeaguePanel() {
 
     panel.innerHTML = `
       <div class="modal-sheet">
+        <button class="modal-close-x" id="create-league-close-x" aria-label="Close">&times;</button>
         <h3 style="text-align:center; margin-top:0;">Create a League</h3>
         <div class="field">
           <label>League name</label>
           <input type="text" id="create-league-name" placeholder="e.g. Downtown Dynasty">
         </div>
-        <div class="hint" style="margin:14px 0 7px; text-transform:uppercase; letter-spacing:0.04em; font-weight:700; font-size:0.78rem;">First Season</div>
+        <div class="section-label">First Season</div>
+        <div class="hint" style="margin-bottom:10px;">Every league starts with its own season -- set it up however this league plays.</div>
         <div class="field">
           <label>Year</label>
           <input type="number" id="create-league-year" value="${thisYear}">
         </div>
         <div class="field">
-          <label>Sync games from</label>
-          <div>
-            <label style="font-weight:normal; margin-right:14px;"><input type="checkbox" id="create-league-nfl" checked> NFL</label>
-            <label style="font-weight:normal;"><input type="checkbox" id="create-league-cfb" checked> CFB</label>
+          <label>Picks per week</label>
+          <div class="seg-toggle">
+            <div class="seg-toggle-opt">
+              <input type="radio" name="create-league-pick-mode" id="create-league-pick-exact" ${pickCountMode === "exact" ? "checked" : ""}>
+              <label for="create-league-pick-exact">Exactly N games</label>
+            </div>
+            <div class="seg-toggle-opt">
+              <input type="radio" name="create-league-pick-mode" id="create-league-pick-all" ${pickCountMode === "all" ? "checked" : ""}>
+              <label for="create-league-pick-all">Every game</label>
+            </div>
           </div>
+          <div class="hint">Exactly <input type="number" id="create-league-pick-count" class="inline-num" value="7" min="1" ${pickCountMode === "exact" ? "" : "disabled"}> games each week -- or pick every game on the slate (e.g. a playoff round).</div>
         </div>
         <div class="field">
-          <label>How many games does everyone pick each week?</label>
-          <div style="margin-bottom:8px;">
-            <label style="font-weight:normal; display:block; margin-bottom:4px;">
-              <input type="radio" name="create-league-pick-mode" id="create-league-pick-exact" value="exact" ${pickCountMode === "exact" ? "checked" : ""}>
-              Exactly <input type="number" id="create-league-pick-count" value="7" min="1" style="width:60px; display:inline-block;" ${pickCountMode === "exact" ? "" : "disabled"}> games
-            </label>
-            <label style="font-weight:normal; display:block;">
-              <input type="radio" name="create-league-pick-mode" id="create-league-pick-all" value="all" ${pickCountMode === "all" ? "checked" : ""}>
-              Every game that week (good for single-elimination playoffs)
-            </label>
-          </div>
+          <label>Sync games from</label>
+          <div class="check-row"><input type="checkbox" id="create-league-nfl" checked><span>\u{1F3C8} NFL</span></div>
+          <div class="check-row"><input type="checkbox" id="create-league-cfb" checked><span>\u{1F393} College Football</span></div>
         </div>
         <div class="field">
           <label>Season length</label>
-          <div style="margin-bottom:8px;">
-            <label style="font-weight:normal; margin-right:14px;"><input type="radio" name="create-league-len-mode" id="create-league-len-weeks" ${lengthMode === "weeks" ? "checked" : ""}> By # of weeks</label>
-            <label style="font-weight:normal;"><input type="radio" name="create-league-len-mode" id="create-league-len-date" ${lengthMode === "date" ? "checked" : ""}> By end date</label>
+          <div class="seg-toggle">
+            <div class="seg-toggle-opt">
+              <input type="radio" name="create-league-len-mode" id="create-league-len-weeks" ${lengthMode === "weeks" ? "checked" : ""}>
+              <label for="create-league-len-weeks">By # of weeks</label>
+            </div>
+            <div class="seg-toggle-opt">
+              <input type="radio" name="create-league-len-mode" id="create-league-len-date" ${lengthMode === "date" ? "checked" : ""}>
+              <label for="create-league-len-date">By end date</label>
+            </div>
           </div>
           ${lengthMode === "weeks" ? `
             <input type="number" id="create-league-weeks" value="16" min="1">
+            <div class="hint">Number of weeks this season runs.</div>
           ` : `
             <input type="date" id="create-league-end-date">
             <div class="hint">We'll work out the number of weeks from today to this date.</div>
@@ -1562,6 +1568,7 @@ function openCreateLeaguePanel() {
       </div>
     `;
 
+    panel.querySelector("#create-league-close-x")?.addEventListener("click", () => panel.remove());
     panel.querySelector("#create-league-pick-exact")?.addEventListener("change", () => { pickCountMode = "exact"; panelRedraw(); });
     panel.querySelector("#create-league-pick-all")?.addEventListener("change", () => { pickCountMode = "all"; panelRedraw(); });
     panel.querySelector("#create-league-len-weeks")?.addEventListener("change", () => { lengthMode = "weeks"; panelRedraw(); });

@@ -522,6 +522,18 @@ table.standings .rank-cell .rank-chip { display: block; font-size: 9px; margin-t
   .modal-sheet { border-radius: 16px; max-width: 480px; }
 }
 
+/* Segmented pill toggle (Create League / Start New Season forms) -- e.g.
+   "Exactly N games" vs. "Every game", or "By # of weeks" vs. "By end date". */
+.seg-toggle { display: flex; gap: 6px; background: var(--bg-elevated); border-radius: 8px; padding: 2px; margin-bottom: 10px; }
+.seg-toggle-opt { position: relative; flex: 1; }
+.seg-toggle-opt input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.seg-toggle-opt label { display: block; text-align: center; padding: 8px 6px; border-radius: 6px; font-size: 0.78rem; font-weight: 600; color: var(--text-dim); cursor: pointer; }
+.seg-toggle-opt input:checked + label { background: var(--accent); color: #fff; }
+.inline-num { width: 56px; display: inline-block; margin: 0 6px; text-align: center; }
+.check-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 0.9rem; }
+.check-row input { width: 17px; height: 17px; }
+.section-label { font-size: 0.78rem; color: var(--text-dim); margin: 14px 0 7px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700; }
+
 /* Compare Picks tab */
 table.cmp-grid { font-size: 0.82rem; }
 table.cmp-grid th { text-align: center; white-space: nowrap; cursor: default; }
