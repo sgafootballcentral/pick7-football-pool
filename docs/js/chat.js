@@ -36,7 +36,7 @@ function reactionsSignature(map) {
   }).join("|");
 }
 
-export function renderChat(el, { supabase, user, username, isAdmin, currentSeason }) {
+export function renderChat(el, { supabase, user, username, isAdmin, currentSeason, currentLeague }) {
   const seasonId = currentSeason?.id ?? null;
   const s = {
     loading: true, error: "", messages: [], autoRefresh: true, intervalSec: 5, pendingFile: null,
@@ -366,7 +366,7 @@ export function renderChat(el, { supabase, user, username, isAdmin, currentSeaso
       // message is NOT NULL in the database (the Streamlit app relies on
       // this too) -- an image-only message must still send an empty string,
       // never null, or the insert is rejected.
-      user_id: user.id, username, message: text, image_url: imageUrl,
+      user_id: user.id, username, message: text, image_url: imageUrl, league_id: currentLeague.id,
     });
     if (error) { s.error = "Database error: " + error.message; draw(); return; }
 
@@ -404,7 +404,7 @@ export function renderChat(el, { supabase, user, username, isAdmin, currentSeaso
         const pageSize = 1000;
         for (;;) {
           const { data: batch, error: pageErr } = await supabase
-            .from("chat_messages").select("image_url").range(offset, offset + pageSize - 1);
+            .from("chat_messages").select("image_url").eq("league_id", currentLeague.id).range(offset, offset + pageSize - 1);
           if (pageErr) throw pageErr;
           allMsgs = allMsgs.concat(batch || []);
           if (!batch || batch.length < pageSize) break;
@@ -415,7 +415,7 @@ export function renderChat(el, { supabase, user, username, isAdmin, currentSeaso
       if (paths.length) {
         try { await supabase.storage.from("chat-images").remove(paths); } catch (_) {}
       }
-      const { error } = await supabase.from("chat_messages").delete().gte("id", 0);
+      const { error } = await supabase.from("chat_messages").delete().eq("league_id", currentLeague.id);
       if (error) throw error;
       await loadMessages(true);
     } catch (e) {
@@ -439,7 +439,7 @@ export function renderChat(el, { supabase, user, username, isAdmin, currentSeaso
   async function loadMessages(preserveScroll, backgroundOnly) {
     try {
       const { data: msgData, error: msgErr } = await supabase
-        .from("chat_messages").select("*").order("created_at", { ascending: false }).limit(CHAT_HISTORY_LIMIT);
+        .from("chat_messages").select("*").eq("league_id", currentLeague.id).order("created_at", { ascending: false }).limit(CHAT_HISTORY_LIMIT);
       if (msgErr) throw msgErr;
       // Query comes back newest-first (so .limit() keeps the RECENT
       // messages, not the oldest ones) -- reverse back to oldest-first for

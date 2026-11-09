@@ -103,12 +103,7 @@ async function refreshIdentity() {
   await refreshLeagues();
   await refreshLeagueAdmin();
 
-  try {
-    const { data } = await supabase.from("players").select("last_chat_read_at").eq("id", state.user.id).single();
-    state.lastChatReadAt = data?.last_chat_read_at || null;
-  } catch (_) {
-    state.lastChatReadAt = null;
-  }
+  await refreshLastChatReadAt();
 
   try {
     const { data } = await supabase.from("dm_reads").select("other_id, last_read_at").eq("user_id", state.user.id);
@@ -160,6 +155,8 @@ async function setCurrentLeague(leagueId) {
   try { localStorage.setItem("pick7_current_league_id", found.id); } catch (_) { /* non-critical */ }
   await refreshLeagueAdmin();
   await refreshCurrentSeason();
+  await refreshLastChatReadAt();
+  await checkUnreadChat();
   render();
 }
 
@@ -219,16 +216,37 @@ async function refreshCurrentSeason() {
   }
 }
 
+// Loads this user's last-read-chat timestamp for the current league from
+// chat_reads (a per-league table, replacing the old flat
+// players.last_chat_read_at column) -- called on initial identity load and
+// again whenever the active league changes, since the timestamp is now
+// scoped per league rather than global.
+async function refreshLastChatReadAt() {
+  try {
+    if (!state.currentLeague) throw new Error("no league");
+    const { data } = await supabase
+      .from("chat_reads")
+      .select("last_read_at")
+      .eq("user_id", state.user.id)
+      .eq("league_id", state.currentLeague.id)
+      .maybeSingle();
+    state.lastChatReadAt = data?.last_read_at || null;
+  } catch (_) {
+    state.lastChatReadAt = null;
+  }
+}
+
 // Lightweight poll for new chat activity -- independent of whether the Chat
 // tab is mounted, so the bottom-nav badge stays accurate no matter which
 // tab a player is looking at. Never counts a player's own messages as
 // "unread", and never flags unread while the Chat tab is already open.
 async function checkUnreadChat() {
-  if (!state.user) return;
+  if (!state.user || !state.currentLeague) return;
   try {
     const { data } = await supabase
       .from("chat_messages")
       .select("created_at,user_id")
+      .eq("league_id", state.currentLeague.id)
       .order("created_at", { ascending: false })
       .limit(1)
       .single();
@@ -246,12 +264,15 @@ async function checkUnreadChat() {
 }
 
 async function markChatRead() {
-  if (!state.user) return;
+  if (!state.user || !state.currentLeague) return;
   state.hasUnreadChat = false;
   const nowIso = new Date().toISOString();
   state.lastChatReadAt = nowIso;
   try {
-    await supabase.from("players").update({ last_chat_read_at: nowIso }).eq("id", state.user.id);
+    await supabase.from("chat_reads").upsert(
+      { user_id: state.user.id, league_id: state.currentLeague.id, last_read_at: nowIso },
+      { onConflict: "user_id,league_id" }
+    );
   } catch (_) {
     /* non-critical */
   }
