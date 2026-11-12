@@ -358,7 +358,7 @@ def confirm_removal(info):
             st.error("Couldn't find that player's user ID -- nothing was removed.")
         else:
             try:
-                supabase.table("picks").delete().eq("user_id", info["user_id"]).eq("week_number", info["week"]).execute()
+                supabase.table("picks").delete().eq("user_id", info["user_id"]).eq("week_number", info["week"]).eq("season_id", info["season_id"]).execute()
                 st.session_state.pending_removal = None
                 st.rerun()
             except Exception as e:
@@ -384,8 +384,8 @@ def confirm_week_delete(info):
 
     if confirm_clicked:
         try:
-            supabase.table("picks").delete().eq("week_number", info["week"]).execute()
-            supabase.table("games").delete().eq("week_number", info["week"]).execute()
+            supabase.table("picks").delete().eq("week_number", info["week"]).eq("season_id", info["season_id"]).execute()
+            supabase.table("games").delete().eq("week_number", info["week"]).eq("season_id", info["season_id"]).execute()
             st.session_state.pending_week_delete = None
             st.rerun()
         except Exception as e:
@@ -733,7 +733,7 @@ with tab_setup:
         with st.spinner(f"Downloading game schedules from {start_date} to {end_date}..."):
             try:
                 # Wipe previous entries for the selected grouping week to avoid duplication
-                supabase.table("games").delete().eq("week_number", target_week).execute()
+                supabase.table("games").delete().eq("week_number", target_week).eq("season_id", get_current_season_id()).execute()
 
                 # ESPN's scoreboard endpoint used to accept a "YYYYMMDD-YYYYMMDD"
                 # date range, but it now rejects any hyphenated range with an HTTP
@@ -1167,11 +1167,13 @@ with tab_setup:
     delete_week_num = section_week_selector("delete_week", active_week, "Week to delete:")
 
     if st.button("Delete This Week's Games", key="delete_week_btn"):
-        games_for_delete = supabase.table("games").select("id").eq("week_number", delete_week_num).execute().data
-        picks_for_delete = supabase.table("picks").select("user_id").eq("week_number", delete_week_num).execute().data
+        _delete_week_season_id = get_current_season_id()
+        games_for_delete = supabase.table("games").select("id").eq("week_number", delete_week_num).eq("season_id", _delete_week_season_id).execute().data
+        picks_for_delete = supabase.table("picks").select("user_id").eq("week_number", delete_week_num).eq("season_id", _delete_week_season_id).execute().data
 
         st.session_state.pending_week_delete = {
             "week": delete_week_num,
+            "season_id": _delete_week_season_id,
             "games_count": len(games_for_delete),
             "picks_count": len(picks_for_delete),
             "players_count": len(set(p["user_id"] for p in picks_for_delete)),
@@ -1386,7 +1388,7 @@ with tab_picks:
     # Submission time (admin-only, per the "when were picks submitted" request) --
     # sourced from pick_submissions, one row per full submit/resubmit event, so
     # a player who resubmitted has several rows and we want their latest one.
-    submission_rows = supabase.table("pick_submissions").select("username, created_at").eq("week_number", view_week).execute().data or []
+    submission_rows = supabase.table("pick_submissions").select("username, created_at").eq("week_number", view_week).eq("season_id", _season_id_view).execute().data or []
     submitted_at_by_username = {}
     for _row in submission_rows:
         _uname = _row.get("username")
@@ -1504,6 +1506,7 @@ with tab_picks:
                     "week": view_week,
                     "player": selected_player,
                     "user_id": user_id_by_username.get(selected_player),
+                    "season_id": _season_id_view,
                 }
                 st.rerun()
 
