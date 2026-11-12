@@ -25,7 +25,11 @@
 <script src="js/config.js"></script>
 <script type="module" src="js/app.js"></script>
 <script>
-  if ("serviceWorker" in navigator) {
+  // Skip service-worker registration inside the native iOS app shell
+  // (Capacitor). The native app updates by shipping new builds, not by a
+  // browser-style SW cache-and-reload cycle, and a WKWebView under
+  // Capacitor's custom scheme doesn't need (or reliably support) it.
+  if ("serviceWorker" in navigator && !window.Capacitor?.isNativePlatform?.()) {
     window.addEventListener("load", () => {
       navigator.serviceWorker.register("sw.js").then((reg) => {
         // Registering alone doesn't reliably notice a newer sw.js promptly on

@@ -42,7 +42,15 @@ function isIOS() {
   return /iphone|ipad|ipod/i.test(navigator.userAgent);
 }
 
+// True when running inside the native iOS app shell (Capacitor), as opposed
+// to a regular browser tab or an installed home-screen PWA. Capacitor
+// injects window.Capacitor automatically at runtime -- no import needed.
+function isNativeApp() {
+  return !!window.Capacitor?.isNativePlatform?.();
+}
+
 window.addEventListener("beforeinstallprompt", (e) => {
+  if (isNativeApp()) return; // already a native app -- no "install to home screen" flow
   e.preventDefault();
   state.deferredInstallPrompt = e;
   render();
@@ -503,6 +511,7 @@ supabase.auth.onAuthStateChange((event, session) => {
 function renderChrome(innerHtml) {
   const offline = !navigator.onLine;
   const showInstall =
+    !isNativeApp() &&
     !state.installBannerDismissed &&
     !isStandalone() &&
     !state.recoveryMode &&
