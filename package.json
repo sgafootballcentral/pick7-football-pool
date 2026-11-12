@@ -1,0 +1,18 @@
+{
+  "name": "pick7-football-pool",
+  "version": "1.0.0",
+  "description": "Pick 7 Against The Spread -- native app shell (Capacitor) around the existing docs/ PWA.",
+  "private": true,
+  "scripts": {
+    "sync": "cap sync",
+    "ios": "cap open ios",
+    "android": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/core": "^8.6.0",
+    "@capacitor/ios": "^8.6.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.0"
+  }
+}
