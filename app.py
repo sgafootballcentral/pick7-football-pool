@@ -188,6 +188,7 @@ def save_picks_atomically(new_picks, game_lookup, week_number, user_id, username
             "user_id": user_id, "username": username, "week_number": week_number,
             "game_id": p["game_id"], "selected_team": p["selected_team"],
             "spread_at_pick": game_lookup.get(p["game_id"], {}).get("spread_value", ""),
+            "season_id": season_id,
         }
         for p in new_picks
     ]
@@ -381,6 +382,7 @@ def confirm_resubmit(existing_picks_raw, new_picks, game_lookup):
                         supabase.table("pick_submissions").insert({
                             "user_id": user.id, "username": username,
                             "week_number": CURRENT_WEEK, "picks_count": len(new_picks),
+                            "season_id": CURRENT_SEASON_ID,
                         }).execute()
                     except Exception:
                         pass  # non-critical -- picks themselves are already saved
@@ -855,6 +857,7 @@ def queue_picks_pending(new_picks, game_lookup):
             supabase.table("pick_lock_exceptions").insert({
                 "week_number": CURRENT_WEEK, "user_id": user.id, "username": username,
                 "status": "pending", "picks_payload": payload,
+                "season_id": CURRENT_SEASON_ID,
             }).execute()
         st.session_state.pending_resubmit = None
         recap_rows = [
@@ -1398,6 +1401,7 @@ else:
                         supabase.table("pick_submissions").insert({
                             "user_id": user.id, "username": username,
                             "week_number": CURRENT_WEEK, "picks_count": len(chosen_picks),
+                            "season_id": CURRENT_SEASON_ID,
                         }).execute()
                     except Exception:
                         pass  # non-critical -- picks themselves are already saved

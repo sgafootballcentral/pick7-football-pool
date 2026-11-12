@@ -591,7 +591,8 @@ def confirm_manual_picks_save(info):
 
     if confirm_clicked:
         try:
-            supabase.table("picks").delete().eq("user_id", info["user_id"]).eq("week_number", info["week"]).execute()
+            _season_id = get_current_season_id()
+            supabase.table("picks").delete().eq("user_id", info["user_id"]).eq("week_number", info["week"]).eq("season_id", _season_id).execute()
             for item in info["resolved"]:
                 supabase.table("picks").insert({
                     "user_id": info["user_id"],
@@ -600,6 +601,7 @@ def confirm_manual_picks_save(info):
                     "game_id": item["game_id"],
                     "selected_team": item["team"],
                     "spread_at_pick": item["spread"],
+                    "season_id": _season_id,
                 }).execute()
             # Log a submission event too, same as a player submitting their own
             # picks, so this player shows a real submission time (not "not yet
@@ -611,6 +613,7 @@ def confirm_manual_picks_save(info):
                     "username": info["player"],
                     "week_number": info["week"],
                     "picks_count": len(info["resolved"]),
+                    "season_id": _season_id,
                 }).execute()
             except Exception:
                 pass  # non-critical -- the picks themselves are already saved
