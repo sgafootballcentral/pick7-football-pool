@@ -1817,6 +1817,67 @@ with tab_grading:
                     if not league_had_error and unique_dates:
                         st.caption(f"{league_name}: pulled scores for {', '.join(unique_dates)}.")
 
+                # Safety net for a game that got moved to a different day
+                # (weather, travel, whatever) -- the date-bucketed scoreboard
+                # pull above only ever looks at each game's ORIGINALLY
+                # SCHEDULED date, so a reschedule silently never shows up as
+                # final no matter how many times this is re-run (this bit a
+                # real Ole Miss @ Oklahoma game that moved from Saturday to
+                # Sunday). Any game whose recorded kickoff is well in the
+                # past -- long enough that it would have finished by now if
+                # it had actually kicked off then -- but still isn't "post"
+                # gets one direct, date-independent lookup by its own ESPN
+                # event id instead of a date bucket.
+                summary_url_map = {
+                    "NFL": "https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/summary",
+                    "CFB": "https://site.web.api.espn.com/apis/site/v2/sports/football/college-football/summary",
+                }
+                now_utc = datetime.now(timezone.utc)
+                corrected_kickoffs = {}  # game_id -> new ISO kickoff_time, when ESPN's own record moved
+
+                for g in games_in_week:
+                    if g.get("status") == "final":
+                        continue
+                    live = espn_scores.get(g["game_id"])
+                    if live and live["state"] == "post":
+                        continue  # already resolved by the normal date-bucketed pass above
+
+                    try:
+                        kickoff_dt = datetime.fromisoformat(g["kickoff_time"].replace("Z", "+00:00"))
+                    except (ValueError, AttributeError, TypeError):
+                        continue
+                    if now_utc - kickoff_dt < timedelta(hours=4):
+                        continue  # genuinely still in progress or hasn't started -- not a reschedule case
+
+                    summary_url = summary_url_map.get(g["league"])
+                    if not summary_url:
+                        continue
+                    event_id = g["game_id"].replace("espn_", "", 1)
+
+                    try:
+                        resp = requests.get(summary_url, params={"event": event_id}, headers=headers, timeout=15)
+                        time_module.sleep(2)  # same rate-limit courtesy as every other ESPN call here
+                        if resp.status_code != 200:
+                            continue
+                        comp = (resp.json().get("header", {}).get("competitions") or [{}])[0]
+                        state = comp.get("status", {}).get("type", {}).get("state", "pre")
+                        if state != "post":
+                            continue  # really hasn't been played yet, not a reschedule
+
+                        competitors = comp.get("competitors", [])
+                        home_node = next((c for c in competitors if c.get("homeAway") == "home"), {})
+                        away_node = next((c for c in competitors if c.get("homeAway") == "away"), {})
+                        home_score = int(home_node.get("score", 0) or 0)
+                        away_score = int(away_node.get("score", 0) or 0)
+
+                        espn_scores[g["game_id"]] = {"state": "post", "home_score": home_score, "away_score": away_score}
+                        new_date = comp.get("date")
+                        if new_date and new_date != g.get("kickoff_time"):
+                            corrected_kickoffs[g["game_id"]] = new_date
+                            st.info(f"📅 {g.get('display_text', g['game_id'])} was rescheduled to a different day than originally synced -- corrected and graded.")
+                    except Exception:
+                        continue
+
                 graded_count = 0
                 already_final_count = 0
                 still_pending_count = 0
@@ -1878,6 +1939,7 @@ with tab_grading:
                         "winning_team": winning_team,
                         "home_score": home_score,
                         "away_score": away_score,
+                        **({"kickoff_time": corrected_kickoffs[g["game_id"]]} if g["game_id"] in corrected_kickoffs else {}),
                     })
 
                     # Grade each pick against the spread IT actually saw, not necessarily
