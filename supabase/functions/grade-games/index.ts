@@ -30,6 +30,15 @@ const LEAGUE_URLS: Record<string, string> = {
   CFB: "https://site.web.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard",
 };
 
+// Per-event lookup, used as a reschedule safety net below -- unlike the
+// scoreboard endpoint above, this isn't bucketed by date at all, so it
+// still finds a game that moved to a different day than it was originally
+// synced for.
+const SUMMARY_URLS: Record<string, string> = {
+  NFL: "https://site.web.api.espn.com/apis/site/v2/sports/football/nfl/summary",
+  CFB: "https://site.web.api.espn.com/apis/site/v2/sports/football/college-football/summary",
+};
+
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -43,6 +52,42 @@ const ESPN_HEADERS = {
 };
 
 type EspnScore = { state: string; home_score: number; away_score: number };
+
+// Safety net for a game that got moved to a different day (weather,
+// travel, whatever) -- fetchLeagueScores above only ever looks at each
+// game's ORIGINALLY SCHEDULED date, so a reschedule silently never shows
+// up as final no matter how often this runs (this bit a real Ole Miss @
+// Oklahoma game that moved from Saturday to Sunday, and had to be fixed by
+// hand). Looked up directly by the game's own ESPN event id instead of a
+// date bucket, so it finds the game wherever ESPN actually has it now.
+async function fetchEventSummary(
+  league: "NFL" | "CFB",
+  eventId: string,
+): Promise<(EspnScore & { kickoff_time: string | null }) | null> {
+  const summaryUrl = SUMMARY_URLS[league];
+  if (!summaryUrl) return null;
+
+  const u = new URL(summaryUrl);
+  u.searchParams.set("event", eventId);
+
+  const resp = await fetch(u.toString(), { headers: ESPN_HEADERS });
+  if (!resp.ok) return null;
+
+  const data = await resp.json();
+  const comp = data.header?.competitions?.[0];
+  const state = comp?.status?.type?.state || "pre";
+  if (state !== "post") return null;
+
+  const competitors = comp.competitors || [];
+  const home = competitors.find((c: any) => c.homeAway === "home") || {};
+  const away = competitors.find((c: any) => c.homeAway === "away") || {};
+  return {
+    state: "post",
+    home_score: Number(home.score ?? 0) || 0,
+    away_score: Number(away.score ?? 0) || 0,
+    kickoff_time: comp.date || null,
+  };
+}
 
 // Same "only a bare YYYYMMDD works, and limit must stay well under 1000 or
 // CFB results get silently truncated" fixes applied to app.py / Admin.py /
@@ -146,6 +191,44 @@ Deno.serve(async (req) => {
       Object.assign(espnScores, leagueScores);
     }
 
+    // Any game that's more than 4 hours past its recorded kickoff -- long
+    // enough to have finished if it actually kicked off then -- but still
+    // isn't "post" gets one direct, date-independent lookup by its own
+    // ESPN event id instead of a date bucket. This only runs for games
+    // that are overdue and still ungraded, so a normal run with nothing
+    // rescheduled makes no extra ESPN calls.
+    const correctedKickoffs: Record<string, string> = {};
+    const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
+    const nowMs = Date.now();
+
+    const fallbackCandidates = pendingGames.filter((g) => {
+      const live = espnScores[g.game_id];
+      if (live && live.state === "post") return false;
+      if (!LEAGUE_URLS[g.league]) return false;
+      const kickoffMs = new Date(g.kickoff_time).getTime();
+      if (Number.isNaN(kickoffMs)) return false;
+      return nowMs - kickoffMs >= FOUR_HOURS_MS;
+    });
+
+    await Promise.all(fallbackCandidates.map(async (g) => {
+      try {
+        const eventId = String(g.game_id).replace(/^espn_/, "");
+        const result = await fetchEventSummary(g.league as "NFL" | "CFB", eventId);
+        if (!result) return; // really hasn't been played yet, not a reschedule
+
+        espnScores[g.game_id] = {
+          state: result.state,
+          home_score: result.home_score,
+          away_score: result.away_score,
+        };
+        if (result.kickoff_time && result.kickoff_time !== g.kickoff_time) {
+          correctedKickoffs[g.game_id] = result.kickoff_time;
+        }
+      } catch (e) {
+        warnings.push(`summary fallback failed for ${g.game_id}: ${String((e as any)?.message || e)}`);
+      }
+    }));
+
     let stillPendingCount = 0;
     const gamesToGrade: any[] = [];
 
@@ -172,12 +255,17 @@ Deno.serve(async (req) => {
       const margin = favScore + spreadNum - undScore;
       const winningTeam = margin > 0 ? g.favorite_team : g.underdog_team;
 
-      const { error: updateErr } = await supabase.from("games").update({
+      const updatePayload: Record<string, any> = {
         status: "final",
         winning_team: winningTeam,
         home_score,
         away_score,
-      }).eq("id", g.id);
+      };
+      if (correctedKickoffs[g.game_id]) {
+        updatePayload.kickoff_time = correctedKickoffs[g.game_id];
+      }
+
+      const { error: updateErr } = await supabase.from("games").update(updatePayload).eq("id", g.id);
       if (updateErr) {
         return { graded: false, warning: `games update failed for ${g.game_id}: ${updateErr.message}` };
       }
