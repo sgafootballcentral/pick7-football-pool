@@ -9,6 +9,44 @@
 // Tech" (longer, also a match) wins instead. NFL team names are each
 // unique full franchise names, so no ambiguity there.
 
+// ESPN's own conferenceId -> our canonical conference name, for CFB. This
+// is what the sync in pages/1_Admin.py now reads straight off each team
+// object in ESPN's scoreboard response (team.conferenceId) when it pulls
+// in a week's games, and stores on the game row (favorite_conference /
+// underdog_conference) -- the same source the spreads and kickoff times
+// already come from. These ids are ESPN's internal group ids and don't
+// change even when conference membership does (confirmed against ESPN's
+// own groups API: .../leagues/college-football/seasons/<yr>/types/2/groups
+// -> group 80 (FBS) -> its 11 conference children).
+const ESPN_CONFERENCE_ID_TO_NAME = {
+  "151": "American",
+  "1": "ACC",
+  "4": "Big 12",
+  "5": "Big Ten",
+  "12": "Conference USA",
+  "18": "FBS Independents",
+  "15": "MAC",
+  "17": "Mountain West",
+  "9": "Pac-12",
+  "8": "SEC",
+  "37": "Sun Belt",
+};
+
+/** Resolve ESPN's own numeric conferenceId (as a string or number, e.g.
+ * 8 or "8") to our canonical conference name ("SEC"). null if missing or
+ * unrecognized (e.g. NFL teams, which ESPN's scoreboard doesn't tag with
+ * a conferenceId at all -- the static NFL table below covers those). */
+export function conferenceNameFromEspnId(conferenceId) {
+  if (conferenceId === null || conferenceId === undefined) return null;
+  return ESPN_CONFERENCE_ID_TO_NAME[String(conferenceId)] ?? null;
+}
+
+// Name-based fallback used only when a game has no stored ESPN conference
+// (games synced before this field existed, manually-added games, and all
+// NFL games -- ESPN's scoreboard doesn't tag NFL teams with a
+// conferenceId, so NFL search always uses this static AFC/NFC/division
+// table; that's fine since NFL alignment hasn't changed in decades).
+//
 // [schoolOrTeamName, conference] -- CFB, 2026 alignment.
 const CFB_TEAMS = [
   // SEC
@@ -159,15 +197,22 @@ export function matchConferenceQuery(query) {
 
 /** True if either team's name contains `query` as a substring, or either
  * team's conference/division matches `query` as a conference search
- * term. */
-export function teamMatchesQuery(favName, undName, query) {
+ * term.
+ *
+ * favConference/undConference are the ESPN-sourced conference names
+ * stored on the game row, when present (see conferenceNameFromEspnId
+ * above) -- preferred over the static name-based guess below, which is
+ * only a fallback for games that predate that column, manual games, and
+ * NFL games (no conferenceId from ESPN for those). */
+export function teamMatchesQuery(favName, undName, query, favConference = null, undConference = null) {
   const q = (query || "").trim().toLowerCase();
   if (!q) return true;
   if ((favName || "").toLowerCase().includes(q) || (undName || "").toLowerCase().includes(q)) return true;
   const confMatches = matchConferenceQuery(q);
   if (!confMatches.size) return false;
-  for (const name of [favName, undName]) {
-    if (confMatches.has(conferenceOf(name)) || confMatches.has(divisionOf(name))) return true;
+  for (const [name, storedConf] of [[favName, favConference], [undName, undConference]]) {
+    const conf = storedConf || conferenceOf(name);
+    if (confMatches.has(conf) || confMatches.has(divisionOf(name))) return true;
   }
   return false;
 }

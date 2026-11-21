@@ -10,6 +10,46 @@
 # also a match) wins instead. NFL team names are each unique full franchise
 # names, so no ambiguity there.
 
+# ESPN's own conferenceId -> our canonical conference name, for CFB. This
+# is what the sync in pages/1_Admin.py now reads straight off each team
+# object in ESPN's scoreboard response (team.conferenceId) when it pulls
+# in a week's games, and stores on the game row (favorite_conference /
+# underdog_conference) -- the same source the spreads and kickoff times
+# already come from. These ids are ESPN's internal group ids and don't
+# change even when conference membership does (confirmed against ESPN's
+# own groups API: .../leagues/college-football/seasons/<yr>/types/2/groups
+# -> group 80 (FBS) -> its 11 conference children).
+ESPN_CONFERENCE_ID_TO_NAME = {
+    "151": "American",
+    "1": "ACC",
+    "4": "Big 12",
+    "5": "Big Ten",
+    "12": "Conference USA",
+    "18": "FBS Independents",
+    "15": "MAC",
+    "17": "Mountain West",
+    "9": "Pac-12",
+    "8": "SEC",
+    "37": "Sun Belt",
+}
+
+
+def conference_name_from_espn_id(conference_id):
+    """Resolve ESPN's own numeric conferenceId (as a string or int, e.g.
+    8 or "8") to our canonical conference name ("SEC"). None if missing or
+    unrecognized (e.g. NFL teams, which ESPN's scoreboard doesn't tag with
+    a conferenceId at all -- the static NFL table below covers those)."""
+    if conference_id is None:
+        return None
+    return ESPN_CONFERENCE_ID_TO_NAME.get(str(conference_id))
+
+
+# Name-based fallback used only when a game has no stored ESPN conference
+# (games synced before this field existed, manually-added games, and all
+# NFL games -- ESPN's scoreboard doesn't tag NFL teams with a
+# conferenceId, so NFL search always uses this static AFC/NFC/division
+# table; that's fine since NFL alignment hasn't changed in decades).
+#
 # (school/team name, conference) -- CFB, 2026 alignment.
 _CFB_TEAMS = [
     # SEC
@@ -162,10 +202,16 @@ def match_conference_query(query):
     return matches
 
 
-def team_matches_query(fav_name, und_name, query):
+def team_matches_query(fav_name, und_name, query, fav_conference=None, und_conference=None):
     """True if either team's name contains `query` as a substring, or
     either team's conference/division matches `query` as a conference
-    search term."""
+    search term.
+
+    fav_conference/und_conference are the ESPN-sourced conference names
+    stored on the game row, when present (see conference_name_from_espn_id
+    above) -- preferred over the static name-based guess below, which is
+    only a fallback for games that predate that column, manual games, and
+    NFL games (no conferenceId from ESPN for those)."""
     q = (query or "").strip().lower()
     if not q:
         return True
@@ -174,7 +220,8 @@ def team_matches_query(fav_name, und_name, query):
     conf_matches = match_conference_query(q)
     if not conf_matches:
         return False
-    for name in (fav_name, und_name):
-        if conference_of(name) in conf_matches or division_of(name) in conf_matches:
+    for name, stored_conf in ((fav_name, fav_conference), (und_name, und_conference)):
+        conf = stored_conf or conference_of(name)
+        if conf in conf_matches or division_of(name) in conf_matches:
             return True
     return False

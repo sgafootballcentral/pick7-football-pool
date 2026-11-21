@@ -363,7 +363,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
     const searchQuery = s.searchQuery.trim();
     let searchEmptyMessage = "";
     if (searchQuery && visibleGames.length) {
-      visibleGames = visibleGames.filter((g) => teamMatchesQuery(g.favorite_team, g.underdog_team, searchQuery));
+      visibleGames = visibleGames.filter((g) => teamMatchesQuery(g.favorite_team, g.underdog_team, searchQuery, g.favorite_conference, g.underdog_conference));
       if (!visibleGames.length) {
         searchEmptyMessage = `No games match "${searchQuery}". Check the spelling, or clear the search to see everyone.`;
       }

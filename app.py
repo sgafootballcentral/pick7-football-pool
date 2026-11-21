@@ -1474,7 +1474,10 @@ else:
     if search_query and games_chronological:
         games_chronological = [
             g for g in games_chronological
-            if team_matches_query(g.get("favorite_team", ""), g.get("underdog_team", ""), search_query)
+            if team_matches_query(
+                g.get("favorite_team", ""), g.get("underdog_team", ""), search_query,
+                fav_conference=g.get("favorite_conference"), und_conference=g.get("underdog_conference"),
+            )
         ]
         if games_chronological:
             st.caption(f"{len(games_chronological)} game{'s' if len(games_chronological) != 1 else ''} match \"{search_query}\"")

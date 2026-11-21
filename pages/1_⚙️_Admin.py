@@ -10,6 +10,7 @@ from urllib.parse import quote as url_quote
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 from supabase import create_client, Client
+from conferences import conference_name_from_espn_id, team_matches_query
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
@@ -805,6 +806,13 @@ with tab_setup:
                         away_team = away_node.get("team", {}).get("displayName", "Away Team")
                         home_abbr = home_node.get("team", {}).get("abbreviation", "").strip().upper()
                         away_abbr = away_node.get("team", {}).get("abbreviation", "").strip().upper()
+                        # ESPN tags each CFB team with its own conferenceId right on the
+                        # scoreboard response -- same source as the spread/kickoff time,
+                        # so conference search can use ESPN's own data instead of a
+                        # guess. NFL teams don't get a conferenceId here, so this is
+                        # None for NFL games (search falls back to a static table then).
+                        home_conference = conference_name_from_espn_id(home_node.get("team", {}).get("conferenceId"))
+                        away_conference = conference_name_from_espn_id(away_node.get("team", {}).get("conferenceId"))
 
                         broadcasts = competitions.get("broadcasts") or event.get("broadcasts") or []
                         tv_names = broadcasts[0].get("names", []) if broadcasts and isinstance(broadcasts, list) else []
@@ -878,6 +886,9 @@ with tab_setup:
                         if kickoff_time and (earliest_kickoff_iso is None or kickoff_time < earliest_kickoff_iso):
                             earliest_kickoff_iso = kickoff_time
 
+                        fav_conference = home_conference if fav_home else away_conference
+                        und_conference = away_conference if fav_home else home_conference
+
                         # Save clean rows straight to your Supabase tables
                         supabase.table("games").insert({
                             "game_id": f"espn_{game_id}",
@@ -887,6 +898,8 @@ with tab_setup:
                             "underdog_team": und_team,
                             "favorite_team_home": fav_home,
                             "underdog_team_home": und_home,
+                            "favorite_conference": fav_conference,
+                            "underdog_conference": und_conference,
                             "spread_value": nudge_off_whole_number(odds_string),
                             "display_text": f"{away_team} at {home_team}",
                             "kickoff_time": kickoff_time,
