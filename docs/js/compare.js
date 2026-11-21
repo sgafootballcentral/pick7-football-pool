@@ -47,15 +47,29 @@ export function renderCompare(el, { supabase, username, currentSeason }) {
     h2hB: "",
   };
 
-  // Same idea as the weekly pick lock everywhere else in the app: unlocked
-  // once the admin's lock time passes, OR once every game in the week has
-  // already kicked off (at that point there's nothing left to "scout"
-  // anyway, even if the admin never set an explicit lock time).
-  function isCompareUnlocked() {
+  // Fully unlocked once the admin's own lock time passes (a deliberate,
+  // all-at-once reveal moment the admin chose) -- or, failing that, once
+  // every game in the week has already kicked off (nothing left to
+  // "scout" at that point either way). Short of either of those, see
+  // getVisibleGames() below: a forgotten lock time no longer keeps the
+  // whole week dark through its last kickoff.
+  function isCompareFullyUnlocked() {
     const now = new Date();
     if (s.weekLock?.lock_at && now >= new Date(s.weekLock.lock_at)) return true;
     if (s.games.length && s.games.every((g) => now >= new Date(g.kickoff_time))) return true;
     return false;
+  }
+
+  // Which of this week's games are safe to compare right now. Fully
+  // unlocked (see above) -- all of them. Otherwise, same spirit as
+  // "viewing another player's picks" on the Picks page itself: a game's
+  // picks are revealed as soon as THAT game kicks off (it can't be
+  // changed anymore, so there's nothing to scout), without waiting on
+  // every other game in the week to also have started.
+  function getVisibleGames() {
+    if (isCompareFullyUnlocked()) return s.games;
+    const now = new Date();
+    return s.games.filter((g) => now >= new Date(g.kickoff_time));
   }
 
   function weekSelectHtml() {
@@ -216,9 +230,9 @@ export function renderCompare(el, { supabase, username, currentSeason }) {
       return;
     }
 
-    const unlocked = isCompareUnlocked();
+    const visibleGames = getVisibleGames();
 
-    if (!unlocked) {
+    if (!visibleGames.length) {
       const lockNote = s.weekLock?.lock_at
         ? `Picks for Week ${s.week} unlock for comparison once they lock, at ${formatLockAt(s.weekLock.lock_at)} ET.`
         : `Picks for Week ${s.week} unlock for comparison once its games kick off, or once an admin sets a weekly lock time -- whichever comes first.`;
@@ -235,7 +249,12 @@ export function renderCompare(el, { supabase, username, currentSeason }) {
       return;
     }
 
-    const orderedGames = orderGamesByKickoff(s.games);
+    const fullyUnlocked = isCompareFullyUnlocked();
+    const partialNote = (!fullyUnlocked && visibleGames.length < s.games.length)
+      ? `<div class="hint" style="margin-bottom:10px;">\u{1F513} Showing the ${visibleGames.length} of ${s.games.length} Week ${s.week} game${s.games.length === 1 ? "" : "s"} that have already kicked off. The rest unlock here as each one starts, or all at once if an admin sets a weekly lock time.</div>`
+      : "";
+
+    const orderedGames = orderGamesByKickoff(visibleGames);
 
     // The Everyone grid only makes sense for games at least one player
     // actually picked -- a game nobody picked yet (or ever, if it's not part
@@ -251,6 +270,7 @@ export function renderCompare(el, { supabase, username, currentSeason }) {
     el.innerHTML = `
       <h2>\u{1F86A} Compare Picks</h2>
       ${weekSelectHtml()}
+      ${partialNote}
       <div class="btn-row" style="margin-bottom:12px;">
         <button class="btn ${s.mode === "grid" ? "btn-primary" : "btn-secondary"}" id="cmp-mode-grid">\u{1F4CA} Everyone</button>
         <button class="btn ${s.mode === "h2h" ? "btn-primary" : "btn-secondary"}" id="cmp-mode-h2h">\u{1F19A} Head-to-Head</button>

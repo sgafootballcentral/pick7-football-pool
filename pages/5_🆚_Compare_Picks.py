@@ -185,24 +185,36 @@ lock_at_dt = None
 if lock_row and lock_row.get("lock_at"):
     lock_at_dt = datetime.fromisoformat(lock_row["lock_at"].replace("Z", "+00:00"))
 
-# Unlocked once the admin's lock time passes, OR once every game in the week
-# has already kicked off -- same idea as the weekly pick lock everywhere
-# else, so there's nothing to "scout" even if an admin never set an
-# explicit lock time for this week.
-unlocked = False
-if lock_at_dt and now >= lock_at_dt:
-    unlocked = True
-elif games_sorted:
-    kickoffs = []
-    for g in games_sorted:
-        try:
-            kickoffs.append(datetime.fromisoformat(g["kickoff_time"].replace("Z", "+00:00")))
-        except (ValueError, AttributeError, TypeError):
-            kickoffs.append(None)
-    if kickoffs and all(k is not None and now >= k for k in kickoffs):
-        unlocked = True
 
-if not unlocked:
+def _kickoff_dt(g):
+    try:
+        return datetime.fromisoformat(g["kickoff_time"].replace("Z", "+00:00"))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+kickoffs = [_kickoff_dt(g) for g in games_sorted]
+
+# Fully unlocked once the admin's own lock time passes (a deliberate,
+# all-at-once reveal moment the admin chose) -- or, failing that, once
+# every game in the week has already kicked off (nothing left to "scout"
+# at that point either way).
+fully_unlocked = bool(lock_at_dt and now >= lock_at_dt) or bool(
+    kickoffs and all(k is not None and now >= k for k in kickoffs)
+)
+
+# Which games are safe to show right now. Fully unlocked -- all of them.
+# Otherwise, same idea as "viewing another player's picks" on the Picks
+# page itself: a game's picks are revealed as soon as THAT game kicks
+# off, without waiting on the rest of the week to also have started --
+# so forgetting to set a weekly lock time doesn't leave the whole page
+# dark through Monday night.
+if fully_unlocked:
+    visible_games = games_sorted
+else:
+    visible_games = [g for g, k in zip(games_sorted, kickoffs) if k is not None and now >= k]
+
+if not visible_games:
     if lock_at_dt:
         lock_at_str = lock_at_dt.astimezone(EASTERN_TZ).strftime("%a %m/%d %I:%M %p ET").replace(" 0", " ")
         st.info(f"🔒 Picks for Week {CURRENT_WEEK} unlock for comparison once they lock, at {lock_at_str}.")
@@ -212,6 +224,13 @@ if not unlocked:
             "or once an admin sets a weekly lock time -- whichever comes first."
         )
     st.stop()
+
+if not fully_unlocked and len(visible_games) < len(games_sorted):
+    st.info(
+        f"🔓 Showing the {len(visible_games)} of {len(games_sorted)} Week {CURRENT_WEEK} "
+        f"game{'s' if len(games_sorted) != 1 else ''} that have already kicked off. The rest "
+        "unlock here as each one starts, or all at once if an admin sets a weekly lock time."
+    )
 
 week_picks = supabase.table("picks").select("*").eq("week_number", CURRENT_WEEK).eq("season_id", get_current_season_id()).execute().data or []
 
@@ -243,7 +262,7 @@ view_mode = st.radio("View:", ["📊 Everyone", "🆚 Head-to-Head"], horizontal
 # just be an all-"—" column. Head-to-head is left showing the full week
 # either way, since "neither of us picked this one" is still meaningful there.
 picked_game_ids = {p["game_id"] for p in week_picks if p.get("selected_team")}
-grid_games = [g for g in games_sorted if g["game_id"] in picked_game_ids]
+grid_games = [g for g in visible_games if g["game_id"] in picked_game_ids]
 game_cols = [f"G{i + 1}" for i in range(len(grid_games))]
 
 if view_mode == "📊 Everyone":
@@ -313,7 +332,7 @@ else:
     # picked -- a game neither of them touched is just noise once you've
     # picked two names, even though it's still shown on the full-week grid.
     h2h_games = [
-        g for g in games_sorted
+        g for g in visible_games
         if a_picks_by_game.get(g["game_id"], {}).get("selected_team")
         or b_picks_by_game.get(g["game_id"], {}).get("selected_team")
     ]
