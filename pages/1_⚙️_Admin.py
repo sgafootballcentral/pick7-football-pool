@@ -10,6 +10,17 @@ from urllib.parse import quote as url_quote
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 from supabase import create_client, Client
+
+# pages/*.py scripts don't reliably get the repo root on sys.path the way
+# the main app.py entrypoint does (Streamlit Cloud runs them in a way that
+# broke this import in production) -- add it explicitly so the sibling
+# conferences.py module (also used by app.py and docs/js/conferences.js)
+# is always importable regardless of how/where Streamlit executes this page.
+import os
+import sys
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 from conferences import conference_name_from_espn_id, team_matches_query
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
