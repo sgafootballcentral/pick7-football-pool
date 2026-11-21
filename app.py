@@ -16,6 +16,7 @@ from reportlab.lib.units import inch
 from reportlab.lib import colors
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.pdfbase import pdfmetrics
+from conferences import team_matches_query
 
 # 1. Connection and Secrets Verification
 SUPABASE_URL = st.secrets.get("SUPABASE_URL")
@@ -1436,12 +1437,20 @@ else:
     # week's picks rows), so there's no way to pick someone with nothing
     # submitted yet.
     st.write("---")
-    view_scope_options = ["All games", "My picks"] + [f"{p}'s picks" for p in other_players_submitted]
-    selected_view_scope = st.selectbox(
-        "👀 Which games would you like to view?",
-        view_scope_options,
-        key=f"picks_view_scope_{CURRENT_WEEK}",
-    )
+    search_col, view_col = st.columns(2)
+    with search_col:
+        search_query = st.text_input(
+            "🔎 Search team or conference",
+            key=f"picks_team_search_{CURRENT_WEEK}",
+            placeholder="e.g. Georgia or SEC",
+        ).strip()
+    with view_col:
+        view_scope_options = ["All games", "My picks"] + [f"{p}'s picks" for p in other_players_submitted]
+        selected_view_scope = st.selectbox(
+            "👀 Which games would you like to view?",
+            view_scope_options,
+            key=f"picks_view_scope_{CURRENT_WEEK}",
+        )
 
     viewing_other_player = None
     other_picks_by_game = {}
@@ -1457,6 +1466,20 @@ else:
         games_chronological = [g for g in games_chronological if g["game_id"] in other_picks_by_game]
         if not games_chronological:
             st.info(f"{viewing_other_player} hasn't picked any games yet for this week.")
+
+    # Team-name or conference search, layered on top of the view-scope
+    # filter above -- e.g. viewing "All games" and searching "SEC" shows
+    # every SEC game on the slate; viewing "My picks" and searching "SEC"
+    # shows just the SEC games you picked.
+    if search_query and games_chronological:
+        games_chronological = [
+            g for g in games_chronological
+            if team_matches_query(g.get("favorite_team", ""), g.get("underdog_team", ""), search_query)
+        ]
+        if games_chronological:
+            st.caption(f"{len(games_chronological)} game{'s' if len(games_chronological) != 1 else ''} match \"{search_query}\"")
+        else:
+            st.info(f'No games match "{search_query}". Check the spelling, or clear the search to see everyone.')
 
     grouped_by_date = {}
     for game in games_chronological:
@@ -1486,8 +1509,21 @@ else:
             fav_team = game.get("favorite_team", "Away Team")
             und_team = game.get("underdog_team", "Home Team")
             
-            fav_label = f"{fav_team} 🏠" if game.get("favorite_team_home") else fav_team
-            und_label = f"{und_team} 🏠" if game.get("underdog_team_home") else und_team
+            def _highlight(name):
+                # Highlights the part of `name` that matched the active
+                # team/conference search, same idea as the PWA's <mark>
+                # highlighting. Nothing to highlight for a conference match
+                # (the query itself isn't literally in the team name).
+                if not search_query:
+                    return name
+                idx = name.lower().find(search_query.lower())
+                if idx == -1:
+                    return name
+                end = idx + len(search_query)
+                return f'{name[:idx]}<mark>{name[idx:end]}</mark>{name[end:]}'
+
+            fav_label = f"{_highlight(fav_team)} 🏠" if game.get("favorite_team_home") else _highlight(fav_team)
+            und_label = f"{_highlight(und_team)} 🏠" if game.get("underdog_team_home") else _highlight(und_team)
 
             # Once the game is graded, highlight whichever team covered.
             winning_team = game.get("winning_team")

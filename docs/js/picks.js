@@ -1,5 +1,6 @@
 import { escapeHtml, openGameDetailModal } from "./app.js";
 import { getSharedWeek, setSharedWeek } from "./weekState.js";
+import { teamMatchesQuery } from "./conferences.js";
 
 const EASTERN_TZ = "America/New_York";
 
@@ -286,6 +287,8 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
     pickResults: {}, // game_id -> "win" | "loss" | null (graded result of that pick, once the admin grades it)
     weekPicksByUsername: {}, // everyone's picks this week, grouped by username -- powers the view-scope selector below
     viewScope: "all", // "all" | "mine" | a specific other player's username
+    searchQuery: "", // team name or conference typed into the search box, "" when empty
+    searchExpanded: false, // whether the search box UI is expanded (typing) or collapsed (icon only)
     weekLock: null, // the week_pick_locks row for s.week, or null if no lock is set
     myExceptions: [], // my pick_lock_exceptions rows for s.week, newest first
     autoRefresh: false,
@@ -351,6 +354,19 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
       otherPicksByGame = Object.fromEntries(otherPicks.map((p) => [p.game_id, p]));
       visibleGames = s.games.filter((g) => g.game_id in otherPicksByGame);
       if (!visibleGames.length) scopeEmptyMessage = `${viewingOtherPlayer} hasn't picked any games yet for this week.`;
+    }
+
+    // Team-name or conference search, layered on top of the view-scope
+    // filter above -- e.g. viewing "All games" and searching "SEC" shows
+    // every SEC game on the slate; viewing "My picks" and searching "SEC"
+    // shows just the SEC games you picked.
+    const searchQuery = s.searchQuery.trim();
+    let searchEmptyMessage = "";
+    if (searchQuery && visibleGames.length) {
+      visibleGames = visibleGames.filter((g) => teamMatchesQuery(g.favorite_team, g.underdog_team, searchQuery));
+      if (!visibleGames.length) {
+        searchEmptyMessage = `No games match "${searchQuery}". Check the spelling, or clear the search to see everyone.`;
+      }
     }
 
     const grouped = {};
@@ -430,17 +446,30 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
         </div>
       </details>
 
-      <div class="field" style="margin: 14px 0 10px;">
-        <label>\u{1F440} Which games would you like to view?</label>
-        <select id="view-scope-select">
-          <option value="all" ${s.viewScope === "all" ? "selected" : ""}>All games</option>
-          <option value="mine" ${s.viewScope === "mine" ? "selected" : ""}>My picks</option>
-          ${otherPlayersSubmitted.map((p) => `<option value="${escapeHtml(p)}" ${s.viewScope === p ? "selected" : ""}>${escapeHtml(p)}'s picks</option>`).join("")}
-        </select>
+      <div class="view-row" id="view-row">
+        <div class="labels-row">
+          <span class="col-label">\u{1F50E} Search</span>
+          <span class="col-label">\u{1F440} Viewing:</span>
+        </div>
+        <div class="controls-row">
+          <div class="search-pill ${s.searchExpanded ? "expanded" : ""}" id="search-pill">
+            <button class="icon-btn" id="search-toggle" aria-label="Search teams or conferences" tabindex="-1">\u{1F50E}</button>
+            <input type="text" id="team-search" placeholder="e.g. Georgia or SEC" autocomplete="off" value="${escapeHtml(s.searchQuery)}">
+            <button class="clear-btn" id="clear-search" aria-label="Close search">&times;</button>
+          </div>
+          <div class="viewing-half">
+            <select id="view-scope-select">
+              <option value="all" ${s.viewScope === "all" ? "selected" : ""}>All games</option>
+              <option value="mine" ${s.viewScope === "mine" ? "selected" : ""}>My picks</option>
+              ${otherPlayersSubmitted.map((p) => `<option value="${escapeHtml(p)}" ${s.viewScope === p ? "selected" : ""}>${escapeHtml(p)}'s picks</option>`).join("")}
+            </select>
+          </div>
+        </div>
       </div>
+      ${searchQuery ? `<div class="match-count">${visibleGames.length === 1 ? "1 game matches" : `${visibleGames.length} games match`} "${escapeHtml(searchQuery)}"</div>` : ""}
       ${viewingOtherPlayer ? `<div class="hint" style="margin-bottom:10px;">\u{1F464} Showing ${escapeHtml(viewingOtherPlayer)}'s picks -- revealed only for games that have already kicked off.</div>` : ""}
 
-      ${scopeEmptyMessage ? `<div class="card">${escapeHtml(scopeEmptyMessage)}</div>` : Object.entries(grouped).map(([dateStr, dayGames]) => `
+      ${(scopeEmptyMessage || searchEmptyMessage) ? `<div class="card">${escapeHtml(scopeEmptyMessage || searchEmptyMessage)}</div>` : Object.entries(grouped).map(([dateStr, dayGames]) => `
         <div class="day-group">
           <h3>\u{1F4C5} ${dateStr}</h3>
           ${dayGames.map((g) => gameRowHtml(g, s, numbersMap, viewingOtherPlayer, otherPicksByGame)).join("")}
@@ -465,6 +494,36 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
     el.querySelector("#view-scope-select").addEventListener("change", (e) => {
       s.viewScope = e.target.value;
       draw();
+    });
+    function expandSearch() {
+      s.searchExpanded = true;
+      draw();
+      el.querySelector("#team-search")?.focus();
+    }
+    function collapseSearch() {
+      s.searchExpanded = false;
+      s.searchQuery = "";
+      draw();
+    }
+    el.querySelector("#search-pill").addEventListener("click", () => {
+      if (!s.searchExpanded) expandSearch();
+    });
+    el.querySelector("#clear-search").addEventListener("click", (e) => {
+      e.stopPropagation();
+      collapseSearch();
+    });
+    el.querySelector("#team-search").addEventListener("input", (e) => {
+      const cursorPos = e.target.selectionStart;
+      s.searchQuery = e.target.value;
+      draw();
+      const input = el.querySelector("#team-search");
+      if (input) {
+        input.focus();
+        input.setSelectionRange(cursorPos, cursorPos);
+      }
+    });
+    el.querySelector("#team-search").addEventListener("keydown", (e) => {
+      if (e.key === "Escape") collapseSearch();
     });
     el.querySelector("#number-input").addEventListener("input", (e) => { s.numberInput = e.target.value; });
     el.querySelector("#preview-numbers-btn").addEventListener("click", onPreviewNumbers);
@@ -535,6 +594,20 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
     if (otherPick.result === "win") resultBadge = ` <span class="pick-result win">\u2705 Win</span>`;
     else if (otherPick.result === "loss") resultBadge = ` <span class="pick-result loss">\u274C Loss</span>`;
     return `<div class="pick-locked has-pick">\u{1F464} ${escapeHtml(viewingOtherPlayer)} picked <b>${escapeHtml(otherTeam)}</b>${resultBadge}</div>`;
+  }
+
+  // Wraps the part of `name` that matches the active search query in
+  // <mark>, so a team/conference search visibly highlights what matched
+  // (nothing to highlight for a conference match -- the query itself
+  // isn't literally in the team name).
+  function highlightTeamName(name, query) {
+    if (!query) return escapeHtml(name);
+    const idx = name.toLowerCase().indexOf(query.toLowerCase());
+    if (idx === -1) return escapeHtml(name);
+    const before = name.slice(0, idx);
+    const matchText = name.slice(idx, idx + query.length);
+    const after = name.slice(idx + query.length);
+    return `${escapeHtml(before)}<mark>${escapeHtml(matchText)}</mark>${escapeHtml(after)}`;
   }
 
   function gameRowHtml(g, s, numbersMap, viewingOtherPlayer, otherPicksByGame) {
@@ -637,9 +710,9 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
         <div class="game-card-body">
           <div class="game-card-top game-card-clickable" data-open-gamecard="${escapeHtml(g.game_id)}">
             <div class="game-card-matchup">
-              <span class="${favCovered ? "covered" : ""}">#${nums.favNum || ""} ${escapeHtml(favTeam)}${favHome ? " \u{1F3E0}" : ""}</span>${favScoreHtml}${favCovered ? " ✅" : ""}
+              <span class="${favCovered ? "covered" : ""}">#${nums.favNum || ""} ${highlightTeamName(favTeam, s.searchQuery)}${favHome ? " \u{1F3E0}" : ""}</span>${favScoreHtml}${favCovered ? " ✅" : ""}
               <span class="vs">${undHome ? "at" : "vs"}</span>
-              <span class="${undCovered ? "covered" : ""}">#${nums.undNum || ""} ${escapeHtml(undTeam)}${undHome ? " \u{1F3E0}" : ""}</span>${undScoreHtml}${undCovered ? " ✅" : ""}
+              <span class="${undCovered ? "covered" : ""}">#${nums.undNum || ""} ${highlightTeamName(undTeam, s.searchQuery)}${undHome ? " \u{1F3E0}" : ""}</span>${undScoreHtml}${undCovered ? " ✅" : ""}
             </div>
             <div class="game-card-meta">
               <span class="spread">${escapeHtml(lockedLine)}</span>${metaRightHtml}
