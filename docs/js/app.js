@@ -965,6 +965,86 @@ function syntheticGameFromEspn(eg, teamName, league) {
   };
 }
 
+// Same row layout as the team-schedule redesign above, except "subject"
+// here is whichever team the PERSON PICKED (not a fixed team), and the
+// check mark means the pick won or lost, not that a spread covered.
+// Shared with leaderboard.js's own week-picks popup (imported the same
+// way escapeHtml/fetchLiveScores/openGameDetailModal already are) since
+// this is pure rendering with no state of its own.
+export function weekPickRowHtml(g, p, live) {
+  live = live || {};
+  if (!g) {
+    // A pick can in principle outlive its game (data cleanup, a
+    // mis-synced week) -- fall back to a bare line instead of crashing
+    // on fields a missing game doesn't have.
+    const resultClass = p.result === "win" ? "win" : p.result === "loss" ? "loss" : "";
+    return `
+      <div class="team-sched-row ${resultClass}" data-open-gamecard="${escapeHtml(p.game_id)}">
+        <div class="team-sched-teams">
+          <div class="team-sched-team subject"><span class="team-sched-name">${escapeHtml(p.selected_team || "TBD")}</span></div>
+        </div>
+        <div class="team-sched-status-col"><span class="team-sched-status">${escapeHtml(p.result === "win" ? "Win" : p.result === "loss" ? "Loss" : "Pending")}</span></div>
+      </div>
+    `;
+  }
+
+  const homeIsFavorite = !!g.favorite_team_home;
+  const homeTeam = homeIsFavorite ? g.favorite_team : g.underdog_team;
+  const awayTeam = homeIsFavorite ? g.underdog_team : g.favorite_team;
+
+  const isFinal = live.completed || (g.status === "final" && g.home_score != null);
+  const isLive = live.state === "in" && !isFinal;
+  const homeScore = live.home_score ?? g.home_score;
+  const awayScore = live.away_score ?? g.away_score;
+  const hasScore = homeScore != null && awayScore != null && (isLive || isFinal);
+
+  const { dateStr, timeStr } = formatKickoff(g.kickoff_time);
+  const statusHtml = isFinal
+    ? `Final<span class="date">${escapeHtml(dateStr)}</span>`
+    : isLive
+      ? `<span class="live">● LIVE</span><span class="date">${escapeHtml(dateStr)}</span>`
+      : `<span class="date">${escapeHtml(dateStr)} · ${escapeHtml(timeStr)}</span>`;
+
+  const spread = p.spread_at_pick || g.spread_value || "";
+  const atsHtml = spread ? `<span class="team-sched-ats">${escapeHtml(spread)}</span>` : "";
+
+  const logoHtml = (logoUrl, fallbackLetter) => `
+    <div class="team-sched-logo-wrap">
+      ${logoUrl ? `<img class="team-sched-logo" src="${escapeHtml(logoUrl)}" alt=""
+          onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ""}
+      <div class="team-sched-logo-fallback" style="display:${logoUrl ? "none" : "flex"};">${escapeHtml(fallbackLetter)}</div>
+    </div>
+  `;
+  const picked = p.selected_team;
+  const teamLine = (name, logoUrl, isPicked) => `
+    <div class="team-sched-team${isPicked ? " subject" : ""}">
+      ${logoHtml(logoUrl, (name || "?").charAt(0))}
+      <span class="team-sched-name">${escapeHtml(name || "TBD")}${isPicked && p.result === "win" ? ` <span class="covered-check">✅</span>` : ""}${isPicked && p.result === "loss" ? ` <span class="covered-check">❌</span>` : ""}</span>
+    </div>
+  `;
+  const scoreLine = (score, isPicked) => `<span class="team-sched-score${isPicked ? " subject-score" : ""}">${hasScore && score != null ? score : ""}</span>`;
+
+  const resultClass = p.result === "win" ? "win" : p.result === "loss" ? "loss" : "";
+
+  return `
+    <div class="team-sched-row ${resultClass}" data-open-gamecard="${escapeHtml(p.game_id)}">
+      <div class="team-sched-teams">
+        ${teamLine(awayTeam, live.away_logo, awayTeam === picked)}
+        ${teamLine(homeTeam, live.home_logo, homeTeam === picked)}
+      </div>
+      <div class="team-sched-scores">
+        ${scoreLine(awayScore, awayTeam === picked)}
+        ${scoreLine(homeScore, homeTeam === picked)}
+      </div>
+      <div class="team-sched-status-col">
+        <span class="team-sched-status">${statusHtml}</span>
+        ${atsHtml}
+        <span class="team-sched-action">View Game</span>
+      </div>
+    </div>
+  `;
+}
+
 // Tapping a team's name/logo in the gamecast popup (any of the places that
 // popup opens -- Picks, Standings' week-picks drill-down, Compare) opens
 // that team's full schedule. ESPN's own schedule is the source of truth
@@ -1129,7 +1209,7 @@ function teamScheduleRowHtml(g, teamName) {
   const teamLine = (name, logoUrl, isSubject, covered) => `
     <div class="team-sched-team${isSubject ? " subject" : ""}">
       ${logoHtml(logoUrl, (name || "?").charAt(0))}
-      <span class="team-sched-name">${escapeHtml(name || "TBD")}${isSubject ? ` <span class="star">★</span>` : ""}${covered ? ` <span class="covered-check">✅</span>` : ""}</span>
+      <span class="team-sched-name">${escapeHtml(name || "TBD")}${covered ? ` <span class="covered-check">✅</span>` : ""}</span>
     </div>
   `;
   const scoreLine = (score, isSubject) => `<span class="team-sched-score${isSubject ? " subject-score" : ""}">${hasScore && score != null ? score : ""}</span>`;
@@ -1232,7 +1312,7 @@ export async function openPlayerProfileModal(userId, username, avatarsByUsername
     ` : `<div class="hint" style="text-align:center;">No graded weeks yet.</div>`;
     wrap.querySelectorAll("tr[data-week]").forEach((row) => {
       row.addEventListener("click", () => {
-        openPlayerWeekPicksModal(userId, username, Number(row.dataset.week), seasonId, wrap);
+        openPlayerWeekPicksModal(userId, username, Number(row.dataset.week), seasonId, wrap, avatarsByUsername);
       });
     });
   } catch (e) {
@@ -1250,7 +1330,7 @@ function closePlayerProfileModal() {
 // Same drill-down a week row opens from leaderboard.js's own profile sheet
 // -- matchup, picked team, spread, graded result, with a click-through to
 // the gamecast popup for any game in the list.
-async function openPlayerWeekPicksModal(userId, uname, weekNumber, seasonId, profileWrap) {
+async function openPlayerWeekPicksModal(userId, uname, weekNumber, seasonId, profileWrap, avatarsByUsername) {
   const panel = document.createElement("div");
   panel.className = "modal-backdrop";
   document.body.appendChild(panel);
@@ -1264,10 +1344,17 @@ async function openPlayerWeekPicksModal(userId, uname, weekNumber, seasonId, pro
   }
 
   panel.innerHTML = `
-    <div class="modal-sheet">
+    <div class="modal-sheet sched-sheet">
       <button class="modal-close-x" id="week-picks-x-btn" aria-label="Close">&times;</button>
-      <h3 style="text-align:center; margin-top:0;">${escapeHtml(uname)} -- Week ${weekNumber}</h3>
-      <div class="hint" style="text-align:center;">Loading…</div>
+      <div class="sheet-compact-title" id="week-picks-compact-title">${escapeHtml(uname)} &middot; Wk ${weekNumber}</div>
+      <div class="sheet-scroll" id="week-picks-scroll">
+        <div class="team-sched-hero">
+          <div class="team-sched-hero-avatar">${avatarInnerHtml(avatarsByUsername?.[uname]?.url, avatarsByUsername?.[uname]?.monogram, uname)}</div>
+          <h3 class="team-sched-hero-name">${escapeHtml(uname)}</h3>
+          <div class="team-sched-hero-sub">Week ${weekNumber} Picks</div>
+        </div>
+        <div class="hint" style="text-align:center;">Loading…</div>
+      </div>
     </div>
   `;
   panel.querySelector("#week-picks-x-btn").addEventListener("click", closeToProfile);
@@ -1291,37 +1378,27 @@ async function openPlayerWeekPicksModal(userId, uname, weekNumber, seasonId, pro
     });
 
     panel.innerHTML = `
-      <div class="modal-sheet">
+      <div class="modal-sheet sched-sheet">
         <button class="modal-close-x" id="week-picks-x-btn" aria-label="Close">&times;</button>
-        <h3 style="text-align:center; margin-top:0;">${escapeHtml(uname)} -- Week ${weekNumber}</h3>
-        ${rows.length ? rows.map((p) => {
-          const g = gameLookup[p.game_id];
-          const matchup = g ? `${g.favorite_team} vs ${g.underdog_team}` : p.game_id;
-          const spread = p.spread_at_pick || g?.spread_value || "";
-          const resultClass = p.result === "win" ? "win" : p.result === "loss" ? "loss" : "";
-          const resultLabel = p.result === "win" ? "✓ Win" : p.result === "loss" ? "✗ Loss" : "Pending";
-          return `
-            <div class="game-card" style="margin-bottom:7px;">
-              <div class="game-card-stripe ${resultClass}"></div>
-              <div class="game-card-body">
-                <div class="game-card-top game-card-clickable" data-open-gamecard="${escapeHtml(p.game_id)}">
-                  <div class="game-card-matchup">${escapeHtml(matchup)}</div>
-                  <div class="game-card-meta"><span class="spread">${escapeHtml(spread)}</span></div>
-                </div>
-                <div class="game-card-pickrow ${resultClass === "win" ? "win-bg" : ""}">
-                  <span class="label">Picked</span>
-                  <span class="value">${escapeHtml(p.selected_team)}</span>
-                  <span class="value ${resultClass}">${resultLabel}</span>
-                </div>
-              </div>
-            </div>
-          `;
-        }).join("") : `<div class="hint" style="text-align:center;">No picks on file for this week.</div>`}
-        <button class="btn btn-secondary" id="week-picks-close-btn" style="margin-top:10px;">Close</button>
+        <div class="sheet-compact-title" id="week-picks-compact-title">${escapeHtml(uname)} &middot; Wk ${weekNumber}</div>
+        <div class="sheet-scroll" id="week-picks-scroll">
+          <div class="team-sched-hero">
+            <div class="team-sched-hero-avatar">${avatarInnerHtml(avatarsByUsername?.[uname]?.url, avatarsByUsername?.[uname]?.monogram, uname)}</div>
+            <h3 class="team-sched-hero-name">${escapeHtml(uname)}</h3>
+            <div class="team-sched-hero-sub">Week ${weekNumber} Picks</div>
+          </div>
+          ${rows.length ? rows.map((p) => weekPickRowHtml(gameLookup[p.game_id], p, liveScores[p.game_id])).join("") : `<div class="hint" style="text-align:center;">No picks on file for this week.</div>`}
+          <button class="btn btn-secondary" id="week-picks-close-btn" style="margin-top:10px;">Close</button>
+        </div>
       </div>
     `;
     panel.querySelector("#week-picks-x-btn").addEventListener("click", closeToProfile);
     panel.querySelector("#week-picks-close-btn").addEventListener("click", () => panel.remove());
+    const weekPicksScrollEl = panel.querySelector("#week-picks-scroll");
+    const weekPicksCompactTitle = panel.querySelector("#week-picks-compact-title");
+    weekPicksScrollEl.addEventListener("scroll", () => {
+      weekPicksCompactTitle.classList.toggle("visible", weekPicksScrollEl.scrollTop > 70);
+    });
     panel.querySelectorAll("[data-open-gamecard]").forEach((headerEl) => {
       headerEl.addEventListener("click", () => {
         const gid = headerEl.dataset.openGamecard;

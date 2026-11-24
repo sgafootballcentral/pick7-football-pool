@@ -1,4 +1,4 @@
-import { escapeHtml, avatarInnerHtml, fetchAvatarsByUsername, fetchLiveScores, openGameDetailModal } from "./app.js";
+import { escapeHtml, avatarInnerHtml, fetchAvatarsByUsername, fetchLiveScores, openGameDetailModal, weekPickRowHtml } from "./app.js";
 import { getSharedWeek, setSharedWeek } from "./weekState.js";
 
 const MEDALS = { 1: "\u{1F947}", 2: "\u{1F948}", 3: "\u{1F949}" };
@@ -341,10 +341,17 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
     }
 
     panel.innerHTML = `
-      <div class="modal-sheet">
+      <div class="modal-sheet sched-sheet">
         <button class="modal-close-x" id="week-picks-x-btn" aria-label="Close">&times;</button>
-        <h3 style="text-align:center; margin-top:0;">${escapeHtml(uname)} -- Week ${weekNumber}</h3>
-        <div class="hint" style="text-align:center;">Loading…</div>
+        <div class="sheet-compact-title" id="week-picks-compact-title">${escapeHtml(uname)} &middot; Wk ${weekNumber}</div>
+        <div class="sheet-scroll" id="week-picks-scroll">
+          <div class="team-sched-hero">
+            <div class="team-sched-hero-avatar">${avatarInnerHtml(s.avatars[uname]?.url, s.avatars[uname]?.monogram, uname)}</div>
+            <h3 class="team-sched-hero-name">${escapeHtml(uname)}</h3>
+            <div class="team-sched-hero-sub">Week ${weekNumber} Picks</div>
+          </div>
+          <div class="hint" style="text-align:center;">Loading…</div>
+        </div>
       </div>
     `;
     panel.querySelector("#week-picks-x-btn").addEventListener("click", closeToStandings);
@@ -371,37 +378,27 @@ export function renderLeaderboard(el, { supabase, user, username, unreadDmSender
       });
 
       panel.innerHTML = `
-        <div class="modal-sheet">
+        <div class="modal-sheet sched-sheet">
           <button class="modal-close-x" id="week-picks-x-btn" aria-label="Close">&times;</button>
-          <h3 style="text-align:center; margin-top:0;">${escapeHtml(uname)} -- Week ${weekNumber}</h3>
-          ${rows.length ? rows.map((p) => {
-            const g = gameLookup[p.game_id];
-            const matchup = g ? `${g.favorite_team} vs ${g.underdog_team}` : p.game_id;
-            const spread = p.spread_at_pick || g?.spread_value || "";
-            const resultClass = p.result === "win" ? "win" : p.result === "loss" ? "loss" : "";
-            const resultLabel = p.result === "win" ? "✓ Win" : p.result === "loss" ? "✗ Loss" : "Pending";
-            return `
-              <div class="game-card" style="margin-bottom:7px;">
-                <div class="game-card-stripe ${resultClass}"></div>
-                <div class="game-card-body">
-                  <div class="game-card-top game-card-clickable" data-open-gamecard="${escapeHtml(p.game_id)}">
-                    <div class="game-card-matchup">${escapeHtml(matchup)}</div>
-                    <div class="game-card-meta"><span class="spread">${escapeHtml(spread)}</span></div>
-                  </div>
-                  <div class="game-card-pickrow ${resultClass === "win" ? "win-bg" : ""}">
-                    <span class="label">Picked</span>
-                    <span class="value">${escapeHtml(p.selected_team)}</span>
-                    <span class="value ${resultClass}">${resultLabel}</span>
-                  </div>
-                </div>
-              </div>
-            `;
-          }).join("") : `<div class="hint" style="text-align:center;">No picks on file for this week.</div>`}
-          <button class="btn btn-secondary" id="week-picks-close-btn" style="margin-top:10px;">Close</button>
+          <div class="sheet-compact-title" id="week-picks-compact-title">${escapeHtml(uname)} &middot; Wk ${weekNumber}</div>
+          <div class="sheet-scroll" id="week-picks-scroll">
+            <div class="team-sched-hero">
+              <div class="team-sched-hero-avatar">${avatarInnerHtml(s.avatars[uname]?.url, s.avatars[uname]?.monogram, uname)}</div>
+              <h3 class="team-sched-hero-name">${escapeHtml(uname)}</h3>
+              <div class="team-sched-hero-sub">Week ${weekNumber} Picks</div>
+            </div>
+            ${rows.length ? rows.map((p) => weekPickRowHtml(gameLookup[p.game_id], p, liveScores[p.game_id])).join("") : `<div class="hint" style="text-align:center;">No picks on file for this week.</div>`}
+            <button class="btn btn-secondary" id="week-picks-close-btn" style="margin-top:10px;">Close</button>
+          </div>
         </div>
       `;
       panel.querySelector("#week-picks-x-btn").addEventListener("click", closeToStandings);
       panel.querySelector("#week-picks-close-btn").addEventListener("click", () => panel.remove());
+      const weekPicksScrollEl = panel.querySelector("#week-picks-scroll");
+      const weekPicksCompactTitle = panel.querySelector("#week-picks-compact-title");
+      weekPicksScrollEl.addEventListener("scroll", () => {
+        weekPicksCompactTitle.classList.toggle("visible", weekPicksScrollEl.scrollTop > 70);
+      });
       panel.querySelectorAll("[data-open-gamecard]").forEach((headerEl) => {
         headerEl.addEventListener("click", () => {
           const gid = headerEl.dataset.openGamecard;
