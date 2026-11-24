@@ -510,6 +510,11 @@ supabase.auth.onAuthStateChange((event, session) => {
 
 function renderChrome(innerHtml) {
   const offline = !navigator.onLine;
+  // Tabs that live behind the "More" button instead of their own slot on
+  // the main bar -- keep it highlighted (and carry its badge) when one of
+  // them is the active tab, same as any other nav button would be.
+  const moreTabs = ["chat", "requests", ...(state.isAdmin ? ["admin"] : [])];
+  const moreTabsActive = moreTabs.includes(state.activeTab);
   const showInstall =
     !isNativeApp() &&
     !state.installBannerDismissed &&
@@ -554,18 +559,10 @@ function renderChrome(innerHtml) {
         <button data-tab="compare" class="${state.activeTab === "compare" ? "active" : ""}">
           <span class="icon">\u{1F19A}</span>Compare
         </button>
-        <button data-tab="chat" class="${state.activeTab === "chat" ? "active" : ""}">
-          <span class="icon">\u{1F4AC}</span>Chat
+        <button id="more-nav-btn" class="${moreTabsActive ? "active" : ""}">
+          <span class="icon">\u2630</span>More
           ${state.hasUnreadChat ? `<span class="nav-badge"></span>` : ""}
         </button>
-        <button data-tab="requests" class="${state.activeTab === "requests" ? "active" : ""}">
-          <span class="icon">\u{1F5F3}\uFE0F</span>Requests
-        </button>
-        ${state.isAdmin ? `
-          <button data-tab="admin" class="${state.activeTab === "admin" ? "active" : ""}">
-            <span class="icon">⚙️</span>Admin
-          </button>
-        ` : ""}
       </nav>
     ` : ""}
   `;
@@ -584,6 +581,7 @@ function renderChrome(innerHtml) {
   });
   document.getElementById("account-menu-btn")?.addEventListener("click", openAccountMenu);
   document.getElementById("league-switcher-btn")?.addEventListener("click", openLeagueSwitcher);
+  document.getElementById("more-nav-btn")?.addEventListener("click", openMoreMenu);
   root.querySelectorAll(".bottom-nav [data-tab]").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.activeTab = btn.dataset.tab;
@@ -1382,6 +1380,46 @@ function redrawPlayerDmModal() {
 // "My Leagues" bottom sheet -- switch leagues, or jump into creating/joining
 // one. Same self-contained-panel pattern as the account menu / Start New
 // Season below.
+// Bottom sheet for the tabs that don't get their own slot on the main
+// nav bar (Chat, Requests, and Admin when applicable). Picking one just
+// switches the active tab like tapping it on the bar directly would.
+function openMoreMenu() {
+  if (document.querySelector(".modal-backdrop")) return;
+  const wrap = document.createElement("div");
+  wrap.className = "modal-backdrop";
+  document.body.appendChild(wrap);
+
+  const items = [
+    { tab: "chat", icon: "\u{1F4AC}", label: "Chat", badge: state.hasUnreadChat },
+    { tab: "requests", icon: "\u{1F5F3}\uFE0F", label: "Requests", badge: false },
+    ...(state.isAdmin ? [{ tab: "admin", icon: "⚙️", label: "Admin", badge: false }] : []),
+  ];
+
+  wrap.innerHTML = `
+    <div class="modal-sheet">
+      <div class="sheet-head" style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+        <h3 style="margin:0;">More</h3>
+        <button class="close" id="more-close-x" aria-label="Close">&times;</button>
+      </div>
+      ${items.map((it) => `
+        <button class="more-menu-row ${state.activeTab === it.tab ? "active" : ""}" data-more-tab="${it.tab}">
+          <span class="icon">${it.icon}</span>${escapeHtml(it.label)}
+          ${it.badge ? `<span class="more-badge"></span>` : ""}
+        </button>
+      `).join("")}
+    </div>
+  `;
+  wrap.querySelector("#more-close-x")?.addEventListener("click", () => wrap.remove());
+  wrap.querySelectorAll("[data-more-tab]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.activeTab = btn.dataset.moreTab;
+      wrap.remove();
+      if (state.activeTab === "chat") markChatRead();
+      render();
+    });
+  });
+}
+
 function openLeagueSwitcher() {
   if (document.querySelector(".modal-backdrop")) return;
   const wrap = document.createElement("div");

@@ -806,6 +806,21 @@ table.profile-weeks th { color: var(--text-dim); font-weight: 600; font-size: 0.
 .league-row .meta { color: var(--text-dim); font-size: 0.76rem; margin-top: 1px; }
 .league-row .check { color: var(--win); font-size: 1.1rem; margin-left: auto; }
 
+/* "More" bottom-sheet rows (Chat/Requests/Admin, tucked behind the bottom
+   nav's More button instead of each getting their own slot on the bar). */
+.more-menu-row {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; background: none; border: none; border-bottom: 1px solid var(--border);
+  padding: 12px 4px; font-size: 0.94rem; font-weight: 600; color: var(--text);
+  text-align: left; cursor: pointer;
+}
+.more-menu-row:last-of-type { border-bottom: none; }
+.more-menu-row .icon { font-size: 1.2rem; width: 24px; flex: 0 0 auto; text-align: center; }
+.more-menu-row.active { color: var(--accent); }
+.more-menu-row .more-badge {
+  width: 9px; height: 9px; border-radius: 50%; background: #e5484d; margin-left: auto; flex: 0 0 auto;
+}
+
 .badge {
   display: inline-flex;
   align-items: center;
