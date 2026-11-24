@@ -549,6 +549,8 @@ function renderChrome(innerHtml) {
     <div id="tab-content">${innerHtml}</div>
     ${state.user && !state.recoveryMode ? `
       <nav class="bottom-nav">
+        <div class="nav-refract-rim"></div>
+        <div class="nav-pill" id="nav-pill"></div>
         <button data-tab="picks" class="${state.activeTab === "picks" ? "active" : ""}">
           <span class="icon">\u{1F3C8}</span>Picks
         </button>
@@ -589,6 +591,21 @@ function renderChrome(innerHtml) {
       render();
     });
   });
+  positionNavPill();
+}
+
+// Slides the frosted glass pill in the bottom nav behind whichever button
+// (a main-bar tab, or "More") is currently active -- called after every
+// renderChrome() rebuild, since the DOM (and therefore the button to
+// measure) is freshly recreated each time.
+function positionNavPill() {
+  const pill = document.getElementById("nav-pill");
+  if (!pill) return; // logged out / recovery mode -- no nav at all right now
+  const activeBtn = [...document.querySelectorAll(".bottom-nav > button")].find((b) => b.classList.contains("active"));
+  if (!activeBtn) { pill.style.opacity = 0; return; }
+  pill.style.opacity = 1;
+  pill.style.left = `${activeBtn.offsetLeft}px`;
+  pill.style.width = `${activeBtn.offsetWidth}px`;
 }
 
 function buildAdminUrl() {
