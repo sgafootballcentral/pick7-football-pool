@@ -453,8 +453,7 @@ export function renderPicks(el, { supabase, user, username, isAdmin, currentSeas
         </div>
         <div class="controls-row">
           <div class="search-pill ${s.searchExpanded ? "expanded" : ""}" id="search-pill">
-            <button class="icon-btn" id="search-toggle" aria-label="Search teams or conferences" tabindex="-1">\u{1F50E}</button>
-            <input type="text" id="team-search" placeholder="e.g. Georgia or SEC" autocomplete="off" value="${escapeHtml(s.searchQuery)}">
+            <input type="text" id="team-search" aria-label="Search teams or conferences" placeholder="e.g. Georgia or SEC" autocomplete="off" value="${escapeHtml(s.searchQuery)}">
             <button class="clear-btn" id="clear-search" aria-label="Close search">&times;</button>
           </div>
           <div class="viewing-half">

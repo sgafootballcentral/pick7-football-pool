@@ -35,7 +35,7 @@ body {
 #app {
   max-width: 640px;
   margin: 0 auto;
-  padding: 12px 14px calc(84px + var(--safe-bottom)) 14px;
+  padding: 12px 14px calc(100px + var(--safe-bottom)) 14px;
 }
 
 h1, h2, h3 { line-height: 1.25; }
@@ -136,15 +136,28 @@ input, select, textarea {
 }
 .tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
 
-/* Bottom nav -- the app-native feel that differentiates the PWA from the browser tabs */
+/* Bottom nav -- the app-native feel that differentiates the PWA from the
+   browser tabs. Floats over the content on a blurred glass panel (instead
+   of a solid bar flush with the screen edge) so whatever's scrolling is
+   still visible, softened, underneath it. */
 .bottom-nav {
   position: fixed;
-  left: 0; right: 0; bottom: 0;
+  left: 10px; right: 10px; bottom: calc(10px + var(--safe-bottom));
   display: flex;
-  background: var(--bg-elevated);
-  border-top: 1px solid var(--border);
-  padding: 6px 4px calc(6px + var(--safe-bottom)) 4px;
+  background: rgba(22, 27, 34, 0.72);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  padding: 8px 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   z-index: 100;
+}
+/* Fall back to the old solid bar if blur isn't supported at all (very old
+   WebViews) -- otherwise the floating bar would have no backing and text
+   underneath it would show straight through unreadably. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .bottom-nav { background: var(--bg-elevated); }
 }
 .bottom-nav button, .bottom-nav a {
   position: relative;
@@ -170,7 +183,7 @@ input, select, textarea {
   height: 9px;
   border-radius: 50%;
   background: #e5484d;
-  border: 1.5px solid var(--bg-elevated);
+  border: 1.5px solid rgba(22, 27, 34, 0.9);
 }
 
 .topbar {
@@ -887,13 +900,9 @@ table.profile-weeks th { color: var(--text-dim); font-weight: 600; font-size: 0.
   height: 40px; overflow: hidden;
 }
 .search-pill.expanded { position: absolute; inset: 0; flex: none; z-index: 5; cursor: default; }
-.search-pill .icon-btn {
-  flex: 0 0 40px; height: 40px; display: flex; align-items: center; justify-content: center;
-  background: none; border: none; color: var(--text-dim); font-size: 1.05rem; cursor: pointer; padding: 0;
-}
 .search-pill input {
   flex: 1; min-width: 0; background: none; border: none; color: var(--text); font-size: 16px;
-  padding: 0 4px 0 0; overflow: hidden; text-overflow: ellipsis;
+  padding: 0 4px 0 12px; overflow: hidden; text-overflow: ellipsis;
 }
 .search-pill input::placeholder { color: var(--text-dim); opacity: 1; }
 .search-pill:not(.expanded) input { pointer-events: none; }
