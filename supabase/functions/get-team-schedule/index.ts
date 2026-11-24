@@ -11,9 +11,9 @@
 //
 // Request:  GET /get-team-schedule?team=<display name>&league=<cfb|nfl>&season=<YYYY>
 // Response: { team: { id, name } | null, games: [{
-//   espn_id, week_number, kickoff_time, opponent, opponent_logo, home,
-//   state, completed, status_name, clock, team_score, opp_score, venue,
-//   broadcasts
+//   espn_id, week_number, kickoff_time, opponent, opponent_logo, team_logo,
+//   home, state, completed, status_name, clock, team_score, opp_score,
+//   venue, broadcasts
 // }] }
 //
 // Same defensive-parsing stance as get-live-scores: ESPN's shape isn't
@@ -117,6 +117,7 @@ async function fetchSchedule(league: "cfb" | "nfl", teamId: string, season: stri
       kickoff_time: event.date || competition.date || null,
       opponent: opp.team?.displayName || null,
       opponent_logo: opp.team?.logo || opp.team?.logos?.[0]?.href || null,
+      team_logo: self.team?.logo || self.team?.logos?.[0]?.href || null,
       home: self.homeAway === "home",
       state: statusType.state || "pre",
       completed: Boolean(statusType.completed),

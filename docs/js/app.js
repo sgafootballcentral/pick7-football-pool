@@ -960,6 +960,8 @@ function syntheticGameFromEspn(eg, teamName, league) {
     spread_value: null,
     tv_network: eg.broadcasts?.[0] || null,
     season_id: null,
+    opponent_logo: eg.opponent_logo || null,
+    team_logo: eg.team_logo || null,
   };
 }
 
@@ -1016,20 +1018,46 @@ async function openTeamScheduleModal(teamName, league, seasonYear, localSeasonId
     // fall back to whatever this pool already has on file so the popup
     // still shows *something* rather than nothing.
     const games = espnGames.length
-      ? espnGames.map((eg) => localByEspnId[eg.espn_id] || syntheticGameFromEspn(eg, teamName, league))
+      ? espnGames.map((eg) => {
+          const local = localByEspnId[eg.espn_id];
+          // A real synced row keeps its own spread/TV info, but still has
+          // no logo columns of its own -- carry those over from the ESPN
+          // event it matched against.
+          return local ? { ...local, opponent_logo: eg.opponent_logo || null, team_logo: eg.team_logo || null } : syntheticGameFromEspn(eg, teamName, league);
+        })
       : Object.values(localByEspnId).sort((a, b) => (a.kickoff_time || "").localeCompare(b.kickoff_time || ""));
     const gamesById = Object.fromEntries(games.map((g) => [g.game_id, g]));
 
+    // Any merged game carries this team's own logo (team_logo) the same
+    // way every row does -- just grab it off the first one that has it
+    // for the hero. Missing entirely (ESPN lookup came back empty) just
+    // means no hero crest, same graceful-degrade as a missing row logo.
+    const heroLogo = games.find((g) => g.team_logo)?.team_logo || null;
     panel.innerHTML = `
-      <div class="modal-sheet">
+      <div class="modal-sheet sched-sheet">
         <button class="modal-close-x" id="team-sched-x-btn" aria-label="Close">&times;</button>
-        <h3 style="text-align:center; margin-top:0;">${escapeHtml(teamName)} -- Schedule</h3>
-        ${games.length ? games.map((g) => teamScheduleRowHtml(g, teamName)).join("") : `<div class="hint" style="text-align:center;">No schedule found for ${escapeHtml(teamName)}.</div>`}
-        <button class="btn btn-secondary" id="team-sched-close-btn" style="margin-top:10px;">Close</button>
+        <div class="sheet-compact-title" id="team-sched-compact-title">${escapeHtml(teamName)}</div>
+        <div class="sheet-scroll" id="team-sched-scroll">
+          <div class="team-sched-hero">
+            ${heroLogo ? `<img class="team-sched-hero-logo" src="${escapeHtml(heroLogo)}" alt="" onerror="this.style.display='none';">` : ""}
+            <h3 class="team-sched-hero-name">${escapeHtml(teamName)}</h3>
+            <div class="team-sched-hero-sub">Schedule</div>
+          </div>
+          ${games.length ? games.map((g) => teamScheduleRowHtml(g, teamName)).join("") : `<div class="hint" style="text-align:center;">No schedule found for ${escapeHtml(teamName)}.</div>`}
+          <button class="btn btn-secondary" id="team-sched-close-btn" style="margin-top:10px;">Close</button>
+        </div>
       </div>
     `;
     panel.querySelector("#team-sched-x-btn").addEventListener("click", close);
     panel.querySelector("#team-sched-close-btn").addEventListener("click", close);
+    // Compact title is glass precisely because it only exists while this
+    // page is scrolled -- it fades in once the hero (plain team name, no
+    // logo -- confirmed against a real ESPN recording) has scrolled away.
+    const schedScrollEl = panel.querySelector("#team-sched-scroll");
+    const schedCompactTitle = panel.querySelector("#team-sched-compact-title");
+    schedScrollEl.addEventListener("scroll", () => {
+      schedCompactTitle.classList.toggle("visible", schedScrollEl.scrollTop > 70);
+    });
     panel.querySelectorAll("[data-open-gamecard]").forEach((rowEl) => {
       rowEl.addEventListener("click", async () => {
         const gid = rowEl.dataset.openGamecard;
@@ -1060,6 +1088,11 @@ async function openTeamScheduleModal(teamName, league, seasonYear, localSeasonId
   }
 }
 
+// ESPN-style redesign: logo + name on two stacked lines (away team, then
+// home team -- matches ESPN's own ordering), scores in their own
+// right-aligned column, and a status block (Final/date + an ATS line)
+// vertically centered beside the whole game -- a divider between games,
+// not between the two team lines inside one.
 function teamScheduleRowHtml(g, teamName) {
   const isHome = g.favorite_team === teamName ? !!g.favorite_team_home : !g.favorite_team_home;
   const opponent = g.favorite_team === teamName ? g.underdog_team : g.favorite_team;
@@ -1071,23 +1104,59 @@ function teamScheduleRowHtml(g, teamName) {
   const hasScore = teamScore != null && oppScore != null && (isFinal || isLive);
 
   const resultClass = isFinal && hasScore ? (teamScore > oppScore ? "win" : teamScore < oppScore ? "loss" : "") : "";
-  const resultLabel = isFinal && hasScore ? (teamScore > oppScore ? "W" : teamScore < oppScore ? "L" : "T") : "";
 
   const { dateStr, timeStr } = formatKickoff(g.kickoff_time);
-  const statusLabel = isFinal ? "Final" : isLive ? "Live" : `${dateStr} · ${timeStr}`;
+  const statusHtml = isFinal
+    ? `Final<span class="date">${escapeHtml(dateStr)}</span>`
+    : isLive
+      ? `<span class="live">● LIVE</span><span class="date">${escapeHtml(dateStr)}</span>`
+      : `<span class="date">${escapeHtml(dateStr)} · ${escapeHtml(timeStr)}</span>`;
+
+  // ATS: only a real synced row carries spread_value/winning_team -- a row
+  // synthesized purely from ESPN's basic schedule (no odds data) has
+  // neither, so no ATS line renders for a week this pool hasn't set up
+  // yet, which is the honest answer (we genuinely have no spread for it).
+  const graded = isFinal && g.winning_team;
+  const atsHtml = g.spread_value ? `<span class="team-sched-ats">${escapeHtml(g.spread_value)}</span>` : "";
+
+  const logoHtml = (logoUrl, fallbackLetter) => `
+    <div class="team-sched-logo-wrap">
+      ${logoUrl ? `<img class="team-sched-logo" src="${escapeHtml(logoUrl)}" alt=""
+          onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ""}
+      <div class="team-sched-logo-fallback" style="display:${logoUrl ? "none" : "flex"};">${escapeHtml(fallbackLetter)}</div>
+    </div>
+  `;
+  const teamLine = (name, logoUrl, isSubject, covered) => `
+    <div class="team-sched-team${isSubject ? " subject" : ""}">
+      ${logoHtml(logoUrl, (name || "?").charAt(0))}
+      <span class="team-sched-name">${escapeHtml(name || "TBD")}${isSubject ? ` <span class="star">★</span>` : ""}${covered ? ` <span class="covered-check">✅</span>` : ""}</span>
+    </div>
+  `;
+  const scoreLine = (score, isSubject) => `<span class="team-sched-score${isSubject ? " subject-score" : ""}">${hasScore && score != null ? score : ""}</span>`;
+
+  const awayName = isHome ? opponent : teamName;
+  const homeName = isHome ? teamName : opponent;
+  const awayLogo = isHome ? g.opponent_logo : g.team_logo;
+  const homeLogo = isHome ? g.team_logo : g.opponent_logo;
+  const awayScore = isHome ? oppScore : teamScore;
+  const homeScore = isHome ? teamScore : oppScore;
+  const awayCovered = !!graded && g.winning_team === awayName;
+  const homeCovered = !!graded && g.winning_team === homeName;
 
   return `
-    <div class="game-card" style="margin-bottom:7px;">
-      <div class="game-card-stripe ${resultClass}"></div>
-      <div class="game-card-body">
-        <div class="game-card-top game-card-clickable" data-open-gamecard="${escapeHtml(g.game_id)}">
-          <div class="game-card-matchup">${g.week_number != null ? `Wk ${escapeHtml(String(g.week_number))}: ` : ""}${isHome ? "vs" : "@"} ${escapeHtml(opponent || "TBD")}</div>
-          <div class="game-card-meta"><span class="spread">${escapeHtml(g.spread_value || "")}</span></div>
-        </div>
-        <div class="game-card-pickrow ${resultClass === "win" ? "win-bg" : ""}">
-          <span class="label">${escapeHtml(statusLabel)}</span>
-          <span class="value ${resultClass}">${hasScore ? `${resultLabel ? `${resultLabel} ` : ""}${teamScore}-${oppScore}` : "—"}</span>
-        </div>
+    <div class="team-sched-row ${resultClass}" data-open-gamecard="${escapeHtml(g.game_id)}">
+      <div class="team-sched-teams">
+        ${teamLine(awayName, awayLogo, awayName === teamName, awayCovered)}
+        ${teamLine(homeName, homeLogo, homeName === teamName, homeCovered)}
+      </div>
+      <div class="team-sched-scores">
+        ${scoreLine(awayScore, awayName === teamName)}
+        ${scoreLine(homeScore, homeName === teamName)}
+      </div>
+      <div class="team-sched-status-col">
+        <span class="team-sched-status">${statusHtml}</span>
+        ${atsHtml}
+        <span class="team-sched-action">View Game</span>
       </div>
     </div>
   `;

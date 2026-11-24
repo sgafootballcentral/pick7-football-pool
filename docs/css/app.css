@@ -606,6 +606,114 @@ table.standings .rank-cell .rank-chip { display: block; font-size: 9px; margin-t
   .modal-sheet { border-radius: 16px; max-width: 480px; }
 }
 
+/* Team-schedule popup only: the one popup that's a genuinely scrolling
+   page with a header worth collapsing, so it's the only one that gets a
+   glass surface -- .sheet-compact-title below, which only exists because
+   this page scrolls. Everything else here (this sheet's own background,
+   the hero, and every other popup in the app -- gamecast, player
+   profile) stays solid, same as before. */
+.modal-sheet.sched-sheet {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+.sched-sheet .sheet-scroll {
+  overflow-y: auto;
+  padding: 18px 16px calc(18px + var(--safe-bottom));
+}
+/* The one liquid-glass surface in this popup: a sticky bar that only
+   exists because the page under it scrolls -- same role as the bottom
+   nav/topbar/sticky-bar elsewhere in the app. Confirmed against a real
+   ESPN recording: the collapsed state shows plain team-name text, never
+   a logo of its own. */
+.sheet-compact-title {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 46px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text);
+  background: rgba(22, 27, 34, 0.3);
+  -webkit-backdrop-filter: blur(2px) saturate(180%);
+  backdrop-filter: blur(2px) saturate(180%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px 16px 0 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+.sheet-compact-title.visible { opacity: 1; }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .sheet-compact-title { background: var(--bg-elevated) !important; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .sheet-compact-title {
+    background: var(--bg-elevated) !important;
+    backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+  }
+}
+
+.team-sched-hero {
+  position: relative;
+  overflow: hidden;
+  margin: -18px -16px 10px;
+  padding: 44px 16px 16px;
+  background: linear-gradient(160deg, #3a1016 0%, var(--bg-elevated) 70%);
+}
+.team-sched-hero-logo {
+  position: absolute;
+  right: -30px; top: -10px;
+  width: 170px; height: 170px;
+  opacity: 0.16;
+  object-fit: contain;
+}
+.team-sched-hero-name { position: relative; font-size: 1.5rem; font-weight: 800; margin: 0; color: var(--text); }
+.team-sched-hero-sub { position: relative; font-size: 0.82rem; color: var(--text-dim); margin-top: 3px; }
+
+/* Redesigned schedule rows (teamScheduleRowHtml) -- ESPN-style: logo +
+   name on two stacked lines per game, scores in their own right-aligned
+   column, and a status block (Final/date + ATS line) vertically centered
+   beside the whole game -- a divider between games, not between the two
+   team lines inside one. */
+.team-sched-row { display: flex; align-items: stretch; gap: 10px; padding: 12px 2px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.team-sched-row:last-of-type { border-bottom: none; }
+.team-sched-teams { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; justify-content: space-between; gap: 10px; }
+.team-sched-team { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.team-sched-logo-wrap { position: relative; width: 24px; height: 24px; flex: 0 0 auto; }
+.team-sched-logo {
+  width: 24px; height: 24px; border-radius: 50%; object-fit: cover;
+  background: #0a0d12; border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.team-sched-logo-fallback {
+  position: absolute; inset: 0; border-radius: 50%; display: none;
+  align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 800; color: #fff; letter-spacing: -0.02em;
+  background: var(--accent-dim);
+}
+.team-sched-name { font-size: 0.95rem; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.team-sched-row .subject .team-sched-name { color: var(--text); font-weight: 700; }
+.team-sched-row .subject .team-sched-name .star { color: var(--accent); font-size: 0.72em; margin-left: 3px; }
+.team-sched-name .covered-check { margin-left: 4px; }
+.team-sched-scores { flex: 0 0 auto; display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end; gap: 10px; min-width: 24px; }
+.team-sched-score { font-size: 1.05rem; font-weight: 700; color: var(--text-dim); line-height: 1.5; }
+.team-sched-row .subject-score { color: var(--text); }
+.team-sched-row.win .subject-score { color: var(--win); }
+.team-sched-row.loss .subject-score { color: var(--loss); }
+.team-sched-status-col { flex: 0 0 auto; width: 92px; display: flex; flex-direction: column; align-items: flex-end; justify-content: center; gap: 6px; }
+.team-sched-status { font-size: 0.78rem; color: var(--text); text-align: right; line-height: 1.35; }
+.team-sched-status .live { color: var(--accent); font-weight: 700; }
+.team-sched-status .date { color: var(--text-dim); display: block; }
+.team-sched-ats { font-size: 0.72rem; color: var(--text-dim); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.team-sched-action {
+  font-size: 0.72rem; font-weight: 600; color: var(--accent); border-radius: 20px; padding: 5px 10px; white-space: nowrap;
+  background: rgba(255, 75, 75, 0.12); border: 1px solid var(--accent-dim);
+}
+
 /* Segmented pill toggle (Create League / Start New Season forms) -- e.g.
    "Exactly N games" vs. "Every game", or "By # of weeks" vs. "By end date". */
 .seg-toggle { display: flex; gap: 6px; background: var(--bg-elevated); border-radius: 8px; padding: 2px; margin-bottom: 10px; }
