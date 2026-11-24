@@ -549,7 +549,6 @@ function renderChrome(innerHtml) {
     <div id="tab-content">${innerHtml}</div>
     ${state.user && !state.recoveryMode ? `
       <nav class="bottom-nav">
-        <div class="nav-refract-rim"></div>
         <div class="nav-pill" id="nav-pill"></div>
         <button data-tab="picks" class="${state.activeTab === "picks" ? "active" : ""}">
           <span class="icon">\u{1F3C8}</span>Picks

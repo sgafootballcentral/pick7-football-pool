@@ -165,20 +165,6 @@ input, select, textarea {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.02) 45%, rgba(0, 0, 0, 0.05) 100%);
   pointer-events: none;
 }
-/* A thin band right at the bottom rim where the glass bends whatever's
-   directly behind it -- a sliver of scrolled text shows through flipped,
-   the way a real lens inverts things right at its edge. Not a reflection
-   of the bar itself: it relenses whatever game text happens to be
-   scrolling past right there. */
-.nav-refract-rim {
-  position: absolute; left: 16px; right: 16px; bottom: -9px; height: 11px;
-  overflow: hidden; border-radius: 0 0 14px 14px;
-  -webkit-backdrop-filter: blur(1.2px);
-  backdrop-filter: blur(1.2px);
-  transform: scaleY(-1); transform-origin: top;
-  pointer-events: none;
-  z-index: 2;
-}
 /* Frosted pill that glides behind whichever tab is active (positioned by
    positionNavPill() in app.js). */
 .nav-pill {
@@ -208,7 +194,7 @@ input, select, textarea {
     background: var(--bg-elevated) !important;
     backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
   }
-  .bottom-nav::before, .topbar::after, .nav-refract-rim { display: none !important; }
+  .bottom-nav::before, .topbar::after { display: none !important; }
 }
 .bottom-nav button, .bottom-nav a {
   position: relative;
